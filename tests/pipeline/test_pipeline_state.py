@@ -274,7 +274,9 @@ class TestPipelineState:
         # Act 3: Trigger a second regeneration immediately, cancelling task 1
         # and starting task 2.
         step.power = 0.5
-        pipeline._on_descendant_updated(sender=step, origin=step)
+        pipeline._on_descendant_updated(
+            sender=step, origin=step, parent_of_origin=step
+        )
 
         # Assert 3: A new task was created and the pipeline remains busy,
         # without firing redundant state change signals.
