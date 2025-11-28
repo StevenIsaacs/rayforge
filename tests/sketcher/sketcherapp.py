@@ -1,175 +1,76 @@
+#!/usr/bin/python
 # flake8: noqa: E402
 import gi
 import logging
 import gettext
 from pathlib import Path
-from typing import cast, Any
+from typing import Optional
+
+# -- Setup Logging --
+logging.basicConfig(
+    level=logging.DEBUG, format="[%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("sketcherapp")
 
 base_path = Path(__file__).parent
 gettext.install("canvas", base_path / "rayforge" / "locale")
-logging.basicConfig(level=logging.DEBUG)
 
+gi.require_version("Adw", "1")
 gi.require_version("Gtk", "4.0")
-from gi.repository import Gtk, Gdk
+from gi.repository import Gtk
 
-from rayforge.workbench.canvas import Canvas
+from rayforge.workbench.sketcher.sketchcanvas import SketchCanvas
 from rayforge.workbench.sketcher import SketchElement
-
-
-class SketchCanvas(Canvas):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self._edit_key_ctrl = Gtk.EventControllerKey.new()
-        self._edit_key_ctrl.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        self._edit_key_ctrl.connect("key-pressed", self.on_edit_key_pressed)
-        self.add_controller(self._edit_key_ctrl)
-
-    def on_edit_key_pressed(self, controller, keyval, keycode, state):
-        if self.edit_context and isinstance(self.edit_context, SketchElement):
-            if keyval == Gdk.KEY_Delete:
-                self.edit_context.delete_selection()
-                return True
-        return False
-
-    def on_button_press(self, gesture, n_press: int, x: float, y: float):
-        if self.edit_context:
-            self.grab_focus()
-            self._was_dragging = False
-            world_x, world_y = self._get_world_coords(x, y)
-
-            if isinstance(self.edit_context, SketchElement):
-                ctx = cast(Any, self.edit_context)
-                handled = ctx.handle_edit_press(world_x, world_y, n_press)
-            else:
-                handled = self.edit_context.handle_edit_press(world_x, world_y)
-
-            if not handled and self._hovered_elem is None:
-                self.leave_edit_mode()
-            self.queue_draw()
-            return
-
-        super().on_button_press(gesture, n_press, x, y)
 
 
 class SketcherApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="com.example.SketcherApp")
-        self.sketch_elem = None
+        self.sketch_elem: Optional[SketchElement] = None
 
     def do_activate(self):
         self.window = Gtk.ApplicationWindow(application=self)
         self.window.set_default_size(1200, 800)
+
+        # Main layout
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.window.set_child(vbox)
 
-        toolbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        toolbar.set_margin_top(6)
-        toolbar.set_margin_start(6)
-        vbox.append(toolbar)
-
-        # Tools Group
-        btn_select = Gtk.ToggleButton(label="Select")
-        btn_select.set_active(True)
-        btn_select.connect("toggled", self.on_tool, "select")
-        toolbar.append(btn_select)
-
-        btn_line = Gtk.ToggleButton(label="Line")
-        btn_line.set_group(btn_select)
-        btn_line.connect("toggled", self.on_tool, "line")
-        toolbar.append(btn_line)
-
-        btn_arc = Gtk.ToggleButton(label="Arc")
-        btn_arc.set_group(btn_select)
-        btn_arc.connect("toggled", self.on_tool, "arc")
-        toolbar.append(btn_arc)
-
-        toolbar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-
-        # Constraints Group
-        btn_dist = Gtk.Button(label="Dist")
-        btn_dist.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_distance_constraint()
-            if self.sketch_elem
-            else None,
+        # Header with button and label
+        header_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=10
         )
-        toolbar.append(btn_dist)
+        header_box.set_margin_top(10)
+        header_box.set_margin_bottom(10)
+        header_box.set_margin_start(10)
+        header_box.set_margin_end(10)
+        vbox.append(header_box)
 
-        btn_rad = Gtk.Button(label="Rad")
-        btn_rad.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_radius_constraint()
-            if self.sketch_elem
-            else None,
+        reset_button = Gtk.Button(label="Reset Sketch")
+        reset_button.connect("clicked", self.on_reset_clicked)
+        header_box.append(reset_button)
+
+        header_label = Gtk.Label(
+            label="Right-click on canvas for Tools & Constraints"
         )
-        toolbar.append(btn_rad)
-
-        btn_horiz = Gtk.Button(label="Horiz")
-        btn_horiz.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_horizontal_constraint()
-            if self.sketch_elem
-            else None,
-        )
-        toolbar.append(btn_horiz)
-
-        btn_vert = Gtk.Button(label="Vert")
-        btn_vert.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_vertical_constraint()
-            if self.sketch_elem
-            else None,
-        )
-        toolbar.append(btn_vert)
-
-        btn_align = Gtk.Button(label="Constrain")
-        btn_align.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_alignment_constraint()
-            if self.sketch_elem
-            else None,
-        )
-        toolbar.append(btn_align)
-
-        btn_perp = Gtk.Button(label="Perp")
-        btn_perp.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_perpendicular()
-            if self.sketch_elem
-            else None,
-        )
-        toolbar.append(btn_perp)
-
-        btn_tan = Gtk.Button(label="Tan")
-        btn_tan.connect(
-            "clicked",
-            lambda x: self.sketch_elem.add_tangent()
-            if self.sketch_elem
-            else None,
-        )
-        toolbar.append(btn_tan)
-
-        # Geometry Toggles
-        toolbar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-
-        btn_constr = Gtk.Button(label="Toggle Construction Geometry")
-        btn_constr.connect(
-            "clicked",
-            lambda x: self.sketch_elem.toggle_construction_on_selection()
-            if self.sketch_elem
-            else None,
-        )
-        toolbar.append(btn_constr)
+        header_label.add_css_class("dim-label")
+        header_box.append(header_label)
 
         # Canvas
-        self.canvas = SketchCanvas()
+        self.canvas = SketchCanvas(parent_window=self.window)
         self.canvas.set_vexpand(True)
         vbox.append(self.canvas)
 
-        # Setup Element
+        # Setup initial Element
+        self.add_initial_sketch()
+
+        self.window.present()
+
+    def add_initial_sketch(self):
+        """Creates and adds the first sketch with demo geometry."""
         self.sketch_elem = SketchElement(x=100, y=100, width=1, height=1)
 
-        # Initialize demo geometry (moved from SketchElement)
+        # Initialize demo geometry
         sketch = self.sketch_elem.sketch
         origin_id = sketch.origin_id
 
@@ -190,7 +91,6 @@ class SketcherApp(Gtk.Application):
 
         # Add a construction line for reference
         mid_p = sketch.add_point(100, 0)
-        # Constraint to line p1-p2 (assumed to be the first entity added)
         if sketch.registry.entities:
             line_id = sketch.registry.entities[0].id
             sketch.constrain_point_on_line(mid_p, line_id)
@@ -201,24 +101,56 @@ class SketcherApp(Gtk.Application):
         sketch.solve()
         self.sketch_elem.update_bounds_from_sketch()
 
+        # Connect the constraint edit signal
         self.sketch_elem.constraint_edit_requested.connect(
             self.on_edit_constraint_val
         )
         self.canvas.add(self.sketch_elem)
 
-        self.window.present()
+        # Set the active edit context so the pie menu has a target
+        self.canvas.enter_edit_mode(self.sketch_elem)
 
-    def on_tool(self, btn, name):
-        if btn.get_active() and self.sketch_elem:
-            self.sketch_elem.set_tool(name)
+    def on_reset_clicked(self, button: Gtk.Button):
+        """Removes the old sketch and creates a new, empty one."""
+        if not self.canvas or not self.sketch_elem:
+            return
+
+        # Cleanly exit edit mode for the old sketch
+        if self.canvas.edit_context is self.sketch_elem:
+            self.canvas.leave_edit_mode()
+
+        # Remove the old element from the canvas
+        self.canvas.remove(self.sketch_elem)
+
+        # Create a new, empty sketch element at the center of the canvas
+        canvas_width, canvas_height = self.canvas.size()
+        new_sketch = SketchElement(x=canvas_width / 2, y=canvas_height / 2)
+
+        # The new sketch already has an origin. Just update its bounds.
+        new_sketch.update_bounds_from_sketch()
+
+        # Re-connect signals for the new sketch
+        new_sketch.constraint_edit_requested.connect(
+            self.on_edit_constraint_val
+        )
+
+        # Add to canvas and set as the active context for interaction
+        self.canvas.add(new_sketch)
+        self.canvas.enter_edit_mode(new_sketch)
+
+        # Update the app's reference to the current sketch element
+        self.sketch_elem = new_sketch
 
     def on_edit_constraint_val(self, sender, constraint):
+        """Opens a dialog to edit a constraint value."""
         dialog = Gtk.Window(
             transient_for=self.window, modal=True, title="Edit Constraint"
         )
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.set_margin_top(10)
         box.set_margin_start(10)
+        box.set_margin_end(10)
+        box.set_margin_bottom(10)
         dialog.set_child(box)
 
         entry = Gtk.Entry()

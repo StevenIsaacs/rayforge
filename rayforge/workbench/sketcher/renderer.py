@@ -1,16 +1,18 @@
 import cairo
 import math
 from collections import defaultdict
-from rayforge.core.sketcher.entities import Line, Arc
+from rayforge.core.sketcher.entities import Line, Arc, Circle
 from rayforge.core.sketcher.constraints import (
     DistanceConstraint,
     RadiusConstraint,
+    DiameterConstraint,
     HorizontalConstraint,
     VerticalConstraint,
     PerpendicularConstraint,
     TangentConstraint,
     CoincidentConstraint,
     PointOnLineConstraint,
+    EqualLengthConstraint,
 )
 
 
@@ -34,10 +36,17 @@ class SketchRenderer:
         ctx.set_line_join(cairo.LINE_JOIN_ROUND)
         ctx.set_line_width(self.element.line_width)
 
-        # Draw the Origin Icon (Underneath geometry)
-        self._draw_origin(ctx)
+        # Check if the element is the active edit context on the canvas.
+        is_editing = (
+            self.element.canvas
+            and self.element.canvas.edit_context is self.element
+        )
 
-        self._draw_entities(ctx)
+        # Draw the Origin Icon (Underneath geometry) only when in edit mode.
+        if is_editing:
+            self._draw_origin(ctx)
+
+        self._draw_entities(ctx, is_editing)
         ctx.restore()
 
     def draw_edit_overlay(self, ctx: cairo.Context):
@@ -56,11 +65,20 @@ class SketchRenderer:
     def _draw_origin(self, ctx: cairo.Context):
         """Draws a fixed symbol at (0,0)."""
         # The Origin is physically at 0,0 in Model Space
+        scale = 1.0
+        # Check if the host canvas supports get_view_scale
+        if self.element.canvas and hasattr(
+            self.element.canvas, "get_view_scale"
+        ):
+            scale_x, _ = self.element.canvas.get_view_scale()
+            scale = scale_x if scale_x > 1e-9 else 1.0
+
         ctx.save()
         ctx.set_source_rgb(0.8, 0.2, 0.2)  # Reddish
-        ctx.set_line_width(2.0)
+        # Scale line width so it stays constant on screen
+        ctx.set_line_width(2.0 / scale)
 
-        len_ = 10.0
+        len_ = 10.0 / scale
         ctx.move_to(-len_, 0)
         ctx.line_to(len_, 0)
         ctx.move_to(0, -len_)
@@ -68,17 +86,20 @@ class SketchRenderer:
         ctx.stroke()
 
         # Circle
-        ctx.arc(0, 0, 4, 0, 2 * math.pi)
+        ctx.arc(0, 0, 4.0 / scale, 0, 2 * math.pi)
         ctx.stroke()
         ctx.restore()
 
     # --- Entities ---
 
-    def _draw_entities(self, ctx: cairo.Context):
+    def _draw_entities(self, ctx: cairo.Context, is_editing: bool):
         entities = self.element.sketch.registry.entities or []
         for entity in entities:
-            is_sel = entity.id in self.element.selection.entity_ids
+            # If not in edit mode, skip drawing construction geometry.
+            if not is_editing and entity.construction:
+                continue
 
+            is_sel = entity.id in self.element.selection.entity_ids
             ctx.save()
 
             if entity.construction:
@@ -97,6 +118,8 @@ class SketchRenderer:
                 self._draw_line_entity(ctx, entity)
             elif isinstance(entity, Arc):
                 self._draw_arc_entity(ctx, entity)
+            elif isinstance(entity, Circle):
+                self._draw_circle_entity(ctx, entity)
 
             ctx.restore()
 
@@ -143,11 +166,32 @@ class SketchRenderer:
         ctx.stroke()
 
     # --- Overlays (Constraints & Junctions) ---
+    def _draw_circle_entity(self, ctx: cairo.Context, circle: Circle):
+        center = self._safe_get_point(circle.center_idx)
+        radius_pt = self._safe_get_point(circle.radius_pt_idx)
+        if not (center and radius_pt):
+            return
+
+        radius = math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
+        ctx.new_sub_path()
+        ctx.arc(center.x, center.y, radius, 0, 2 * math.pi)
+        ctx.stroke()
 
     def _draw_overlays(self, ctx: cairo.Context, to_screen):
-        # Draw explicit constraints
+        # --- Stage 1: Collect Grouped Constraints (like Equality) ---
+        equality_groups = {}  # Map entity_id -> group_id
         constraints = self.element.sketch.constraints or []
         for idx, constr in enumerate(constraints):
+            if isinstance(constr, EqualLengthConstraint):
+                for eid in constr.entity_ids:
+                    equality_groups[eid] = idx
+
+        # --- Stage 2: Draw Individual Constraints ---
+        for idx, constr in enumerate(constraints):
+            # Skip drawing EqualLengthConstraint here, it's handled below.
+            if isinstance(constr, EqualLengthConstraint):
+                continue
+
             is_sel = idx == self.element.selection.constraint_idx
 
             if is_sel:
@@ -157,8 +201,8 @@ class SketchRenderer:
 
             if isinstance(constr, DistanceConstraint):
                 self._draw_distance_constraint(ctx, constr, is_sel, to_screen)
-            elif isinstance(constr, RadiusConstraint):
-                self._draw_radius_constraint(ctx, constr, is_sel, to_screen)
+            elif isinstance(constr, (RadiusConstraint, DiameterConstraint)):
+                self._draw_circular_constraint(ctx, constr, is_sel, to_screen)
             elif isinstance(
                 constr, (HorizontalConstraint, VerticalConstraint)
             ):
@@ -168,7 +212,6 @@ class SketchRenderer:
             elif isinstance(constr, TangentConstraint):
                 self._draw_tangent_constraint(ctx, constr, to_screen)
             elif isinstance(constr, CoincidentConstraint):
-                # Prefer drawing on the non-origin point for discoverability
                 origin_id = getattr(self.element.sketch, "origin_id", -1)
                 pid_to_draw = constr.p1
                 if constr.p1 == origin_id and origin_id != -1:
@@ -181,8 +224,77 @@ class SketchRenderer:
                     ctx, constr.point_id, to_screen, is_sel
                 )
 
+        # --- Stage 3: Draw Symbols on Entities from Collected Groups ---
+        if equality_groups:
+            for entity_id, group_id in equality_groups.items():
+                entity = self.element.sketch.registry.get_entity(entity_id)
+                if not entity:
+                    continue
+
+                is_sel = group_id == self.element.selection.constraint_idx
+                if is_sel:
+                    ctx.set_source_rgb(1.0, 0.2, 0.2)
+                else:
+                    ctx.set_source_rgb(0.0, 0.6, 0.0)
+                self._draw_equality_symbol(ctx, entity, to_screen)
+
         # Draw implicit junction constraints
         self._draw_junctions(ctx, to_screen)
+
+    def _draw_equality_symbol(self, ctx, entity, to_screen):
+        """Draws an '=' symbol on a single entity."""
+        if not entity:
+            return
+        mid_x, mid_y, angle = 0.0, 0.0, 0.0
+
+        if isinstance(entity, Line):
+            p1 = self._safe_get_point(entity.p1_idx)
+            p2 = self._safe_get_point(entity.p2_idx)
+            if not (p1 and p2):
+                return
+            mid_x, mid_y = (p1.x + p2.x) / 2, (p1.y + p2.y) / 2
+            angle = math.atan2(p2.y - p1.y, p2.x - p1.x)
+        elif isinstance(entity, Arc):
+            center = self._safe_get_point(entity.center_idx)
+            start = self._safe_get_point(entity.start_idx)
+            end = self._safe_get_point(entity.end_idx)
+            if not (center and start and end):
+                return
+            start_a = math.atan2(start.y - center.y, start.x - center.x)
+            end_a = math.atan2(end.y - center.y, end.x - center.x)
+            angle_range = end_a - start_a
+            if entity.clockwise:
+                if angle_range > 0:
+                    angle_range -= 2 * math.pi
+            else:
+                if angle_range < 0:
+                    angle_range += 2 * math.pi
+            mid_angle = start_a + angle_range / 2.0
+            radius = math.hypot(start.x - center.x, start.y - center.y)
+            mid_x = center.x + radius * math.cos(mid_angle)
+            mid_y = center.y + radius * math.sin(mid_angle)
+            angle = mid_angle + math.pi / 2
+        elif isinstance(entity, Circle):
+            center = self._safe_get_point(entity.center_idx)
+            radius_pt = self._safe_get_point(entity.radius_pt_idx)
+            if not (center and radius_pt):
+                return
+            radius = math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
+            angle = math.atan2(radius_pt.y - center.y, radius_pt.x - center.x)
+            mid_x = center.x + radius * math.cos(angle)
+            mid_y = center.y + radius * math.sin(angle)
+            angle += math.pi / 2
+
+        sx, sy = to_screen.transform_point((mid_x, mid_y))
+        ctx.save()
+        ctx.translate(sx, sy)
+        ctx.rotate(angle)
+        ctx.set_font_size(14)
+        ext = ctx.text_extents("=")
+        ctx.move_to(-ext.width / 2, ext.height / 2)
+        ctx.show_text("=")
+        ctx.restore()
+        ctx.new_path()
 
     def _draw_junctions(self, ctx, to_screen):
         registry = self.element.sketch.registry
@@ -195,6 +307,9 @@ class SketchRenderer:
                 point_counts[entity.start_idx] += 1
                 point_counts[entity.end_idx] += 1
                 point_counts[entity.center_idx] += 1
+            elif isinstance(entity, Circle):
+                point_counts[entity.center_idx] += 1
+                point_counts[entity.radius_pt_idx] += 1
 
         for pid, count in point_counts.items():
             if count > 1:
@@ -221,24 +336,30 @@ class SketchRenderer:
         ctx.save()
         ctx.set_line_width(1.5)
         if is_selected:
-            ctx.set_source_rgba(1.0, 0.2, 0.2, 0.9)  # Selected color
+            ctx.set_source_rgba(1.0, 0.2, 0.2, 0.9)
         else:
-            ctx.set_source_rgba(0.0, 0.6, 0.0, 0.8)  # Base constraint color
+            ctx.set_source_rgba(0.0, 0.6, 0.0, 0.8)
 
         radius = self.element.point_radius + 4
         ctx.arc(sx, sy, radius, 0, 2 * math.pi)
         ctx.stroke()
         ctx.restore()
 
-    def _draw_radius_constraint(self, ctx, constr, is_selected, to_screen):
-        pos_data = self.element.hittester.get_radius_label_pos(
+    def _draw_circular_constraint(self, ctx, constr, is_selected, to_screen):
+        pos_data = self.element.hittester.get_circular_label_pos(
             constr, to_screen, self.element
         )
         if not pos_data:
             return
         sx, sy, arc_mid_sx, arc_mid_sy = pos_data
 
-        label = f"R{float(constr.value):.1f}"
+        if isinstance(constr, RadiusConstraint):
+            label = f"R{float(constr.value):.1f}"
+        elif isinstance(constr, DiameterConstraint):
+            label = f"Ø{float(constr.value):.1f}"
+        else:
+            return
+
         ext = ctx.text_extents(label)
 
         ctx.save()
@@ -251,6 +372,7 @@ class SketchRenderer:
         bg_y = sy - ext.height / 2 - 4
         ctx.rectangle(bg_x, bg_y, ext.width + 8, ext.height + 8)
         ctx.fill()
+        ctx.new_path()
 
         ctx.set_source_rgb(0, 0, 0.5)
         ctx.move_to(sx - ext.width / 2, sy + ext.height / 2 - 2)
@@ -288,19 +410,31 @@ class SketchRenderer:
         bg_y = my - ext.height / 2 - 4
         ctx.rectangle(bg_x, bg_y, ext.width + 8, ext.height + 8)
         ctx.fill()
+        ctx.new_path()
 
         # Draw Text
         ctx.set_source_rgb(0, 0, 0.5)
         ctx.move_to(mx - ext.width / 2, my + ext.height / 2 - 2)
         ctx.show_text(label)
+        ctx.new_path()
 
-        # Draw Dash Line
-        ctx.set_source_rgba(0.5, 0.5, 0.5, 0.5)
-        ctx.set_line_width(1)
-        ctx.set_dash([4, 4])
-        ctx.move_to(s1[0], s1[1])
-        ctx.line_to(s2[0], s2[1])
-        ctx.stroke()
+        # Draw Dash Line - only if no solid line entity connects these points
+        has_geometry = False
+        entities = self.element.sketch.registry.entities or []
+        for entity in entities:
+            if isinstance(entity, Line):
+                if {entity.p1_idx, entity.p2_idx} == {constr.p1, constr.p2}:
+                    has_geometry = True
+                    break
+
+        if not has_geometry:
+            ctx.set_source_rgba(0.5, 0.5, 0.5, 0.5)
+            ctx.set_line_width(1)
+            ctx.set_dash([4, 4])
+            ctx.move_to(s1[0], s1[1])
+            ctx.line_to(s2[0], s2[1])
+            ctx.stroke()
+
         ctx.restore()
 
     def _draw_hv_constraint(self, ctx, constr, to_screen):
@@ -366,17 +500,15 @@ class SketchRenderer:
         ctx.restore()
 
     def _draw_tangent_constraint(self, ctx, constr, to_screen):
-        entities = self.element.sketch.registry.entities or []
-        line = next(
-            (e for e in entities if e.id == constr.line_id),
-            None,
-        )
-        if isinstance(line, Line):
-            p = self._safe_get_point(line.p1_idx)
-            if p:
-                sx, sy = to_screen.transform_point((p.x, p.y))
-                ctx.move_to(sx + 10, sy + 10)
-                ctx.show_text("O")
+        line = self.element.sketch.registry.get_entity(constr.line_id)
+        shape = self.element.sketch.registry.get_entity(constr.shape_id)
+        if not (isinstance(line, Line) and isinstance(shape, (Arc, Circle))):
+            return
+        p = self._safe_get_point(line.p1_idx)
+        if p:
+            sx, sy = to_screen.transform_point((p.x, p.y))
+            ctx.move_to(sx + 10, sy + 10)
+            ctx.show_text("⦸")
 
     # --- Points ---
 
@@ -396,6 +528,9 @@ class SketchRenderer:
                 entity_points.add(ent.start_idx)
                 entity_points.add(ent.end_idx)
                 entity_points.add(ent.center_idx)
+            elif isinstance(ent, Circle):
+                entity_points.add(ent.center_idx)
+                entity_points.add(ent.radius_pt_idx)
 
         for p in points:
             sx, sy = to_screen.transform_point((p.x, p.y))
@@ -437,5 +572,4 @@ class SketchRenderer:
             ctx.fill()
 
     def _get_entity_by_id(self, eid):
-        entities = self.element.sketch.registry.entities or []
-        return next((e for e in entities if e.id == eid), None)
+        return self.element.sketch.registry.get_entity(eid)
