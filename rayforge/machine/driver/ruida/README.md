@@ -103,6 +103,56 @@ Jogging commands, machine status monitoring and job execution require translatio
 
 The most notable characteristic of Ruida data is that it is transmitted and received in a 7 bit format. Only command bytes, either commands or in replies to commands, have the top bit set. Because of this, data such as integers are transferred as 7 bit values. Large integers are expressed using five bytes making the full range what can be expressed in 35 bits. Two byte values are therefore 14 bits. This module hides the complexity of performing these conversions.
 
+# Development Plan
+Development of this driver involves a number of development iterations as shown below. As development progresses the plan will be updated as needed and completed features will be checked off.
+
+## Iterations
+
+1. UDP Connection (first because can use `tshark` to verify)
+	- [ ] Create `driver/ruida` directory and add to `driver/__init__.py`
+	- [ ]  Create `transport/udp.py` and add `udp` to `transport/__init__.py`
+	- [ ] Implement `connect` logic and tasks/coroutines (using asyncio)
+		- [ ] Implement status monitoring logic and status change events
+	- [ ] Test connect/reconnect use cases.
+		- [ ] Status monitoring
+		- [ ] Connect status updates (send events)
+		- [ ] Pull and reconnect cable
+	- [ ] Demo video for iteration on streamable.
+2. USB Connection
+	- [ ] Add `purge` method to `serial.py` (and other transports?) -- needed for resync of comms
+	- [ ] Add USB to code from *UDP Connection* iteration.
+	- [ ] Test connect/reconnect use cases.
+		- [ ] Status monitoring
+		- [ ] Connect status updates (send events)
+		- [ ] Pull and reconnect cable (may need USB list change to allow UDEV symlinks)
+		- [ ] Test switching between UDP and USB.
+	- [ ] Demo video for iteration on streamable.
+3. Jogging
+	- [ ] Rel vrs abs moves.
+	- [ ] Rapid moves
+	- [ ] Demo video for iteration on streamable.
+4. Running Jobs -- Cut and Engrave
+	- [ ] Job file structure
+		- [ ] Head and tail (with checksum)
+		- [ ] Layers
+	- [ ] Cut/engrave moves
+	- [ ] Speed settings
+	- [ ] Power settings
+		- [ ] Min/max for corner decel/accel (may require upper layer support)
+	- [ ] Assume 20KHz frequency for time being
+	- [ ] Job running status updates
+	- [ ] Demo video for iteration on streamable.
+5. Running Jobs -- Raster and Fill
+	- [ ] Horizontal
+	- [ ] Vertical
+	- [ ] Add dynamic frequency settings
+	- [ ] Demo video for iteration on streamable.
+6. Running Multi-layer and Multi-step Jobs -- Ready for Beta
+7. Human Readable Ruida Commands (for use in side panel)
+8. Save to`.rd` File (round trip support)
+9. Sync Simulator to Click in Side Panel (like G-Code currently does)
+10. Final Signoff and Release
+
 # Credit Where Credit is Due
 This work is possible because of the hard work of others.
 
