@@ -99,7 +99,7 @@ This layer is responsible for:
 - **Chunking** -- breaking large jobs into transport compatible chunks for transmission to the machine
 
 # Encoding and Decoding (ruida_translator:RDCTranslator)
-Jogging commands, machine status monitoring and job execution require translation to and from Ruida controller commands and data formats. The _Driver_ and _Session_ layers in particular needed to encode and decode data. Because multiple layers need this capability, this is a separate module.
+Jogging commands, machine status monitoring and job execution require translation to and from Ruida controller commands and data formats. The _Driver_ and _Session_ layers in particular need to encode and decode data. Because multiple layers need this capability, this is a separate module.
 
 The most notable characteristic of Ruida data is that it is transmitted and received in a 7 bit format. Only command bytes, either commands or in replies to commands, have the top bit set. Because of this, data such as integers are transferred as 7 bit values. Large integers are expressed using five bytes making the full range what can be expressed in 35 bits. Two byte values are therefore 14 bits. This module hides the complexity of performing these conversions.
 
@@ -109,7 +109,7 @@ Development of this driver involves a number of development iterations as shown 
 ## Iterations
 
 1. UDP Connection (first because can use `tshark` to verify)
-	- [ ] Create `driver/ruida` directory and add to `driver/__init__.py`
+	- [x] Create `driver/ruida` directory and add to `driver/__init__.py`
 	- [ ]  Create `transport/udp.py` and add `udp` to `transport/__init__.py`
 	- [ ] Implement `connect` logic and tasks/coroutines (using asyncio)
 		- [ ] Implement status monitoring logic and status change events
@@ -156,7 +156,7 @@ Development of this driver involves a number of development iterations as shown 
 # Credit Where Credit is Due
 This work is possible because of the hard work of others.
 
- - MeerK40T: https://github.com/meerk40t/meerk40t/tree/main/meerk40t/ruida
+ - MeerK40t: https://github.com/meerk40t/meerk40t/tree/main/meerk40t/ruida
  - Ruida protocol: https://edutechwiki.unige.ch/en/Ruida
 
  And, of course, Rayforge itself for providing the framework which greatly simplified the structure of this driver.
