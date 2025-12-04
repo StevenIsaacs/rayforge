@@ -15,8 +15,9 @@ from typing import (
 )
 from ...context import RayforgeContext
 from ...core.ops import Ops
+from ...core.varset import Var, VarSet, SerialPortVar, BaudrateVar
+from ...pipeline.encoder.base import OpsEncoder
 from ...pipeline.encoder.gcode import GcodeEncoder
-from ...shared.varset import Var, VarSet, SerialPortVar, BaudrateVar
 from ..transport import TransportStatus, SerialTransport
 from ..transport.serial import SerialPortPermissionError
 from .driver import (
@@ -102,6 +103,10 @@ class GrblSerialDriver(Driver):
                 BaudrateVar("baudrate"),
             ]
         )
+
+    def get_encoder(self) -> "OpsEncoder":
+        """Returns a GcodeEncoder configured for the machine's dialect."""
+        return GcodeEncoder(self._machine.dialect)
 
     def setup(self, **kwargs: Any):
         port = cast(str, kwargs.get("port", ""))
@@ -357,7 +362,7 @@ class GrblSerialDriver(Driver):
     async def _stream_gcode(
         self,
         gcode_lines: List[str],
-        gcode_to_op_map: Optional[Dict[int, int]] = None,
+        machine_code_to_op_map: Optional[Dict[int, int]] = None,
     ):
         """
         The core G-code streaming logic using character-counting protocol.
@@ -380,7 +385,9 @@ class GrblSerialDriver(Driver):
                     continue
 
                 op_index = (
-                    gcode_to_op_map.get(line_idx) if gcode_to_op_map else None
+                    machine_code_to_op_map.get(line_idx)
+                    if machine_code_to_op_map
+                    else None
                 )
                 # Command is line + newline character
                 command_bytes = (line + "\n").encode("utf-8")
@@ -452,11 +459,11 @@ class GrblSerialDriver(Driver):
     ) -> None:
         self._start_job(on_command_done)
 
-        encoder = GcodeEncoder.for_machine(self._machine)
+        encoder = self.get_encoder()
         gcode, op_map = encoder.encode(ops, self._machine, doc)
         gcode_lines = gcode.splitlines()
 
-        await self._stream_gcode(gcode_lines, op_map.gcode_to_op)
+        await self._stream_gcode(gcode_lines, op_map.machine_code_to_op)
 
     async def run_raw(self, gcode: str) -> None:
         """

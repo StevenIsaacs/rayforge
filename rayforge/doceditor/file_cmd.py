@@ -17,6 +17,7 @@ from .layout.align import PositionAtStrategy
 if TYPE_CHECKING:
     from ..doceditor.editor import DocEditor
     from ..shared.tasker.manager import TaskManager
+    from ..core.sketcher.sketch import Sketch
 
 
 logger = logging.getLogger(__name__)
@@ -80,13 +81,18 @@ class FileCmd:
         items: List[DocItem],
         source: Optional[SourceAsset],
         filename: Path,
+        sketches: Optional[List["Sketch"]] = None,
     ):
         """
         Adds the imported items and their source to the document model using
         the history manager.
         """
         if source:
-            self._editor.doc.add_source_asset(source)
+            self._editor.doc.add_asset(source)
+
+        if sketches:
+            for sketch in sketches:
+                self._editor.doc.add_asset(sketch)
 
         target_layer = cast(Layer, self._editor.default_workpiece_layer)
         cmd_name = _(f"Import {filename.name}")
@@ -119,7 +125,9 @@ class FileCmd:
         # 2. Add the positioned items to the document model. This is also
         #    safe now as all subsequent signal handling will be on the
         #    main thread.
-        self._commit_items_to_document(payload.items, payload.source, filename)
+        self._commit_items_to_document(
+            payload.items, payload.source, filename, payload.sketches
+        )
 
     def load_file_from_path(
         self,
@@ -404,10 +412,12 @@ class FileCmd:
                 artifact = artifact_store.get(handle)
                 if not isinstance(artifact, JobArtifact):
                     raise ValueError("Expected a JobArtifact for export.")
-                if artifact.gcode_bytes is None:
+                if artifact.machine_code_bytes is None:
                     raise ValueError("Final artifact is missing G-code data.")
 
-                gcode_str = artifact.gcode_bytes.tobytes().decode("utf-8")
+                gcode_str = artifact.machine_code_bytes.tobytes().decode(
+                    "utf-8"
+                )
                 file_path.write_text(gcode_str, encoding="utf-8")
 
                 logger.info(f"Successfully exported G-code to {file_path}")

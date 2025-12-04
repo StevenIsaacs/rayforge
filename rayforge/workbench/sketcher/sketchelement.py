@@ -2,11 +2,12 @@ import logging
 import math
 import cairo
 from blinker import Signal
+from typing import Tuple, List, Optional, TYPE_CHECKING, cast
 from rayforge.workbench.canvas import CanvasElement
 from rayforge.core.matrix import Matrix
 
 from rayforge.core.sketcher import Sketch
-from rayforge.core.sketcher.entities import Line, Arc, Circle
+from rayforge.core.sketcher.entities import Line, Arc, Circle, Entity, Point
 from rayforge.core.sketcher.constraints import (
     PerpendicularConstraint,
     TangentConstraint,
@@ -19,39 +20,62 @@ from rayforge.core.sketcher.constraints import (
     CoincidentConstraint,
     PointOnLineConstraint,
     EqualLengthConstraint,
+    SymmetryConstraint,
+    Constraint,
 )
 
 from .selection import SketchSelection
 from .hittest import SketchHitTester
 from .renderer import SketchRenderer
 from .tools import SelectTool, LineTool, ArcTool, CircleTool
+from .sketch_cmd import (
+    AddItemsCommand,
+    RemoveItemsCommand,
+    ToggleConstructionCommand,
+    UnstickJunctionCommand,
+)
+
+if TYPE_CHECKING:
+    from .sketchcanvas import SketchCanvas
+    from .editor import SketchEditor
 
 logger = logging.getLogger(__name__)
 
 
 class SketchElement(CanvasElement):
-    constraint_edit_requested = Signal()
-
     def __init__(
         self,
         x: float = 0,
         y: float = 0,
         width: float = 1.0,
         height: float = 1.0,
+        sketch: Optional[Sketch] = None,
         **kwargs,
     ):
-        kwargs["is_editable"] = True
-        kwargs["clip"] = False
         # Pass the required positional arguments to the parent class.
-        super().__init__(x=x, y=y, width=width, height=height, **kwargs)
+        super().__init__(
+            x=x,
+            y=y,
+            width=width,
+            height=height,
+            is_editable=True,
+            clip=False,
+            **kwargs,
+        )
+
+        # Signals
+        self.constraint_edit_requested = Signal()
+        self.sketch_changed = Signal()
 
         # Model
-        self.sketch = Sketch()
+        self._sketch: Sketch
+        self.sketch = sketch if sketch is not None else Sketch()
 
         # State Managers
         self.selection = SketchSelection()
         self.hittester = SketchHitTester()
         self.renderer = SketchRenderer(self)
+        self.editor: Optional["SketchEditor"]
 
         # Tools
         self.tools = {
@@ -67,8 +91,114 @@ class SketchElement(CanvasElement):
         self.line_width = 2.0
 
     @property
+    def sketch(self) -> Sketch:
+        return self._sketch
+
+    @sketch.setter
+    def sketch(self, new_sketch: Sketch):
+        logger.debug(f"Called for sketch '{new_sketch.name}'")
+        # Disconnect from old sketch's signals if it exists
+        if hasattr(self, "_sketch"):
+            self._disconnect_signals()
+
+        self._sketch = new_sketch
+
+        # Connect to new sketch's signals
+        self._connect_signals()
+
+    def _connect_signals(self):
+        """Connects to signals that indicate the model has changed."""
+        self.sketch_changed.connect(self._on_model_changed)
+        if self.sketch and self.sketch.input_parameters is not None:
+            logger.debug(
+                f"Connecting to VarSet signals on "
+                f"{type(self.sketch.input_parameters).__name__} "
+                f"(id: {id(self.sketch.input_parameters)})"
+            )
+            self.sketch.input_parameters.var_added.connect(
+                self._on_model_changed
+            )
+            self.sketch.input_parameters.var_removed.connect(
+                self._on_model_changed
+            )
+            self.sketch.input_parameters.var_value_changed.connect(
+                self._on_model_changed
+            )
+            self.sketch.input_parameters.var_definition_changed.connect(
+                self._on_model_changed
+            )
+            self.sketch.input_parameters.cleared.connect(
+                self._on_model_changed
+            )
+
+    def _disconnect_signals(self):
+        """Disconnects signals to prevent leaks."""
+        self.sketch_changed.disconnect(self._on_model_changed)
+        if self.sketch and self.sketch.input_parameters is not None:
+            logger.debug(
+                "Disconnecting from VarSet signals on "
+                f"{type(self.sketch.input_parameters).__name__} "
+                f"(id: {id(self.sketch.input_parameters)})"
+            )
+            try:
+                self.sketch.input_parameters.var_added.disconnect(
+                    self._on_model_changed
+                )
+                self.sketch.input_parameters.var_removed.disconnect(
+                    self._on_model_changed
+                )
+                self.sketch.input_parameters.var_value_changed.disconnect(
+                    self._on_model_changed
+                )
+                self.sketch.input_parameters.var_definition_changed.disconnect(
+                    self._on_model_changed
+                )
+                self.sketch.input_parameters.cleared.disconnect(
+                    self._on_model_changed
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Error during signal disconnection (safe to ignore): {e}"
+                )
+
+    def _on_model_changed(self, sender, **kwargs):
+        """
+        Central handler for all model changes. Triggers a solve and redraw.
+        """
+        logger.debug(
+            f"Triggered by {type(sender).__name__} (id: {id(sender)}) "
+            f"with kwargs: {kwargs}. Solving and redrawing."
+        )
+        self.sketch.solve()
+        self.update_bounds_from_sketch()
+        self.mark_dirty()
+
+    def remove(self):
+        """Overrides remove to cleanup signal connections."""
+        self._disconnect_signals()
+        super().remove()
+
+    @property
     def current_tool(self):
         return self.tools.get(self.active_tool_name, self.tools["select"])
+
+    def get_selected_elements(self) -> bool:
+        """
+        Helper method to check if any internal items (points, entities, etc.)
+        are selected. Returns a boolean, not a list of elements.
+        """
+        sel = self.selection
+        return bool(
+            sel.point_ids
+            or sel.entity_ids
+            or sel.constraint_idx is not None
+            or sel.junction_pid is not None
+        )
+
+    def unselect_all(self):
+        """Clears the internal sketch selection."""
+        self.selection.clear()
+        self.mark_dirty()
 
     def update_bounds_from_sketch(self):
         """
@@ -102,10 +232,13 @@ class SketchElement(CanvasElement):
             geometry = self.sketch.to_geometry()
             if geometry.is_empty():
                 # This case handles sketches with only points.
-                xs = [p.x for p in self.sketch.registry.points]
-                ys = [p.y for p in self.sketch.registry.points]
-                min_x, max_x = min(xs), max(xs)
-                min_y, max_y = min(ys), max(ys)
+                if not self.sketch.registry.points:
+                    min_x, max_x, min_y, max_y = 0, 0, 0, 0
+                else:
+                    xs = [p.x for p in self.sketch.registry.points]
+                    ys = [p.y for p in self.sketch.registry.points]
+                    min_x, max_x = min(xs), max(xs)
+                    min_y, max_y = min(ys), max(ys)
             else:
                 min_x, min_y, max_x, max_y = geometry.rect()
 
@@ -151,6 +284,8 @@ class SketchElement(CanvasElement):
     def draw_edit_overlay(self, ctx: cairo.Context):
         """Draws constraints, points, and handles on top of the canvas."""
         self.renderer.draw_edit_overlay(ctx)
+        # Allow the active tool to draw its own overlay (e.g. selection box)
+        self.current_tool.draw_overlay(ctx)
 
     # =========================================================================
     # Input Handling (Routed to Tools)
@@ -168,8 +303,8 @@ class SketchElement(CanvasElement):
         self.current_tool.on_release(world_x, world_y)
 
     def on_hover_motion(self, world_x: float, world_y: float):
-        if hasattr(self.current_tool, "on_hover_motion"):
-            self.current_tool.on_hover_motion(world_x, world_y)
+        """Dispatches hover events to the currently active tool."""
+        self.current_tool.on_hover_motion(world_x, world_y)
 
     # =========================================================================
     # Capabilities Querying
@@ -217,6 +352,9 @@ class SketchElement(CanvasElement):
             self.current_tool.on_deactivate()
             self.active_tool_name = tool_name
             self.mark_dirty()
+            if self.canvas:
+                canvas = cast("SketchCanvas", self.canvas)
+                canvas.update_sketch_cursor()
 
     def toggle_construction_on_selection(self):
         """
@@ -224,94 +362,24 @@ class SketchElement(CanvasElement):
         If any selected entity is non-construction, all become construction.
         Otherwise, all become normal geometry.
         """
-        entities_to_modify = []
-        for eid in self.selection.entity_ids:
-            ent = self.sketch.registry.get_entity(eid)
-            if ent:
-                entities_to_modify.append(ent)
-
-        if not entities_to_modify:
+        if not self.selection.entity_ids or not self.editor:
             return
 
-        # Logic: If any selected entity is NOT construction, set all to
-        # construction.
-        # Otherwise (all are construction), set all to normal.
-        has_normal = any(not e.construction for e in entities_to_modify)
-        new_state = has_normal
+        cmd = ToggleConstructionCommand(
+            self, _("Toggle Construction"), self.selection.entity_ids
+        )
+        self.editor.history_manager.execute(cmd)
 
-        for e in entities_to_modify:
-            e.construction = new_state
-
-        self.mark_dirty()
-
-    def _unstick_junction(self, pid: int) -> bool:
-        """Separates entities at a shared point."""
-        try:
-            junction_pt = self.sketch.registry.get_point(pid)
-        except IndexError:
-            return False
-
-        entities_at_junction = []
-        for e in self.sketch.registry.entities:
-            p_ids = []
-            if isinstance(e, Line):
-                p_ids = [e.p1_idx, e.p2_idx]
-            elif isinstance(e, Arc):
-                p_ids = [e.start_idx, e.end_idx, e.center_idx]
-            elif isinstance(e, Circle):
-                p_ids = [e.center_idx, e.radius_pt_idx]
-            if pid in p_ids:
-                entities_at_junction.append(e)
-
-        if len(entities_at_junction) < 2:
-            return False
-
-        # Keep the first entity, modify the rest
-        is_first = True
-        for e in entities_at_junction:
-            if is_first:
-                is_first = False
-                continue
-
-            # Create a new point at the same location
-            new_pid = self.sketch.add_point(junction_pt.x, junction_pt.y)
-
-            # Re-assign the point in the entity
-            if isinstance(e, Line):
-                if e.p1_idx == pid:
-                    e.p1_idx = new_pid
-                if e.p2_idx == pid:
-                    e.p2_idx = new_pid
-            elif isinstance(e, Arc):
-                if e.start_idx == pid:
-                    e.start_idx = new_pid
-                if e.end_idx == pid:
-                    e.end_idx = new_pid
-                if e.center_idx == pid:
-                    e.center_idx = new_pid
-            elif isinstance(e, Circle):
-                if e.center_idx == pid:
-                    e.center_idx = new_pid
-                if e.radius_pt_idx == pid:
-                    e.radius_pt_idx = new_pid
-        return True
-
-    def delete_selection(self) -> bool:
+    def _get_items_to_delete(
+        self,
+    ) -> Tuple[List[Point], List[Entity], List[Constraint]]:
         """
-        Robust deletion logic.
+        Calculates the full set of items to be deleted based on the current
+        selection, including dependent items.
         """
-        # Handle "un-sticking" a junction point
-        if self.selection.junction_pid is not None:
-            did_work = self._unstick_junction(self.selection.junction_pid)
-            self.selection.clear()
-            if did_work:
-                self.sketch.solve()
-                self.mark_dirty()
-            return did_work
-
-        to_delete_constraints = []
-        to_delete_entities = set(self.selection.entity_ids)
-        to_delete_points = set(self.selection.point_ids)
+        to_delete_constraints: List[Constraint] = []
+        to_delete_entity_ids = set(self.selection.entity_ids)
+        to_delete_point_ids = set(self.selection.point_ids)
 
         # 1. Selected Constraints
         if self.selection.constraint_idx is not None:
@@ -329,10 +397,10 @@ class SketchElement(CanvasElement):
 
         # 2. Cascading: If points are deleted, find entities that use them
         for e in registry_entities:
-            if e.id in to_delete_entities:
+            if e.id in to_delete_entity_ids:
                 continue
 
-            p_ids = []
+            p_ids: List[int] = []
             if isinstance(e, Line):
                 p_ids = [e.p1_idx, e.p2_idx]
             elif isinstance(e, Arc):
@@ -341,13 +409,13 @@ class SketchElement(CanvasElement):
                 p_ids = [e.center_idx, e.radius_pt_idx]
 
             # If any control point is marked for deletion, the entity must go
-            if any(pid in to_delete_points for pid in p_ids):
-                to_delete_entities.add(e.id)
+            if any(pid in to_delete_point_ids for pid in p_ids):
+                to_delete_entity_ids.add(e.id)
 
         # 2.5. Cleanup Implicit Constraints for Deleted Entities (Arc geometry)
         # Arcs rely on EqualDistanceConstraint(c, s, c, e) not linked by ID.
         current_constraints = self.sketch.constraints or []
-        for eid in to_delete_entities:
+        for eid in to_delete_entity_ids:
             e = entity_map.get(eid)
             if isinstance(e, Arc):
                 c, s, end = e.center_idx, e.start_idx, e.end_idx
@@ -371,7 +439,7 @@ class SketchElement(CanvasElement):
 
         # 3. Orphan Points: Find points in deleted entities not used by
         # remaining entities
-        if to_delete_entities:
+        if to_delete_entity_ids:
             used_points_by_remaining = set()
             points_of_deleted_entities = set()
 
@@ -384,13 +452,13 @@ class SketchElement(CanvasElement):
                 elif isinstance(e, Circle):
                     p_ids = [e.center_idx, e.radius_pt_idx]
 
-                if e.id in to_delete_entities:
+                if e.id in to_delete_entity_ids:
                     points_of_deleted_entities.update(p_ids)
                 else:
                     used_points_by_remaining.update(p_ids)
 
             orphans = points_of_deleted_entities - used_points_by_remaining
-            to_delete_points.update(orphans)
+            to_delete_point_ids.update(orphans)
 
         # 4. Cleanup Constraints (Dependencies)
         for constr in current_constraints:
@@ -420,15 +488,19 @@ class SketchElement(CanvasElement):
                 ]
             elif isinstance(constr, PointOnLineConstraint):
                 points_in_constraint = [constr.point_id]
+            elif isinstance(constr, SymmetryConstraint):
+                points_in_constraint = [constr.p1, constr.p2]
+                if constr.center is not None:
+                    points_in_constraint.append(constr.center)
 
-            if any(p in to_delete_points for p in points_in_constraint):
+            if any(p in to_delete_point_ids for p in points_in_constraint):
                 should_remove = True
 
             # Check Entity Dependencies
             if not should_remove:
                 entities_in_constraint = []
                 if isinstance(constr, PerpendicularConstraint):
-                    entities_in_constraint = [constr.l1_id, constr.l2_id]
+                    entities_in_constraint = [constr.e1_id, constr.e2_id]
                 elif isinstance(constr, TangentConstraint):
                     entities_in_constraint = [constr.line_id, constr.shape_id]
                 elif isinstance(constr, RadiusConstraint):
@@ -439,108 +511,171 @@ class SketchElement(CanvasElement):
                     entities_in_constraint = [constr.shape_id]
                 elif isinstance(constr, EqualLengthConstraint):
                     entities_in_constraint = constr.entity_ids
+                elif isinstance(constr, SymmetryConstraint):
+                    if constr.axis is not None:
+                        entities_in_constraint = [constr.axis]
 
                 if any(
-                    e in to_delete_entities for e in entities_in_constraint
+                    e in to_delete_entity_ids for e in entities_in_constraint
                 ):
                     should_remove = True
 
-            if should_remove:
+            if should_remove and constr not in to_delete_constraints:
                 to_delete_constraints.append(constr)
 
-        # 5. Execute Deletion
-        did_work = False
+        # 5. Get actual objects from IDs
+        final_points = [
+            p
+            for p in self.sketch.registry.points
+            if p.id in to_delete_point_ids and not p.fixed
+        ]
+        final_entities = [
+            e for e in registry_entities if e.id in to_delete_entity_ids
+        ]
 
-        # Remove Constraints
-        for c in to_delete_constraints:
-            if c in self.sketch.constraints:
-                self.sketch.constraints.remove(c)
-                did_work = True
+        return final_points, final_entities, to_delete_constraints
 
-        # Remove Entities
-        if to_delete_entities:
-            self.sketch.registry.entities = [
-                e
-                for e in self.sketch.registry.entities
-                if e.id not in to_delete_entities
-            ]
-            self.sketch.registry._entity_map = {
-                e.id: e for e in self.sketch.registry.entities
-            }
-            did_work = True
+    def delete_selection(self) -> bool:
+        """
+        Robust deletion logic.
+        """
+        if not self.editor:
+            return False
 
-        # Remove Points
-        if to_delete_points:
-            self.sketch.registry.points = [
-                p
-                for p in self.sketch.registry.points
-                if p.fixed or (p.id not in to_delete_points)
-            ]
-            did_work = True
+        # Handle "un-sticking" a junction point
+        if self.selection.junction_pid is not None:
+            cmd = UnstickJunctionCommand(self, self.selection.junction_pid)
+            self.editor.history_manager.execute(cmd)
+            self.selection.clear()
+            return True
 
-        self.selection.clear()
+        (
+            points_to_del,
+            entities_to_del,
+            constraints_to_del,
+        ) = self._get_items_to_delete()
 
+        did_work = bool(points_to_del or entities_to_del or constraints_to_del)
         if did_work:
-            try:
-                self.sketch.solve()
-            except Exception:
-                pass
-            self.mark_dirty()
+            cmd = RemoveItemsCommand(
+                self,
+                _("Delete Selection"),
+                points=points_to_del,
+                entities=entities_to_del,
+                constraints=constraints_to_del,
+            )
+            self.editor.history_manager.execute(cmd)
+            self.selection.clear()
 
         return did_work
 
-    def _get_two_points_from_selection(self):
+    def _get_two_points_from_selection(self) -> Optional[Tuple[Point, Point]]:
         """Helper to resolve 2 points from point list or line selection."""
         # Case A: 2 Points selected
         if len(self.selection.point_ids) == 2:
-            p1 = self.sketch.registry.get_point(self.selection.point_ids[0])
-            p2 = self.sketch.registry.get_point(self.selection.point_ids[1])
-            return p1, p2
+            p1 = self._get_point(self.selection.point_ids[0])
+            p2 = self._get_point(self.selection.point_ids[1])
+            if p1 and p2:
+                return p1, p2
 
         # Case B: 1 Line selected
         if len(self.selection.entity_ids) == 1:
             eid = self.selection.entity_ids[0]
             e = self._get_entity_by_id(eid)
             if isinstance(e, Line):
-                p1 = self.sketch.registry.get_point(e.p1_idx)
-                p2 = self.sketch.registry.get_point(e.p2_idx)
-                return p1, p2
+                p1 = self._get_point(e.p1_idx)
+                p2 = self._get_point(e.p2_idx)
+                if p1 and p2:
+                    return p1, p2
 
-        return None, None
+        return None
 
     def add_horizontal_constraint(self):
         if not self.is_constraint_supported("horiz"):
             logger.warning("Horizontal constraint not valid for selection.")
             return
+        if not self.editor:
+            return
 
-        p1, p2 = self._get_two_points_from_selection()
-        if p1 and p2:
-            self.sketch.constrain_horizontal(p1.id, p2.id)
-            self.sketch.solve()
-            self.mark_dirty()
+        constraints_to_add = []
+
+        # Case 1: Two points selected
+        if (
+            len(self.selection.point_ids) == 2
+            and not self.selection.entity_ids
+        ):
+            p1_id, p2_id = self.selection.point_ids
+            constraints_to_add.append(HorizontalConstraint(p1_id, p2_id))
+
+        # Case 2: One or more lines selected
+        elif (
+            len(self.selection.entity_ids) > 0 and not self.selection.point_ids
+        ):
+            for eid in self.selection.entity_ids:
+                e = self._get_entity_by_id(eid)
+                if isinstance(e, Line):
+                    constraints_to_add.append(
+                        HorizontalConstraint(e.p1_idx, e.p2_idx)
+                    )
+
+        if constraints_to_add:
+            cmd = AddItemsCommand(
+                self,
+                _("Add Horizontal Constraint"),
+                constraints=constraints_to_add,
+            )
+            self.editor.history_manager.execute(cmd)
 
     def add_vertical_constraint(self):
         if not self.is_constraint_supported("vert"):
             logger.warning("Vertical constraint not valid for selection.")
             return
+        if not self.editor:
+            return
 
-        p1, p2 = self._get_two_points_from_selection()
-        if p1 and p2:
-            self.sketch.constrain_vertical(p1.id, p2.id)
-            self.sketch.solve()
-            self.mark_dirty()
+        constraints_to_add = []
+
+        # Case 1: Two points selected
+        if (
+            len(self.selection.point_ids) == 2
+            and not self.selection.entity_ids
+        ):
+            p1_id, p2_id = self.selection.point_ids
+            constraints_to_add.append(VerticalConstraint(p1_id, p2_id))
+
+        # Case 2: One or more lines selected
+        elif (
+            len(self.selection.entity_ids) > 0 and not self.selection.point_ids
+        ):
+            for eid in self.selection.entity_ids:
+                e = self._get_entity_by_id(eid)
+                if isinstance(e, Line):
+                    constraints_to_add.append(
+                        VerticalConstraint(e.p1_idx, e.p2_idx)
+                    )
+
+        if constraints_to_add:
+            cmd = AddItemsCommand(
+                self,
+                _("Add Vertical Constraint"),
+                constraints=constraints_to_add,
+            )
+            self.editor.history_manager.execute(cmd)
 
     def add_distance_constraint(self):
         if not self.is_constraint_supported("dist"):
             logger.warning("Distance constraint not valid for selection.")
             return
 
-        p1, p2 = self._get_two_points_from_selection()
-        if p1 and p2:
+        points = self._get_two_points_from_selection()
+        if points and self.editor:
+            p1, p2 = points
             dist = math.hypot(p1.x - p2.x, p1.y - p2.y)
-            self.sketch.constrain_distance(p1.id, p2.id, dist)
-            self.sketch.solve()
-            self.mark_dirty()
+            constr = DistanceConstraint(p1.id, p2.id, dist)
+            cmd = AddItemsCommand(
+                self, _("Add Distance Constraint"), constraints=[constr]
+            )
+            self.editor.history_manager.execute(cmd)
         else:
             logger.warning("Select 2 Points or 1 Line for Distance.")
 
@@ -565,10 +700,12 @@ class SketchElement(CanvasElement):
             if r_pt and c:
                 radius = math.hypot(r_pt.x - c.x, r_pt.y - c.y)
 
-        if radius > 0 and e:
-            self.sketch.constrain_radius(e.id, radius)
-            self.sketch.solve()
-            self.mark_dirty()
+        if radius > 0 and e and self.editor:
+            constr = RadiusConstraint(e.id, radius)
+            cmd = AddItemsCommand(
+                self, _("Add Radius Constraint"), constraints=[constr]
+            )
+            self.editor.history_manager.execute(cmd)
         else:
             logger.warning("Could not add radius constraint.")
 
@@ -581,14 +718,16 @@ class SketchElement(CanvasElement):
         eid = self.selection.entity_ids[0]
         e = self._get_entity_by_id(eid)
 
-        if isinstance(e, Circle):
+        if isinstance(e, Circle) and self.editor:
             c = self.sketch.registry.get_point(e.center_idx)
             r_pt = self.sketch.registry.get_point(e.radius_pt_idx)
             if c and r_pt:
                 radius = math.hypot(r_pt.x - c.x, r_pt.y - c.y)
-                self.sketch.constrain_diameter(e.id, radius * 2.0)
-                self.sketch.solve()
-                self.mark_dirty()
+                constr = DiameterConstraint(e.id, radius * 2.0)
+                cmd = AddItemsCommand(
+                    self, _("Add Diameter Constraint"), constraints=[constr]
+                )
+                self.editor.history_manager.execute(cmd)
         else:
             logger.warning("Selected entity is not a Circle.")
 
@@ -597,11 +736,16 @@ class SketchElement(CanvasElement):
         Adds a Coincident (Point-Point) or PointOnLine constraint based on
         the current selection.
         """
+        if not self.editor:
+            return
+
         if self.is_constraint_supported("coincident"):
             p1_id, p2_id = self.selection.point_ids
-            self.sketch.constrain_coincident(p1_id, p2_id)
-            self.sketch.solve()
-            self.mark_dirty()
+            constr = CoincidentConstraint(p1_id, p2_id)
+            cmd = AddItemsCommand(
+                self, _("Add Coincident Constraint"), constraints=[constr]
+            )
+            self.editor.history_manager.execute(cmd)
             return
 
         if self.is_constraint_supported("point_on_line"):
@@ -609,9 +753,11 @@ class SketchElement(CanvasElement):
             sel_entity_id = self.selection.entity_ids[0]
             target_pid = self.selection.point_ids[0]
 
-            self.sketch.constrain_point_on_line(target_pid, sel_entity_id)
-            self.sketch.solve()
-            self.mark_dirty()
+            constr = PointOnLineConstraint(target_pid, sel_entity_id)
+            cmd = AddItemsCommand(
+                self, _("Add Point On Shape"), constraints=[constr]
+            )
+            self.editor.history_manager.execute(cmd)
             return
 
         logger.warning(
@@ -621,20 +767,23 @@ class SketchElement(CanvasElement):
 
     def add_perpendicular(self):
         if not self.is_constraint_supported("perp"):
-            logger.warning("Perpendicular constraint requires 2 Lines.")
+            logger.warning(
+                "Perpendicular constraint requires 2 compatible entities "
+                "(lines, arcs, or circles)."
+            )
             return
 
-        e1 = self._get_entity_by_id(self.selection.entity_ids[0])
-        e2 = self._get_entity_by_id(self.selection.entity_ids[1])
+        if not self.editor:
+            return
 
-        if e1 and e2:
-            self.sketch.constraints.append(
-                PerpendicularConstraint(e1.id, e2.id)
-            )
-            self.sketch.solve()
-            self.mark_dirty()
-        else:
-            logger.warning("Perpendicular constraint requires 2 Lines.")
+        e1_id = self.selection.entity_ids[0]
+        e2_id = self.selection.entity_ids[1]
+
+        constr = PerpendicularConstraint(e1_id, e2_id)
+        cmd = AddItemsCommand(
+            self, _("Add Perpendicular Constraint"), constraints=[constr]
+        )
+        self.editor.history_manager.execute(cmd)
 
     def add_tangent(self):
         if not self.is_constraint_supported("tangent"):
@@ -651,10 +800,12 @@ class SketchElement(CanvasElement):
             elif isinstance(e, (Arc, Circle)):
                 sel_shape = e
 
-        if sel_line and sel_shape:
-            self.sketch.constrain_tangent(sel_line.id, sel_shape.id)
-            self.sketch.solve()
-            self.mark_dirty()
+        if sel_line and sel_shape and self.editor:
+            constr = TangentConstraint(sel_line.id, sel_shape.id)
+            cmd = AddItemsCommand(
+                self, _("Add Tangent Constraint"), constraints=[constr]
+            )
+            self.editor.history_manager.execute(cmd)
         else:
             logger.warning("Select 1 Line and 1 Arc/Circle for Tangent.")
 
@@ -663,7 +814,7 @@ class SketchElement(CanvasElement):
         Adds or merges an equal length/radius constraint for the selected
         entities.
         """
-        if not self.is_constraint_supported("equal"):
+        if not self.is_constraint_supported("equal") or not self.editor:
             logger.warning("Equal constraint requires 2+ Lines/Arcs/Circles.")
             return
 
@@ -680,18 +831,71 @@ class SketchElement(CanvasElement):
                     existing_constraints_to_merge.append(constr)
                     final_ids.update(constr.entity_ids)
 
-        # Remove the old constraints that will be replaced
-        for constr in existing_constraints_to_merge:
-            self.sketch.constraints.remove(constr)
+        # Create commands to remove old constraints and add the new one
+        remove_cmd = RemoveItemsCommand(
+            self, "", constraints=existing_constraints_to_merge
+        )
+        new_constr = EqualLengthConstraint(list(final_ids))
+        add_cmd = AddItemsCommand(
+            self, _("Add Equal Constraint"), constraints=[new_constr]
+        )
 
-        # Add the new, merged constraint
-        self.sketch.constrain_equal_length(list(final_ids))
+        # Execute as a single undoable action. This is a simplified composite.
+        remove_cmd._do_execute()
 
-        self.sketch.solve()
-        self.mark_dirty()
+        # Manually link the undo operations to make them atomic
+        original_add_undo = add_cmd._do_undo
 
-    def _get_entity_by_id(self, eid):
+        def composite_undo():
+            original_add_undo()
+            remove_cmd._do_undo()
+
+        add_cmd._do_undo = composite_undo
+        self.editor.history_manager.execute(add_cmd)
+
+    def add_symmetry_constraint(self):
+        """
+        Adds a symmetry constraint.
+        Supported modes:
+        1. 3 Points: The first point in selection is considered the Center.
+        2. 2 Points + 1 Line: The line is the Axis.
+        """
+        if not self.is_constraint_supported("symmetry") or not self.editor:
+            logger.warning(
+                "Symmetry: Select 3 Points (1st is center) OR 2 Points + 1 "
+                "Line."
+            )
+            return
+
+        point_ids = self.selection.point_ids
+        entity_ids = self.selection.entity_ids
+        constr = None
+
+        if len(point_ids) == 3 and not entity_ids:
+            center = point_ids[0]
+            p1 = point_ids[1]
+            p2 = point_ids[2]
+            constr = SymmetryConstraint(p1, p2, center=center)
+        elif len(point_ids) == 2 and len(entity_ids) == 1:
+            p1 = point_ids[0]
+            p2 = point_ids[1]
+            axis = entity_ids[0]
+            constr = SymmetryConstraint(p1, p2, axis=axis)
+
+        if constr:
+            cmd = AddItemsCommand(
+                self, _("Add Symmetry Constraint"), constraints=[constr]
+            )
+            self.editor.history_manager.execute(cmd)
+
+    def _get_entity_by_id(self, eid: int) -> Optional[Entity]:
         return self.sketch.registry.get_entity(eid)
+
+    def _get_point(self, pid: int) -> Optional[Point]:
+        try:
+            return self.sketch.registry.get_point(pid)
+        except IndexError:
+            return None
 
     def mark_dirty(self, ancestors=False, recursive=False):
         super().mark_dirty(ancestors=ancestors, recursive=recursive)

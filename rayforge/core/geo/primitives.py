@@ -3,6 +3,53 @@ from typing import List, Tuple, Optional, Any
 from .linearize import linearize_arc
 
 
+def normalize_angle(angle: float) -> float:
+    """Normalizes an angle to the [0, 2*pi) range."""
+    return (angle + 2 * math.pi) % (2 * math.pi)
+
+
+def get_arc_angles(
+    start_pos: Tuple[float, float],
+    end_pos: Tuple[float, float],
+    center: Tuple[float, float],
+    clockwise: bool,
+) -> Tuple[float, float, float]:
+    """
+    Returns (start_angle, end_angle, sweep_angle) for an arc.
+    Handles the clockwise/counter-clockwise logic and wrapping.
+    """
+    start_angle = math.atan2(
+        start_pos[1] - center[1], start_pos[0] - center[0]
+    )
+    end_angle = math.atan2(end_pos[1] - center[1], end_pos[0] - center[0])
+
+    sweep = end_angle - start_angle
+    if clockwise:
+        if sweep > 0:
+            sweep -= 2 * math.pi
+    else:
+        if sweep < 0:
+            sweep += 2 * math.pi
+
+    return start_angle, end_angle, sweep
+
+
+def get_arc_midpoint(
+    start_pos: Tuple[float, float],
+    end_pos: Tuple[float, float],
+    center: Tuple[float, float],
+    clockwise: bool,
+) -> Tuple[float, float]:
+    """Calculates the midpoint coordinates along the arc's circumference."""
+    start_a, _, sweep = get_arc_angles(start_pos, end_pos, center, clockwise)
+    mid_angle = start_a + sweep / 2.0
+    radius = math.hypot(start_pos[0] - center[0], start_pos[1] - center[1])
+    return (
+        center[0] + radius * math.cos(mid_angle),
+        center[1] + radius * math.sin(mid_angle),
+    )
+
+
 def is_angle_between(
     target: float, start: float, end: float, clockwise: bool
 ) -> bool:
@@ -11,9 +58,9 @@ def is_angle_between(
     and end angles. Handles wrapping around 2*PI.
     """
     # Normalize all angles to be in the range [0, 2*PI)
-    target = (target + 2 * math.pi) % (2 * math.pi)
-    start = (start + 2 * math.pi) % (2 * math.pi)
-    end = (end + 2 * math.pi) % (2 * math.pi)
+    target = normalize_angle(target)
+    start = normalize_angle(start)
+    end = normalize_angle(end)
 
     if clockwise:
         # For a clockwise arc, the sweep is from start down to end.
@@ -29,6 +76,58 @@ def is_angle_between(
             return target >= start or target <= end
         # Does not wrap (e.g., from 90 deg up to 180 deg)
         return start <= target <= end
+
+
+def circle_circle_intersection(
+    c1: Tuple[float, float], r1: float, c2: Tuple[float, float], r2: float
+) -> List[Tuple[float, float]]:
+    """
+    Calculates the intersection points of two circles.
+    Returns a list of 0, 1, or 2 points.
+    """
+    dx, dy = c2[0] - c1[0], c2[1] - c1[1]
+    d_sq = dx**2 + dy**2
+    d = math.sqrt(d_sq)
+
+    # Check for no intersection or concentric circles/containment
+    if d < 1e-9 or d > r1 + r2 or d < abs(r1 - r2):
+        return []
+
+    a = (r1**2 - r2**2 + d_sq) / (2 * d)
+    h_sq = max(0, r1**2 - a**2)
+    h = math.sqrt(h_sq)
+
+    x2 = c1[0] + a * dx / d
+    y2 = c1[1] + a * dy / d
+
+    x3_1 = x2 + h * dy / d
+    y3_1 = y2 - h * dx / d
+    x3_2 = x2 - h * dy / d
+    y3_2 = y2 + h * dx / d
+
+    return [(x3_1, y3_1), (x3_2, y3_2)]
+
+
+def is_point_on_segment(
+    pt: Tuple[float, float], p1: Tuple[float, float], p2: Tuple[float, float]
+) -> bool:
+    """
+    Checks if a point is strictly on a line segment defined by two endpoints.
+    Assumes the point is collinear with the segment.
+    """
+    # Vector P1->Pt dot P1->P2 >= 0
+    dot1 = (pt[0] - p1[0]) * (p2[0] - p1[0]) + (pt[1] - p1[1]) * (
+        p2[1] - p1[1]
+    )
+    if dot1 < 0:
+        return False
+    # Vector P2->Pt dot P2->P1 >= 0
+    dot2 = (pt[0] - p2[0]) * (p1[0] - p2[0]) + (pt[1] - p2[1]) * (
+        p1[1] - p2[1]
+    )
+    if dot2 < 0:
+        return False
+    return True
 
 
 def get_arc_bounding_box(
@@ -195,10 +294,42 @@ def line_segment_intersection(
     return None
 
 
+def find_closest_point_on_line(
+    p1: Tuple[float, float], p2: Tuple[float, float], x: float, y: float
+) -> Tuple[float, float]:
+    """
+    Finds the closest point on an infinite 2D line defined by p1 and p2
+    to the point (x, y).
+
+    Args:
+        p1: First point defining the line (x, y).
+        p2: Second point defining the line (x, y).
+        x: The x-coordinate of the point to project.
+        y: The y-coordinate of the point to project.
+
+    Returns:
+        The (x, y) coordinates of the closest point on the line.
+    """
+    # Vector from p1 to p2
+    dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+    # Vector from p1 to point (x,y)
+    px, py = x - p1[0], y - p1[1]
+
+    len_sq = dx * dx + dy * dy
+    if len_sq < 1e-12:
+        # p1 and p2 are practically the same point
+        return p1
+
+    # Project vector p onto vector d
+    t = (px * dx + py * dy) / len_sq
+    return p1[0] + t * dx, p1[1] + t * dy
+
+
 def find_closest_point_on_line_segment(
     p1: Tuple[float, float], p2: Tuple[float, float], x: float, y: float
 ) -> Tuple[float, Tuple[float, float], float]:
-    """Finds the closest point on a 2D line segment.
+    """
+    Finds the closest point on a 2D line segment.
 
     Returns:
         A tuple containing:
@@ -352,3 +483,138 @@ def get_segment_region_intersections(
                 cut_points_t.add(max(0.0, min(1.0, t)))
 
     return sorted(list(cut_points_t))
+
+
+def is_point_in_rect(
+    point: Tuple[float, float], rect: Tuple[float, float, float, float]
+) -> bool:
+    """Checks if a 2D point is inside a rectangle."""
+    x, y = point
+    rx1, ry1, rx2, ry2 = rect
+    return rx1 <= x <= rx2 and ry1 <= y <= ry2
+
+
+def rect_a_contains_rect_b(
+    rect_a: Tuple[float, float, float, float],
+    rect_b: Tuple[float, float, float, float],
+) -> bool:
+    """Checks if rect_a fully contains rect_b."""
+    ax1, ay1, ax2, ay2 = rect_a
+    bx1, by1, bx2, by2 = rect_b
+    return bx1 >= ax1 and by1 >= ay1 and bx2 <= ax2 and by2 <= ay2
+
+
+def line_segment_intersects_rect(
+    p1: Tuple[float, float],
+    p2: Tuple[float, float],
+    rect: Tuple[float, float, float, float],
+) -> bool:
+    """Checks if a line segment intersects a rectangle."""
+    from . import clipping
+
+    # Use the robust Cohen-Sutherland clipping algorithm.
+    # If the algorithm returns a clipped segment, it means there was an
+    # intersection.
+    # The algorithm expects 3D points, so we add a dummy Z coordinate.
+    start_3d = (p1[0], p1[1], 0.0)
+    end_3d = (p2[0], p2[1], 0.0)
+    return clipping.clip_line_segment(start_3d, end_3d, rect) is not None
+
+
+def arc_intersects_rect(
+    start_pos: Tuple[float, float],
+    end_pos: Tuple[float, float],
+    center: Tuple[float, float],
+    clockwise: bool,
+    rect: Tuple[float, float, float, float],
+) -> bool:
+    """Checks if an arc intersects with a rectangle."""
+
+    # A mock command object for linearize_arc
+    class MockArcCmd:
+        def __init__(self, end, center_offset, clockwise):
+            self.end = (end[0], end[1], 0.0)
+            self.center_offset = center_offset
+            self.clockwise = clockwise
+
+    # Broad phase: Check if arc's AABB intersects rect's AABB
+    arc_box = get_arc_bounding_box(
+        start_pos,
+        end_pos,
+        (center[0] - start_pos[0], center[1] - start_pos[1]),
+        clockwise,
+    )
+    if (
+        arc_box[2] < rect[0]  # arc_xmax < rect_xmin
+        or arc_box[0] > rect[2]  # arc_xmin > rect_xmax
+        or arc_box[3] < rect[1]  # arc_ymax < rect_ymin
+        or arc_box[1] > rect[3]  # arc_ymin > rect_ymax
+    ):
+        return False
+
+    # Detailed phase: linearize the arc and check each segment.
+    mock_cmd = MockArcCmd(
+        end_pos,
+        (center[0] - start_pos[0], center[1] - start_pos[1]),
+        clockwise,
+    )
+    start_3d = (start_pos[0], start_pos[1], 0.0)
+    radius = math.hypot(start_pos[0] - center[0], start_pos[1] - center[1])
+    # Use a sensible resolution for selection hit-testing
+    segments = linearize_arc(mock_cmd, start_3d, resolution=radius * 0.1)
+
+    for p1_3d, p2_3d in segments:
+        if line_segment_intersects_rect(p1_3d[:2], p2_3d[:2], rect):
+            return True
+
+    return False
+
+
+def circle_is_contained_by_rect(
+    center: Tuple[float, float],
+    radius: float,
+    rect: Tuple[float, float, float, float],
+) -> bool:
+    """Checks if a circle is fully contained within a rectangle."""
+    cx, cy = center
+    rx1, ry1, rx2, ry2 = rect
+    return (
+        (cx - radius) >= rx1
+        and (cy - radius) >= ry1
+        and (cx + radius) <= rx2
+        and (cy + radius) <= ry2
+    )
+
+
+def circle_intersects_rect(
+    center: Tuple[float, float],
+    radius: float,
+    rect: Tuple[float, float, float, float],
+) -> bool:
+    """Checks if a circle's boundary intersects with a rectangle."""
+    cx, cy = center
+    rx1, ry1, rx2, ry2 = rect
+
+    # Quick rejection: if circle is fully contained, it doesn't intersect
+    # the boundary.
+    if circle_is_contained_by_rect(center, radius, rect):
+        return False
+
+    # 1. Check for overlap (closest point on rect to center is within radius)
+    closest_x = max(rx1, min(cx, rx2))
+    closest_y = max(ry1, min(cy, ry2))
+    dist_sq_closest = (closest_x - cx) ** 2 + (closest_y - cy) ** 2
+    if dist_sq_closest > radius * radius:
+        return False  # No overlap at all
+
+    # 2. If overlapping, check that the rect is not fully contained
+    # within the circle, which would mean it doesn't touch the boundary.
+    dx_far = max(abs(rx1 - cx), abs(rx2 - cx))
+    dy_far = max(abs(ry1 - cy), abs(ry2 - cy))
+    dist_sq_farthest = dx_far**2 + dy_far**2
+    if dist_sq_farthest < radius * radius:
+        return False  # Rect is entirely inside circle, not touching boundary
+
+    # If it overlaps but is not fully contained by either shape, it must
+    # intersect the boundary.
+    return True

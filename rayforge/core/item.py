@@ -18,6 +18,7 @@ from blinker import Signal
 from .matrix import Matrix
 
 if TYPE_CHECKING:
+    from .asset import IAsset
     from .doc import Doc
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class DocItem(ABC):
 
     def __init__(self, name: str = ""):
         self.uid: str = str(uuid.uuid4())
-        self.name: str = name
+        self._name: str = name
         self._parent: Optional[DocItem] = None
         self.children: List[DocItem] = []
         self._matrix: Matrix = Matrix.identity()
@@ -59,6 +60,26 @@ class DocItem(ABC):
         self.descendant_transform_changed = Signal()
 
         self._natural_size: Tuple[float, float] = (0.0, 0.0)
+
+    @property
+    def name(self) -> str:
+        """The user-facing name of the item."""
+        return self._name
+
+    @name.setter
+    def name(self, new_name: str):
+        """Sets the item name and sends an update signal if changed."""
+        if self._name != new_name:
+            self._name = new_name
+            self.updated.send(self)
+
+    def depends_on_asset(self, asset: "IAsset") -> bool:
+        """
+        Checks if this item has a direct dependency on the given asset.
+        Subclasses should override this to check their specific asset links.
+        By default, items have no asset dependencies.
+        """
+        return False
 
     @property
     def bbox(self) -> Tuple[float, float, float, float]:
@@ -163,6 +184,10 @@ class DocItem(ABC):
         Sets the item size in mm while preserving its world-space center
         point. This manipulates the existing matrix.
         """
+        # Guard against zero dimensions to prevent singular matrices in Cairo
+        width_mm = max(abs(width_mm), 1e-9)
+        height_mm = max(abs(height_mm), 1e-9)
+
         world_transform_old = self.get_world_transform()
         current_w, current_h = world_transform_old.get_abs_scale()
 
@@ -601,6 +626,21 @@ class DocItem(ABC):
             ]
 
         return all_descendants
+
+    def get_child_by_uid(self, uid: str) -> Optional["DocItem"]:
+        """
+        Finds a direct child of this item by its unique identifier.
+
+        Args:
+            uid: The unique identifier to search for.
+
+        Returns:
+            The DocItem if found, otherwise None.
+        """
+        for child in self.children:
+            if child.uid == uid:
+                return child
+        return None
 
     def find_descendant_by_uid(self, uid: str) -> Optional[DocItem]:
         """

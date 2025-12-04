@@ -2,9 +2,9 @@ import numpy as np
 import scipy.linalg
 from scipy.optimize import least_squares
 from typing import Sequence, List
-from .entities import EntityRegistry, Point, Line, Arc, Circle
+from .entities import EntityRegistry, Point
 from .params import ParameterContext
-from .constraints import Constraint, RadiusConstraint, DiameterConstraint
+from .constraints import Constraint
 
 
 class Solver:
@@ -30,6 +30,9 @@ class Solver:
             p for p in self.registry.points if not p.fixed
         ]
 
+        # Map point_id -> index in state vector (0, 2, 4...)
+        point_indices = {p.id: i * 2 for i, p in enumerate(mutable_points)}
+
         # Only reset if we are doing a full DOF update
         if update_dof:
             for p in self.registry.points:
@@ -47,14 +50,17 @@ class Solver:
 
         x0 = np.array(x0_list)
 
-        # 3. Define the objective function (residuals)
-        def objective(x_state):
-            # Update registry points directly from vector
+        def update_registry(x_state):
+            """Updates registry points directly from vector."""
             ptr = 0
             for p in mutable_points:
                 p.x = x_state[ptr]
                 p.y = x_state[ptr + 1]
                 ptr += 2
+
+        # 3. Define the objective function (residuals)
+        def objective(x_state):
+            update_registry(x_state)
 
             # Calculate errors
             residuals = []
@@ -73,16 +79,70 @@ class Solver:
 
             return np.array(residuals)
 
-        # 4. Solve
-        # 'trf' is robust for under-constrained problems (m < n)
-        result = least_squares(objective, x0, method="trf", ftol=tolerance)
+        # 4. Define the Jacobian function
+        def jacobian(x_state):
+            # Ensure registry is up-to-date (least_squares might call jac with
+            # the same x as obj, or different)
+            update_registry(x_state)
 
-        # 5. Final Update to ensure registry matches result
-        objective(result.x)
+            n_vars = len(x0)
+            rows = []
+
+            for const in self.constraints:
+                grad_map = const.gradient(self.registry, self.params)
+
+                # Determine how many residuals this constraint produces
+                # We can infer this from the gradient map lists
+                num_residuals = 0
+                if grad_map:
+                    first_val = next(iter(grad_map.values()))
+                    num_residuals = len(first_val)
+                else:
+                    # Fallback check if gradient not implemented but error
+                    # exists
+                    err = const.error(self.registry, self.params)
+                    if isinstance(err, (tuple, list)):
+                        num_residuals = len(err)
+                    else:
+                        num_residuals = 1
+
+                # Create zero rows for these residuals
+                for _ in range(num_residuals):
+                    rows.append(np.zeros(n_vars))
+
+                start_row = len(rows) - num_residuals
+
+                # Fill in the gradients
+                for pid, grads in grad_map.items():
+                    if pid in point_indices:
+                        idx = point_indices[pid]
+                        for i, (dx, dy) in enumerate(grads):
+                            current_row = rows[start_row + i]
+                            current_row[idx] = dx
+                            current_row[idx + 1] = dy
+
+            if not rows:
+                return np.zeros((1, n_vars))
+
+            return np.vstack(rows)
+
+        # 5. Solve
+        # 'trf' is robust for under-constrained problems (m < n)
+        # We pass the analytical jacobian
+        result = least_squares(
+            objective,
+            x0,
+            jac=jacobian,  # type: ignore
+            method="trf",
+            ftol=tolerance,
+        )
+
+        # 6. Final Update to ensure registry matches result
+        update_registry(result.x)
 
         success = bool(result.success and result.cost < tolerance)
 
-        # 6. Analyze Degrees of Freedom (DOF) - CONDITIONALLY
+        # 7. Analyze Degrees of Freedom (DOF) - CONDITIONALLY
         if success and update_dof:
             self._analyze_dof(result.jac, mutable_points)
             self._update_entity_constraints()
@@ -99,8 +159,9 @@ class Solver:
         # If the Null Space is empty, the system is fully constrained.
 
         # Get the null space basis ( orthonormal columns )
-        # We use a slightly loose tolerance to account for floating point drift
-        null_space = scipy.linalg.null_space(jacobian, rcond=1e-5)
+        # Using a tighter tolerance (1e-9) prevents false positives for DOF
+        # when the system is actually rigid but has scaling differences.
+        null_space = scipy.linalg.null_space(jacobian, rcond=1e-9)
 
         # null_space shape is (n_vars, n_dof)
         # If n_dof == 0, everything is constrained.
@@ -134,54 +195,7 @@ class Solver:
         """
         Updates the constrained status of Entities based on their points.
         An entity is constrained only if all its defining points are
-        constrained. For circles, it is constrained if its center and radius
-        are defined.
+        constrained.
         """
-        registry = self.registry
-        for entity in registry.entities:
-            is_fully_constrained = False
-
-            if isinstance(entity, Line):
-                p1 = registry.get_point(entity.p1_idx)
-                p2 = registry.get_point(entity.p2_idx)
-                is_fully_constrained = p1.constrained and p2.constrained
-
-            elif isinstance(entity, Arc):
-                s = registry.get_point(entity.start_idx)
-                e = registry.get_point(entity.end_idx)
-                c = registry.get_point(entity.center_idx)
-                is_fully_constrained = (
-                    s.constrained and e.constrained and c.constrained
-                )
-
-            elif isinstance(entity, Circle):
-                center_pt = registry.get_point(entity.center_idx)
-                radius_pt = registry.get_point(entity.radius_pt_idx)
-
-                # A circle's geometry is defined by its center and radius.
-                center_is_constrained = center_pt.constrained
-
-                # The radius is defined if:
-                # 1. An explicit Radius or Diameter constraint exists.
-                # 2. Or, the radius point itself is fully constrained.
-                radius_is_defined = radius_pt.constrained
-                if not radius_is_defined:
-                    for constr in self.constraints:
-                        if (
-                            isinstance(constr, RadiusConstraint)
-                            and constr.entity_id == entity.id
-                        ):
-                            radius_is_defined = True
-                            break
-                        if (
-                            isinstance(constr, DiameterConstraint)
-                            and constr.circle_id == entity.id
-                        ):
-                            radius_is_defined = True
-                            break
-
-                is_fully_constrained = (
-                    center_is_constrained and radius_is_defined
-                )
-
-            entity.constrained = is_fully_constrained
+        for entity in self.registry.entities:
+            entity.update_constrained_status(self.registry, self.constraints)

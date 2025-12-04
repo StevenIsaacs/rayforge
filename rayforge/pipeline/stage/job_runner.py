@@ -1,10 +1,7 @@
 from __future__ import annotations
 import logging
-import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Dict, Any
-import numpy as np
-
 from ...context import get_context
 from ...core.ops import Ops
 from ...core.doc import Doc
@@ -15,7 +12,6 @@ from ..artifact import (
     create_handle_from_dict,
     StepOpsArtifact,
 )
-from ..encoder.gcode import GcodeEncoder
 from ..encoder.vertexencoder import VertexEncoder
 
 
@@ -88,11 +84,13 @@ def make_job_artifact_in_subprocess(
 
     final_ops.job_end()
 
+    # If the final ops are empty, still proceed to encoding to generate a file
+    # with the necessary preamble and postscript.
     if final_ops.is_empty():
-        logger.info("Final ops are empty. No job artifact will be created.")
-        proxy.set_progress(1.0)
-        proxy.set_message(_("Job finalization complete"))
-        return
+        logger.info(
+            "Final ops are empty. "
+            "Generating G-code with preamble/postscript only."
+        )
 
     proxy.set_message(_("Calculating final time and distance estimates..."))
     final_time = final_ops.estimate_time(
@@ -103,15 +101,11 @@ def make_job_artifact_in_subprocess(
     final_distance = final_ops.distance()
 
     proxy.set_message(_("Generating G-code..."))
-    encoder = GcodeEncoder.for_machine(machine)
-    gcode_str, op_map_obj = encoder.encode(final_ops, machine, doc)
-
-    # Encode G-code and map to byte arrays for storage in the artifact
-    gcode_bytes = np.frombuffer(gcode_str.encode("utf-8"), dtype=np.uint8)
-    op_map_str = json.dumps(asdict(op_map_obj))
-    op_map_bytes = np.frombuffer(op_map_str.encode("utf-8"), dtype=np.uint8)
+    machine_code_bytes, op_map_bytes = machine.encode_ops(final_ops, doc)
 
     # Generate vertex data for UI preview/simulation
+    # NOTE: The preview uses the original Y-Up final_ops. The 3D view camera
+    # handles the visual orientation for Y-down machines.
     proxy.set_message(_("Encoding paths for preview..."))
     vertex_encoder = VertexEncoder()
     vertex_data = vertex_encoder.encode(final_ops)
@@ -121,7 +115,7 @@ def make_job_artifact_in_subprocess(
         ops=final_ops,
         distance=final_distance,
         vertex_data=vertex_data,
-        gcode_bytes=gcode_bytes,
+        machine_code_bytes=machine_code_bytes,
         op_map_bytes=op_map_bytes,
         time_estimate=final_time,
     )
