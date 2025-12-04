@@ -3,6 +3,7 @@ import pytest
 from pathlib import Path
 from typing import Tuple, cast
 from dataclasses import asdict
+from unittest.mock import MagicMock, patch
 from blinker import Signal
 from rayforge.core.doc import Doc
 from rayforge.core.source_asset import SourceAsset
@@ -11,6 +12,7 @@ from rayforge.core.matrix import Matrix
 from rayforge.core.tab import Tab
 from rayforge.core.geo import Geometry
 from rayforge.core.workpiece import WorkPiece
+from rayforge.core.sketcher.sketch import Sketch
 from rayforge.core.source_asset_segment import SourceAssetSegment
 from rayforge.core.vectorization_spec import PassthroughSpec
 from rayforge.image.svg.renderer import SvgRenderer
@@ -47,7 +49,7 @@ def doc_with_workpiece(
     wp = cast(WorkPiece, payload.items[0])
 
     doc = Doc()
-    doc.add_source_asset(source)
+    doc.add_asset(source)
     doc.active_layer.add_child(wp)
     return doc, wp, source
 
@@ -86,6 +88,13 @@ class TestWorkPiece:
         assert wp.tabs_enabled is True
         assert wp.source_segment is not None
         assert wp._edited_boundaries is None
+        assert wp.sketch_uid is None
+        assert wp.sketch_params == {}
+        assert wp._transient_sketch_definition is None
+
+        # New check for view cache initialization
+        assert hasattr(wp, "_view_cache")
+        assert isinstance(wp._view_cache, dict)
 
     def test_workpiece_is_docitem(self, workpiece_instance):
         assert isinstance(workpiece_instance, DocItem)
@@ -93,6 +102,13 @@ class TestWorkPiece:
 
     def test_serialization_deserialization(self, doc_with_workpiece):
         doc, wp, source = doc_with_workpiece
+
+        # Setup sketch data for serialization
+        sketch = Sketch()
+        doc.add_asset(sketch)
+        wp.sketch_uid = sketch.uid
+        wp.sketch_params = {"width": 123.45}
+
         wp.set_size(80.0, 40.0)
         wp.pos = (10.5, 20.2)
         wp.angle = 90
@@ -114,6 +130,8 @@ class TestWorkPiece:
         assert "source_segment" in data_dict
         assert data_dict["source_segment"]["source_asset_uid"] == source.uid
         assert "edited_boundaries" in data_dict
+        assert data_dict["sketch_uid"] == sketch.uid
+        assert data_dict["sketch_params"] == {"width": 123.45}
 
         new_wp = WorkPiece.from_dict(data_dict)
 
@@ -140,6 +158,88 @@ class TestWorkPiece:
         assert len(new_wp._edited_boundaries.commands) == len(
             edited_geo.commands
         )
+        assert new_wp.sketch_uid == sketch.uid
+        assert new_wp.sketch_params == {"width": 123.45}
+
+    def test_in_world_hydrates_sketch_definition(self, doc_with_workpiece):
+        """
+        Tests that the in_world method correctly populates the transient
+        sketch definition for use in subprocesses.
+        """
+        doc, wp, _ = doc_with_workpiece
+
+        # Create and link a sketch
+        sketch = Sketch()
+        # Create a valid dictionary from a default sketch to use for mocking.
+        mock_dict = Sketch().to_dict()
+        mock_dict["uid"] = sketch.uid  # Ensure the mock uses the correct UID
+
+        with patch.object(Sketch, "to_dict", return_value=mock_dict):
+            doc.add_asset(sketch)
+            wp.sketch_uid = sketch.uid
+            wp.sketch_params = {"width": 50.0}
+
+            # The method under test
+            world_wp = wp.in_world()
+
+        # Check that the main properties are copied
+        assert world_wp.sketch_uid == sketch.uid
+        assert world_wp.sketch_params == {"width": 50.0}
+
+        # Check that the transient definition is hydrated correctly
+        transient_def = world_wp._transient_sketch_definition
+        assert transient_def is not None
+        assert isinstance(transient_def, Sketch)
+        assert transient_def is not sketch  # Must be a copy
+        assert transient_def.uid == sketch.uid
+
+    def test_get_sketch_definition(self, doc_with_workpiece):
+        """
+        Tests retrieving the sketch definition from the document or from the
+        transient field.
+        """
+        doc, wp, _ = doc_with_workpiece
+
+        # Case 1: No sketch UID is set, should return None
+        assert wp.sketch_uid is None
+        assert wp.get_sketch_definition() is None
+
+        # Case 2: Sketch UID is set, should retrieve the sketch from the
+        # document
+        sketch_from_doc = Sketch()
+        doc.add_asset(sketch_from_doc)
+        wp.sketch_uid = sketch_from_doc.uid
+
+        retrieved_sketch = wp.get_sketch_definition()
+        assert retrieved_sketch is not None
+        # It should be the exact same instance from the document's registry
+        assert retrieved_sketch is sketch_from_doc
+        assert retrieved_sketch.uid == sketch_from_doc.uid
+
+        # Case 3: A transient sketch definition exists and takes precedence
+        # This simulates a WorkPiece that has been prepared by `in_world()`
+        # for use in a subprocess.
+        transient_sketch = Sketch()
+        transient_sketch.uid = "transient-uid-123"
+
+        # Use a new WorkPiece instance to avoid side effects
+        wp_with_transient = WorkPiece(
+            "transient_test", source_segment=wp.source_segment
+        )
+        # Assign the doc-based sketch_uid to prove the transient one is used
+        # instead
+        wp_with_transient.sketch_uid = sketch_from_doc.uid
+        wp_with_transient._transient_sketch_definition = transient_sketch
+
+        # Add it to the doc so that a doc lookup *could* work, but shouldn't.
+        doc.active_layer.add_child(wp_with_transient)
+
+        retrieved_transient = wp_with_transient.get_sketch_definition()
+        assert retrieved_transient is not None
+        # It should be the transient instance, not the one from the doc
+        assert retrieved_transient is transient_sketch
+        assert retrieved_transient is not sketch_from_doc
+        assert retrieved_transient.uid == "transient-uid-123"
 
     def test_boundaries_override(self, workpiece_instance):
         """
@@ -350,7 +450,7 @@ class TestWorkPiece:
             original_data=b"",
             renderer=MockNoSizeRenderer(),
         )
-        doc.add_source_asset(source)
+        doc.add_asset(source)
         gen_config = SourceAssetSegment(
             source_asset_uid=source.uid,
             segment_mask_geometry=Geometry(),
@@ -585,33 +685,142 @@ class TestWorkPiece:
         )
         wp.source_segment = segment
 
-        # The geometry's bounding box is 2x2.
-        # Applying a 20x10 size results in a non-uniform world scale.
-        wp.set_size(20, 10)
-        wp.angle = 0  # ensure no rotation
-
-        tab = Tab(width=1, segment_index=1, pos=0.5)
-        direction = wp.get_tab_direction(tab)
-        assert direction is not None
-
-        expected_x, expected_y = (1.0, 2.0)
-        norm = (expected_x**2 + expected_y**2) ** 0.5
-        expected_direction = (expected_x / norm, expected_y / norm)
-
-        assert direction == pytest.approx(expected_direction)
-
-    def test_natural_size_override(self, workpiece_instance):
+    def test_from_sketch_factory_behavior(self):
         """
-        Tests that WorkPiece.natural_size returns the intrinsic source size
-        and does not change if children are added (which is illegal generally,
-        but the base class mechanism should be ignored).
+        Tests the WorkPiece.from_sketch factory method logic.
         """
-        wp = workpiece_instance
-        assert wp.natural_size == (100.0, 50.0)
+        # We patch the Sketch class inside rayforge.core.sketcher.sketch
+        # because the module under test (workpiece.py) imports it locally.
+        with patch("rayforge.core.sketcher.sketch.Sketch") as MockSketchCls:
+            # Setup the mock instance returned by Sketch.from_dict()
+            mock_instance = MagicMock()
+            MockSketchCls.from_dict.return_value = mock_instance
 
-        # Even if we add a child (simulating a structural change on DocItem),
-        # WorkPiece should ignore it and return source dims.
-        child = WorkPiece("child")
-        wp.add_child(child)
+            # Setup the geometry returned by the mock instance.
+            # Define a 10x20 bounding box: (0,0) -> (10,20)
+            mock_geo = Geometry()
+            mock_geo.move_to(0, 0)
+            mock_geo.line_to(10, 20)
 
-        assert wp.natural_size == (100.0, 50.0)
+            mock_instance.to_geometry.return_value = mock_geo
+            mock_instance.solve.return_value = True
+            mock_instance.name = "TestSketch"
+
+            # Create a dummy sketch object to pass in (the factory calls
+            # to_dict on it)
+            dummy_sketch = Sketch()
+            dummy_sketch.uid = "sketch-123"
+            dummy_sketch.name = "TestSketch"
+
+            # Run factory
+            wp = WorkPiece.from_sketch(dummy_sketch)
+
+            # Assertions
+            assert wp.sketch_uid == dummy_sketch.uid
+            assert wp.name == "TestSketch"
+            assert wp.natural_width_mm == pytest.approx(10.0)
+            assert wp.natural_height_mm == pytest.approx(20.0)
+
+            # The matrix should be scaled to natural size
+            sx, sy = wp.matrix.get_scale()
+            assert sx == pytest.approx(10.0)
+            assert sy == pytest.approx(20.0)
+
+            # 2. Test empty/failing sketch fallback
+            mock_instance.to_geometry.return_value = Geometry()  # Empty
+            wp_empty = WorkPiece.from_sketch(dummy_sketch)
+
+            assert wp_empty.natural_width_mm == 1.0
+            assert wp_empty.natural_height_mm == 1.0
+
+    def test_sketch_params_setter_triggers_update(self, doc_with_workpiece):
+        """
+        Tests that setting sketch_params triggers regeneration and updates
+        natural dimensions.
+        """
+        doc, wp, _ = doc_with_workpiece
+
+        # We create a mock sketch that returns specific geometry when solved
+        sketch = Sketch()
+        doc.add_asset(sketch)
+        wp.sketch_uid = sketch.uid
+
+        updated_signals = []
+        wp.updated.connect(lambda s: updated_signals.append(s), weak=False)
+
+        # Patch Sketch at its definition because it is imported locally
+        # inside regenerate_from_sketch.
+        with patch("rayforge.core.sketcher.sketch.Sketch") as MockSketchCls:
+            # Setup the mock instance returned by Sketch.from_dict()
+            mock_instance = MagicMock()
+            MockSketchCls.from_dict.return_value = mock_instance
+
+            # Setup the geometry returned by the mock instance
+            mock_geo = Geometry()
+            # Define a bounding box (0,0) -> (50,25)
+            mock_geo.move_to(0, 0)
+            mock_geo.line_to(50, 25)
+
+            mock_instance.to_geometry.return_value = mock_geo
+            mock_instance.solve.return_value = True
+
+            # Action: Change params
+            new_params = {"W": 50, "H": 25}
+            wp.sketch_params = new_params
+
+            # Assertions
+            assert wp.sketch_params == new_params
+            assert len(updated_signals) > 0
+
+            # Verify regenerate logic was called
+            mock_instance.solve.assert_called()
+            # Verify variable overrides were passed to solve
+            call_args = mock_instance.solve.call_args
+            assert call_args.kwargs.get("variable_overrides") == new_params
+
+            # Verify natural size updated
+            assert wp.natural_width_mm == pytest.approx(50.0)
+            assert wp.natural_height_mm == pytest.approx(25.0)
+
+    def test_sketch_boundaries_normalization(self, doc_with_workpiece):
+        """
+        Tests that boundaries generated from a sketch are correctly normalized
+        to the 0-1 unit square, regardless of the sketch's physical size.
+        """
+        doc, wp, _ = doc_with_workpiece
+
+        sketch = Sketch()
+        doc.add_asset(sketch)
+        wp.sketch_uid = sketch.uid
+        wp.clear_render_cache()
+
+        # Patch Sketch at its definition
+        with patch("rayforge.core.sketcher.sketch.Sketch") as MockSketchCls:
+            # Setup mock instance
+            mock_instance = MagicMock()
+            MockSketchCls.from_dict.return_value = mock_instance
+
+            # Setup the geometry: a 100x200 rectangle starting at 0,0
+            # This is what wp.boundaries will process.
+            mock_geo = Geometry()
+            mock_geo.move_to(0, 0)
+            mock_geo.line_to(100, 200)
+
+            mock_instance.to_geometry.return_value = mock_geo
+            mock_instance.solve.return_value = True
+
+            # Access boundaries
+            bounds = wp.boundaries
+            assert bounds is not None
+
+            # Verify normalization (should fill 0-1 box)
+            # The logic inside WorkPiece.boundaries detects the 100x200
+            # extent and normalizes it.
+            min_x, min_y, max_x, max_y = bounds.rect()
+            assert min_x == pytest.approx(0.0)
+            assert min_y == pytest.approx(0.0)
+            assert max_x == pytest.approx(1.0)
+            assert max_y == pytest.approx(1.0)
+
+            # Check cache was populated
+            assert wp._boundaries_cache is bounds

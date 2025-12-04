@@ -13,8 +13,9 @@ from typing import (
 )
 from ...context import RayforgeContext
 from ...core.ops import Ops
+from ...core.varset import VarSet, HostnameVar, PortVar
+from ...pipeline.encoder.base import OpsEncoder
 from ...pipeline.encoder.gcode import GcodeEncoder
-from ...shared.varset import VarSet, HostnameVar, PortVar
 from ..transport import TelnetTransport, TransportStatus
 from ..transport.validators import is_valid_hostname_or_ip
 from .driver import (
@@ -78,6 +79,10 @@ class SmoothieDriver(Driver):
                 ),
             ]
         )
+
+    def get_encoder(self) -> "OpsEncoder":
+        """Returns a GcodeEncoder configured for the machine's dialect."""
+        return GcodeEncoder(self._machine.dialect)
 
     def get_setting_vars(self) -> List["VarSet"]:
         return [VarSet()]
@@ -175,14 +180,14 @@ class SmoothieDriver(Driver):
             Callable[[int], Union[None, Awaitable[None]]]
         ] = None,
     ) -> None:
-        encoder = GcodeEncoder.for_machine(self._machine)
+        encoder = self.get_encoder()
         gcode, op_map = encoder.encode(ops, self._machine, doc)
         gcode_lines = gcode.splitlines()
 
         try:
             for op_index in range(len(ops)):
                 # Find all g-code lines for this specific op_index
-                line_indices = op_map.op_to_gcode.get(op_index, [])
+                line_indices = op_map.op_to_machine_code.get(op_index, [])
                 if not line_indices:
                     # If an op generates no g-code, still report it as done.
                     if on_command_done:

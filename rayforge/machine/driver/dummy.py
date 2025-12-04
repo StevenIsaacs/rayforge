@@ -12,7 +12,9 @@ from typing import (
 )
 from ...context import RayforgeContext
 from ...core.ops import Ops
-from ...shared.varset import VarSet
+from ...core.varset import VarSet
+from ...pipeline.encoder.base import OpsEncoder
+from ...pipeline.encoder.gcode import GcodeEncoder
 from .driver import Driver, Axis
 
 if TYPE_CHECKING:
@@ -45,6 +47,10 @@ class NoDeviceDriver(Driver):
     def get_setup_vars(cls) -> "VarSet":
         return VarSet(title=_("No settings"))
 
+    def get_encoder(self) -> "OpsEncoder":
+        """Returns a GcodeEncoder configured for the machine's dialect."""
+        return GcodeEncoder(self._machine.dialect)
+
     def get_setting_vars(self) -> List["VarSet"]:
         return [VarSet(title=_("No settings"))]
 
@@ -62,7 +68,7 @@ class NoDeviceDriver(Driver):
         """
         Dummy implementation that simulates command execution.
 
-        This implementation creates a GcodeOpMap to track which commands
+        This implementation creates a MachineCodeOpMap to track which commands
         correspond to which Ops, then simulates execution by calling the
         on_command_done callback for each command with a small delay.
         """

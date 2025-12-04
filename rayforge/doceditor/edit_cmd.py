@@ -1,6 +1,6 @@
 import uuid
 import logging
-from typing import TYPE_CHECKING, List, Dict, Tuple, Sequence
+from typing import TYPE_CHECKING, List, Dict, Tuple, Sequence, Optional, cast
 from ..core.item import DocItem
 from ..core.group import Group
 from ..core.workpiece import WorkPiece
@@ -9,6 +9,8 @@ from ..undo import ListItemCommand, ReorderListCommand
 
 if TYPE_CHECKING:
     from .editor import DocEditor
+    from ..core.source_asset import SourceAsset
+    from ..core.sketcher.sketch import Sketch
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,7 @@ class EditCmd:
         history = self._editor.history_manager
         newly_pasted_items = []
 
-        target_layer = self._editor.default_workpiece_layer
+        target_layer = self._editor.doc.active_layer
 
         with history.transaction(_("Paste item(s)")) as t:
             offset_x = self._paste_increment_mm[0] * self._paste_counter
@@ -153,7 +155,7 @@ class EditCmd:
         history = self._editor.history_manager
         newly_duplicated_items = []
 
-        target_layer = self._editor.default_workpiece_layer
+        target_layer = self._editor.doc.active_layer
 
         top_level_items = self._get_top_level_items(items)
 
@@ -188,6 +190,46 @@ class EditCmd:
                 t.execute(command)
 
         return newly_duplicated_items
+
+    def add_items(
+        self,
+        items: List[DocItem],
+        source_assets: Optional[List["SourceAsset"]] = None,
+        sketches: Optional[List["Sketch"]] = None,
+        name: str = "Add item(s)",
+    ) -> List[DocItem]:
+        """
+        Adds a list of items and their associated source assets/sketches to the
+        document.
+        """
+        if not items:
+            return []
+
+        history = self._editor.history_manager
+        target_layer = self._editor.doc.active_layer
+
+        with history.transaction(_(name)) as t:
+            # Add source assets. This is not currently undoable in this simple
+            # command, but matches the import logic.
+            if source_assets:
+                for asset in source_assets:
+                    self._editor.doc.add_asset(asset)
+
+            # Register sketches.
+            if sketches:
+                for sketch in sketches:
+                    self._editor.doc.add_asset(sketch)
+
+            for item in items:
+                command = ListItemCommand(
+                    owner_obj=target_layer,
+                    item=item,
+                    undo_command="remove_child",
+                    redo_command="add_child",
+                    name=_("Add item"),
+                )
+                t.execute(command)
+        return items
 
     def remove_items(
         self,
@@ -253,3 +295,47 @@ class EditCmd:
         if self._paste_counter != 0:
             logger.debug("Paste counter reset to 0 due to context change.")
             self._paste_counter = 0
+
+    def add_sketch_instance(
+        self, sketch_uid: str, position_mm: Tuple[float, float]
+    ) -> WorkPiece:
+        """
+        Creates a new WorkPiece instance from a sketch definition.
+
+        Args:
+            sketch_uid: The UID of the sketch definition to instantiate
+            position_mm: The (x, y) position in mm where to place the instance
+
+        Returns:
+            The newly created WorkPiece instance
+        """
+        history = self._editor.history_manager
+        target_layer = self._editor.doc.active_layer
+
+        sketch_def = cast(
+            Optional["Sketch"], self._editor.doc.get_asset_by_uid(sketch_uid)
+        )
+        if not sketch_def:
+            raise ValueError(f"Sketch with UID {sketch_uid} not found.")
+
+        # Create new WorkPiece using the factory method which handles
+        # correct sizing and initialization.
+        new_workpiece = WorkPiece.from_sketch(sketch_def)
+
+        width, height = new_workpiece.natural_size
+        new_workpiece.pos = (
+            position_mm[0] - width / 2,
+            position_mm[1] - height / 2,
+        )
+
+        with history.transaction(_("Add Sketch Instance")) as t:
+            command = ListItemCommand(
+                owner_obj=target_layer,
+                item=new_workpiece,
+                undo_command="remove_child",
+                redo_command="add_child",
+                name=_("Add Sketch Instance"),
+            )
+            t.execute(command)
+
+        return new_workpiece

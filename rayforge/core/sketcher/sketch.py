@@ -1,7 +1,11 @@
+import json
+import uuid
+from pathlib import Path
 from typing import Union, List, Optional, Set, Dict, Any, Sequence
+from blinker import Signal
 from ..geo import Geometry
-from .params import ParameterContext
-from .entities import EntityRegistry, Line, Arc, Circle
+from ..varset import VarSet
+from ..asset import IAsset
 from .constraints import (
     Constraint,
     DistanceConstraint,
@@ -15,7 +19,10 @@ from .constraints import (
     PerpendicularConstraint,
     TangentConstraint,
     EqualLengthConstraint,
+    SymmetryConstraint,
 )
+from .entities import EntityRegistry, Line, Arc, Circle
+from .params import ParameterContext
 from .solver import Solver
 
 
@@ -31,58 +38,152 @@ _CONSTRAINT_CLASSES = {
     "PerpendicularConstraint": PerpendicularConstraint,
     "TangentConstraint": TangentConstraint,
     "EqualLengthConstraint": EqualLengthConstraint,
+    "SymmetryConstraint": SymmetryConstraint,
 }
 
 
-class Sketch:
+class Sketch(IAsset):
     """
     A parametric sketcher that allows defining geometry via constraints
     and expressions.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, name: str = "New Sketch") -> None:
+        self.uid: str = str(uuid.uuid4())
+        self._name = name
         self.params = ParameterContext()
         self.registry = EntityRegistry()
         self.constraints: List[Constraint] = []
+        self.input_parameters = VarSet(
+            title="Input Parameters",
+            description="Parameters that control this sketch's geometry.",
+        )
+        self.updated = Signal()
 
         # Initialize the Origin Point (Fixed Anchor)
         self.origin_id = self.registry.add_point(0.0, 0.0, fixed=True)
 
-    def to_dict(self) -> Dict[str, Any]:
+    @property
+    def name(self) -> str:
+        """The user-facing name of the asset."""
+        return self._name
+
+    @name.setter
+    def name(self, value: str):
+        """Sets the asset name and sends an update signal if changed."""
+        if self._name != value:
+            self._name = value
+            self.updated.send(self)
+
+    @property
+    def asset_type_name(self) -> str:
+        """The machine-readable type name for the asset list."""
+        return "sketch"
+
+    @property
+    def display_icon_name(self) -> str:
+        """The icon name for the asset list."""
+        return "sketch-edit-symbolic"
+
+    @property
+    def is_reorderable(self) -> bool:
+        """Whether this asset type supports reordering in the asset list."""
+        return False
+
+    @property
+    def is_draggable_to_canvas(self) -> bool:
+        """Whether this asset can be dragged from the list onto the canvas."""
+        return True
+
+    @property
+    def is_empty(self) -> bool:
+        """Returns True if the sketch has no drawable entities."""
+        # We check entities rather than points, because an empty sketch
+        # always contains at least one point (the origin).
+        return len(self.registry.entities) == 0
+
+    @property
+    def is_fully_constrained(self) -> bool:
+        """
+        Returns True if every point and every entity in the sketch
+        is fully constrained.
+
+        Exception: Points that serve solely as internal handles for fully
+        constrained entities (e.g., Circle radius point) are ignored if they
+        are not constrained, provided they are not used by any other entity.
+        """
+        # An empty sketch (just origin) is considered fully constrained
+        if not self.registry.points:
+            return True
+
+        # 1. All entities must be constrained
+        if not all(e.constrained for e in self.registry.entities):
+            return False
+
+        # 2. Calculate point usage counts to ensure exclusive ownership
+        usage_count: Dict[int, int] = {}
+        for e in self.registry.entities:
+            for pid in e.get_point_ids():
+                usage_count[pid] = usage_count.get(pid, 0) + 1
+
+        # 3. Collect allowed exemptions polymorphically
+        allowed_unconstrained_ids = set()
+        for e in self.registry.entities:
+            candidates = e.get_ignorable_unconstrained_points()
+            for pid in candidates:
+                # Only allow exemption if the point is used exclusively by this
+                # entity (usage count == 1)
+                if usage_count.get(pid, 0) == 1:
+                    allowed_unconstrained_ids.add(pid)
+
+        # 4. Check all points
+        for p in self.registry.points:
+            if not p.constrained:
+                # If point is unconstrained, it must be in the exempt list
+                if p.id not in allowed_unconstrained_ids:
+                    return False
+
+        return True
+
+    def to_dict(self, include_input_values: bool = True) -> Dict[str, Any]:
         """Serializes the Sketch to a dictionary."""
         return {
+            "uid": self.uid,
+            "type": self.asset_type_name,
+            "name": self.name,
+            "input_parameters": self.input_parameters.to_dict(
+                include_value=include_input_values
+            ),
             "params": self.params.to_dict(),
             "registry": self.registry.to_dict(),
             "constraints": [c.to_dict() for c in self.constraints],
+            "origin_id": self.origin_id,
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Sketch":
         """Deserializes a dictionary into a Sketch instance."""
-        # Check for required keys to prevent creating an empty sketch from
-        # invalid data.
-        if not all(
-            key in data for key in ["params", "registry", "constraints"]
-        ):
+        required_keys = ["params", "registry", "constraints", "origin_id"]
+        if not all(key in data for key in required_keys):
             raise KeyError(
                 "Sketch data is missing one of the required keys: "
-                "'params', 'registry', 'constraints'."
+                f"{required_keys}."
             )
 
-        new_sketch = cls.__new__(
-            cls
-        )  # Create instance without calling __init__
+        new_sketch = cls()
+        new_sketch.uid = data.get("uid", str(uuid.uuid4()))
+        new_sketch.name = data.get("name", "")
+
+        # Handle backward compatibility for input_parameters
+        if "input_parameters" in data:
+            new_sketch.input_parameters = VarSet.from_dict(
+                data["input_parameters"]
+            )
 
         new_sketch.params = ParameterContext.from_dict(data["params"])
         new_sketch.registry = EntityRegistry.from_dict(data["registry"])
+        new_sketch.origin_id = data["origin_id"]
         new_sketch.constraints = []
-
-        # Find the origin_id from the loaded registry points
-        origin_point = next(
-            (p for p in new_sketch.registry.points if p.fixed), None
-        )
-        new_sketch.origin_id = origin_point.id if origin_point else -1
-
         for c_data in data["constraints"]:
             c_type = c_data.get("type")
             c_cls = _CONSTRAINT_CLASSES.get(c_type)
@@ -90,6 +191,13 @@ class Sketch:
                 new_sketch.constraints.append(c_cls.from_dict(c_data))
 
         return new_sketch
+
+    @classmethod
+    def from_file(cls, file_path: Union[str, Path]) -> "Sketch":
+        """Deserializes a sketch from a JSON file (.rfs)."""
+        with open(file_path, "r") as f:
+            data = json.load(f)
+        return cls.from_dict(data)
 
     def set_param(self, name: str, value: Union[str, float]) -> None:
         """Define a parameter like 'width'=100 or 'height'='width/2'."""
@@ -153,12 +261,16 @@ class Sketch:
 
         # 1. Linear/Distance Constraints (Horizontal, Vertical, Distance)
         if constraint_type in ("dist", "horiz", "vert"):
-            # Case A: Two Points
+            # Case A: Two Points (valid for all)
             if n_pts == 2 and n_ents == 0:
                 return True
-            # Case B: One Line
-            if n_pts == 0 and n_lines == 1 and n_ents == 1:
-                return True
+
+            # Case B: Line(s) (check if all entities are lines)
+            if n_pts == 0 and n_lines > 0 and n_ents == n_lines:
+                if constraint_type == "dist":
+                    return n_lines == 1  # Distance is only for a single line
+                else:  # horiz, vert
+                    return n_lines >= 1  # 1 or more lines are valid
             return False
 
         # 2. Radius / Diameter
@@ -171,8 +283,27 @@ class Sketch:
 
         # 3. Perpendicular
         if constraint_type == "perp":
-            # Exactly two Lines
-            return n_lines == 2 and n_ents == 2 and n_pts == 0
+            # Valid combinations:
+            # - 2 Lines
+            # - 1 Line and 1 Arc/Circle
+            # - 2 Arcs/Circles
+            def is_shape(e):
+                return isinstance(e, (Arc, Circle))
+
+            shapes = [e for e in entities if is_shape(e)]
+            n_shapes = len(shapes)
+
+            if n_ents != 2 or n_pts != 0:
+                return False
+
+            if n_lines == 2:
+                return True
+            if n_lines == 1 and n_shapes == 1:
+                return True
+            if n_shapes == 2:
+                return True
+
+            return False
 
         # 4. Tangent
         if constraint_type == "tangent":
@@ -235,6 +366,16 @@ class Sketch:
 
                 if pid not in control_points:
                     return True
+            return False
+
+        # 8. Symmetry
+        if constraint_type == "symmetry":
+            # Case A: Three points (1 center + 2 symmetric)
+            if n_pts == 3 and n_ents == 0:
+                return True
+            # Case B: Two points + 1 Line (Axis)
+            if n_pts == 2 and n_lines == 1 and n_ents == 1:
+                return True
             return False
 
         return False
@@ -327,6 +468,28 @@ class Sketch:
             return
         self.constraints.append(EqualLengthConstraint(entity_ids))
 
+    def constrain_symmetry(
+        self, point_ids: List[int], entity_ids: List[int]
+    ) -> None:
+        """
+        Enforces symmetry.
+        - If 3 points: The first in point_ids is treated as the center.
+        - If 2 points + 1 Line: The line is the axis.
+        """
+        if len(point_ids) == 3 and not entity_ids:
+            # 3 Points: First is Center, other two are symmetric
+            center = point_ids[0]
+            p1 = point_ids[1]
+            p2 = point_ids[2]
+            self.constraints.append(SymmetryConstraint(p1, p2, center=center))
+
+        elif len(point_ids) == 2 and len(entity_ids) == 1:
+            # 2 Points + 1 Line: Line is Axis
+            p1 = point_ids[0]
+            p2 = point_ids[1]
+            axis = entity_ids[0]
+            self.constraints.append(SymmetryConstraint(p1, p2, axis=axis))
+
     # --- Manipulation & Processing ---
 
     def move_point(self, pid: int, x: float, y: float) -> bool:
@@ -357,14 +520,61 @@ class Sketch:
         self,
         extra_constraints: Optional[List[Constraint]] = None,
         update_constraint_status: bool = True,
+        variable_overrides: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Resolves all constraints."""
-        all_constraints = self.constraints
-        if extra_constraints:
-            all_constraints = self.constraints + extra_constraints
+        """
+        Resolves all constraints.
 
-        solver = Solver(self.registry, self.params, all_constraints)
-        return solver.solve(update_dof=update_constraint_status)
+        Args:
+            extra_constraints: A list of temporary constraints to add for this
+                solve, e.g., for dragging.
+            update_constraint_status: If True, re-calculates the degrees of
+                freedom for all points and entities after a successful solve.
+            variable_overrides: A dictionary of parameter values to use for
+                this solve only, without permanently changing the sketch's
+                parameters. e.g., `{'width': 150.0}`.
+
+        Returns:
+            True if the solver converged successfully.
+        """
+        success = False
+        try:
+            # Step 1: Build the evaluation context with correct precedence.
+            # a) Start with legacy parameters.
+            ctx = {}
+            if self.params:
+                ctx.update(self.params.get_all_values())
+
+            # b) Add/overwrite with values from the new VarSet system.
+            if self.input_parameters is not None:
+                ctx.update(self.input_parameters.get_values())
+
+            # c) Add/overwrite with runtime overrides (highest precedence).
+            if variable_overrides:
+                ctx.update(variable_overrides)
+
+            # Step 2: Update constraints with the final context.
+            all_constraints = self.constraints
+            if extra_constraints:
+                all_constraints = self.constraints + extra_constraints
+
+            for c in all_constraints:
+                if hasattr(c, "update_from_context"):
+                    c.update_from_context(ctx)
+
+            # Step 3: Run the solver.
+            solver = Solver(self.registry, self.params, all_constraints)
+            success = solver.solve(update_dof=update_constraint_status)
+
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).error(
+                f"Sketch solve failed: {e}", exc_info=True
+            )
+            success = False
+
+        return success
 
     def to_geometry(self) -> Geometry:
         """

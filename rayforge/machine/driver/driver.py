@@ -18,10 +18,11 @@ from ...context import RayforgeContext
 
 if TYPE_CHECKING:
     from ...core.doc import Doc
-    from ...shared.varset import VarSet
+    from ...core.varset import VarSet
+    from ...pipeline.encoder.base import OpsEncoder
+    from ...pipeline.encoder.gcode import MachineCodeOpMap
     from ..models.machine import Machine
     from ..models.laser import Laser
-    from ...pipeline.encoder.gcode import GcodeOpMap
 
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,14 @@ class Driver(ABC):
         """
         Returns a VarSet defining the parameters needed for setup().
         This is used to dynamically generate the user interface.
+        """
+        pass
+
+    @abstractmethod
+    def get_encoder(self) -> "OpsEncoder":
+        """
+        Returns an OpsEncoder instance suitable for this driver and its
+        configured machine.
         """
         pass
 
@@ -352,14 +361,15 @@ class Driver(ABC):
         on_command_done: Optional[
             Callable[[int], Union[None, Awaitable[None]]]
         ] = None,
-    ) -> "GcodeOpMap":
+    ) -> "MachineCodeOpMap":
         """
-        Creates a GcodeOpMap for tracking command execution.
+        Creates a MachineCodeOpMap for tracking command execution.
 
         This method should be called by driver implementations to get a
-        GcodeOpMap that can be used to track which Ops commands correspond
-        to which G-code lines. Drivers can then use this map to call the
-        on_command_done callback at the appropriate times.
+        MachineCodeOpMap that can be used to track which Ops commands
+        correspond to which G-code (or other machine language) lines.
+        Drivers can then use this map to call the on_command_done
+        callback at the appropriate times.
 
         Args:
             ops: The operations to execute
@@ -367,10 +377,8 @@ class Driver(ABC):
             on_command_done: Optional callback for command completion
 
         Returns:
-            A GcodeOpMap for tracking command execution
+            A MachineCodeOpMap for tracking command execution
         """
-        from ...pipeline.encoder.gcode import GcodeEncoder
-
-        encoder = GcodeEncoder.for_machine(self._machine)
+        encoder = self.get_encoder()
         _, op_map = encoder.encode(ops, self._machine, doc)
         return op_map

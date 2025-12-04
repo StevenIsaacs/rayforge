@@ -1,48 +1,54 @@
-import logging
-from pathlib import Path
-from typing import List, Optional, cast, Coroutine, Callable
-from gi.repository import Gtk, Gio, GLib, Gdk, Adw
 import asyncio
+import logging
 from concurrent.futures import Future
+from pathlib import Path
+from typing import Callable, Coroutine, List, Optional, cast
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 from . import __version__
-from .shared.tasker import task_mgr
+from .actions import ActionManager
 from .context import get_context
-from .machine.driver.driver import DeviceStatus, DeviceState
-from .machine.driver.dummy import NoDeviceDriver
-from .machine.models.machine import Machine
-from .machine.ui.jog_dialog import JogDialog
 from .core.group import Group
 from .core.item import DocItem
-from .core.workpiece import WorkPiece
-from .pipeline.steps import STEP_FACTORIES, create_contour_step
-from .pipeline.encoder.gcode import GcodeOpMap
-from .undo import HistoryManager, Command
-from .doceditor.editor import DocEditor
-from .doceditor.ui.workflow_view import WorkflowView
-from .workbench.surface import WorkSurface
-from .workbench.elements.stock import StockElement
-from .doceditor.ui.layer_list import LayerListView
-from .doceditor.ui.stock_list import StockListView
-from .machine.cmd import MachineCmd
-from .machine.transport import TransportStatus
-from .shared.ui.task_bar import TaskBar
-from .machine.ui.log_dialog import MachineLogDialog
-from .shared.ui.preferences_dialog import PreferencesWindow
-from .machine.ui.settings_dialog import MachineSettingsDialog
-from .doceditor.ui.item_properties import DocItemPropertiesWidget
-from .workbench.canvas import CanvasElement
-from .shared.ui.about import AboutDialog
-from .toolbar import MainToolbar
-from .actions import ActionManager
-from .main_menu import MainMenu
-from .workbench.view_mode_cmd import ViewModeCmd
-from .workbench.simulator_cmd import SimulatorCmd
-from .workbench.drag_drop_cmd import DragDropCmd
-from .workbench.canvas3d import Canvas3D, initialized as canvas3d_initialized
-from .doceditor.ui import file_dialogs, import_handler
-from .shared.gcodeedit.viewer import GcodeViewer
+from .core.sketcher import Sketch
 from .core.step import Step
-from .pipeline.artifact import JobArtifactHandle, JobArtifact
+from .core.stock import StockItem
+from .core.workpiece import WorkPiece
+from .doceditor.editor import DocEditor
+from .doceditor.ui import file_dialogs, import_handler
+from .doceditor.ui.asset_list_view import AssetListView
+from .doceditor.ui.item_properties import DocItemPropertiesWidget
+from .doceditor.ui.layer_list import LayerListView
+from .doceditor.ui.workflow_view import WorkflowView
+from .image.sketch.exporter import SketchExporter
+from .machine.cmd import MachineCmd
+from .machine.driver.driver import DeviceState, DeviceStatus
+from .machine.driver.dummy import NoDeviceDriver
+from .machine.models.machine import Machine
+from .machine.transport import TransportStatus
+from .machine.ui.jog_dialog import JogDialog
+from .machine.ui.log_dialog import MachineLogDialog
+from .machine.ui.settings_dialog import MachineSettingsDialog
+from .main_menu import MainMenu
+from .pipeline.artifact import JobArtifact, JobArtifactHandle
+from .pipeline.encoder.gcode import MachineCodeOpMap
+from .pipeline.steps import STEP_FACTORIES, create_contour_step
+from .shared.gcodeedit.viewer import GcodeViewer
+from .shared.tasker import task_mgr
+from .shared.ui.about import AboutDialog
+from .shared.ui.preferences_dialog import PreferencesWindow
+from .shared.ui.task_bar import TaskBar
+from .toolbar import MainToolbar
+from .undo import Command, HistoryManager, ListItemCommand
+from .doceditor.ui.stock_properties_dialog import StockPropertiesDialog
+from .workbench.canvas import CanvasElement
+from .workbench.canvas3d import Canvas3D, initialized as canvas3d_initialized
+from .workbench.drag_drop_cmd import DragDropCmd
+from .workbench.elements.stock import StockElement
+from .workbench.simulator_cmd import SimulatorCmd
+from .workbench.sketcher.cmd import UpdateSketchCommand
+from .workbench.sketcher.studio import SketchStudio
+from .workbench.surface import WorkSurface
+from .workbench.view_mode_cmd import ViewModeCmd
 
 
 logger = logging.getLogger(__name__)
@@ -137,7 +143,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._active_toasts: List[Adw.Toast] = []
 
         # The main content box is now the child of the ToastOverlay
-        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.toast_overlay.set_child(vbox)
 
         # Create the central document editor. This now owns the Doc and
@@ -171,14 +177,15 @@ class MainWindow(Adw.ApplicationWindow):
             self.set_default_size(1100, 800)
 
         # HeaderBar with left-aligned menu and centered title
+        # MOVED: Now direct child of vbox to persist across views
         header_bar = Adw.HeaderBar()
         vbox.append(header_bar)
 
         # Create the menu model and the popover menubar
         self.menu_model = MainMenu()
-        menubar = Gtk.PopoverMenuBar.new_from_model(self.menu_model)
-        menubar.add_css_class("in-header-menubar")
-        header_bar.pack_start(menubar)
+        self.menubar = Gtk.PopoverMenuBar.new_from_model(self.menu_model)
+        self.menubar.add_css_class("in-header-menubar")
+        header_bar.pack_start(self.menubar)
 
         # Create and set the centered title widget
         window_title = Adw.WindowTitle(
@@ -186,15 +193,27 @@ class MainWindow(Adw.ApplicationWindow):
         )
         header_bar.set_title_widget(window_title)
 
+        # Create a stack for switching between main view and sketch studio
+        self.main_stack = Gtk.Stack()
+        self.main_stack.set_vexpand(True)
+        self.main_stack.set_transition_type(
+            Gtk.StackTransitionType.SLIDE_UP_DOWN
+        )
+        vbox.append(self.main_stack)
+
+        # Create a container for the main UI
+        main_ui_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.main_stack.add_named(main_ui_box, "main")
+
         # Create and add the main toolbar.
         self.toolbar = MainToolbar()
         self._connect_toolbar_signals()
-        vbox.append(self.toolbar)
+        main_ui_box.append(self.toolbar)
 
         # Create the Paned splitting the window into left and right sections.
         self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.paned.set_vexpand(True)
-        vbox.append(self.paned)
+        main_ui_box.append(self.paned)
 
         # Apply styles
         self.paned.add_css_class("mainpaned")
@@ -206,7 +225,7 @@ class MainWindow(Adw.ApplicationWindow):
                 display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
 
-        # Determine initial machine dimensions for the 3D canvas and surface
+        # Determine initial machine dimensions for all canvases.
         config = get_context().config
         if config.machine:
             width_mm, height_mm = config.machine.dimensions
@@ -216,8 +235,19 @@ class MainWindow(Adw.ApplicationWindow):
             width_mm, height_mm = 100.0, 100.0
             y_down = False
 
+        # Create the Sketch Studio, passing the machine dimensions.
+        self.sketch_studio = SketchStudio(
+            self, width_mm=width_mm, height_mm=height_mm
+        )
+        self.main_stack.add_named(self.sketch_studio, "sketch")
+        self.active_sketch_workpiece: Optional[WorkPiece] = None
+        self._is_editing_new_sketch = False
+        self.sketch_studio.finished.connect(self._on_sketch_finished)
+        self.sketch_studio.cancelled.connect(self._on_sketch_cancelled)
+
         self.surface = WorkSurface(
             editor=self.doc_editor,
+            parent_window=self,
             machine=config.machine,
             cam_visible=True,  # Will be set by action state
         )
@@ -226,7 +256,7 @@ class MainWindow(Adw.ApplicationWindow):
         # Initialize drag-and-drop command for the surface
         self.drag_drop_cmd = DragDropCmd(self, self.surface)
         self.surface.drag_drop_cmd = self.drag_drop_cmd
-        self.drag_drop_cmd.setup_file_drop_target()
+        self.drag_drop_cmd.setup_drop_targets()
 
         # Setup keyboard actions using the new ActionManager.
         self.action_manager = ActionManager(self)
@@ -247,8 +277,6 @@ class MainWindow(Adw.ApplicationWindow):
         doc.updated.connect(self.on_doc_changed)
         doc.descendant_added.connect(self.on_doc_changed)
         doc.descendant_removed.connect(self.on_doc_changed)
-        doc.descendant_updated.connect(self.on_doc_changed)
-        doc.descendant_transform_changed.connect(self.on_doc_changed)
         doc.active_layer_changed.connect(self._on_active_layer_changed)
         doc.history_manager.changed.connect(self.on_history_changed)
 
@@ -348,10 +376,15 @@ class MainWindow(Adw.ApplicationWindow):
         right_pane_box.set_size_request(400, -1)
         right_pane_scrolled_window.set_child(right_pane_box)
 
-        # Add the Stock list view
-        self.stock_list_view = StockListView(self.doc_editor)
-        self.stock_list_view.set_margin_end(12)
-        right_pane_box.append(self.stock_list_view)
+        # Add the unified Asset list view
+        self.asset_list_view = AssetListView(self.doc_editor)
+        self.asset_list_view.set_margin_end(12)
+        right_pane_box.append(self.asset_list_view)
+        self.asset_list_view.add_sketch_clicked.connect(self.on_new_sketch)
+        self.asset_list_view.add_stock_clicked.connect(self.on_add_child)
+        self.asset_list_view.sketch_activated.connect(
+            self._on_sketch_definition_activated
+        )
 
         # Add the Layer list view
         self.layer_list_view = LayerListView(self.doc_editor)
@@ -400,10 +433,18 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self.surface.transform_end.connect(self._on_surface_transform_end)
 
+        # Connect new signal from WorkSurface for edit sketch requests
+        self.surface.edit_sketch_requested.connect(
+            self._on_edit_sketch_requested
+        )
+        self.surface.edit_stock_item_requested.connect(
+            self._on_edit_stock_item_requested
+        )
+
         # Create and add the status monitor widget.
         self.status_monitor = TaskBar(task_mgr)
         self.status_monitor.log_requested.connect(self.on_status_bar_clicked)
-        vbox.append(self.status_monitor)
+        main_ui_box.append(self.status_monitor)
 
         # Set up config signals.
         config.changed.connect(self.on_config_changed)
@@ -414,6 +455,196 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Set initial state
         self.on_config_changed(None)
+
+    def on_add_child(self, sender):
+        """Handler for adding a new stock item, called from AssetListView."""
+        self.doc_editor.stock.add_stock()
+
+    def enter_sketch_mode(
+        self, workpiece: WorkPiece, is_new_sketch: bool = False
+    ):
+        """Switches the view to the SketchStudio to edit a workpiece."""
+        sketch = None
+        if workpiece.sketch_uid:
+            sketch = cast(
+                Optional["Sketch"],
+                self.doc_editor.doc.get_asset_by_uid(workpiece.sketch_uid),
+            )
+
+        if not sketch:
+            logger.warning("Attempted to edit a non-sketch workpiece.")
+            return
+
+        try:
+            self.active_sketch_workpiece = workpiece
+            self._is_editing_new_sketch = is_new_sketch
+            self.sketch_studio.set_sketch(sketch)
+            self.main_stack.set_visible_child_name("sketch")
+
+            # Swap menu and actions
+            self.menubar.set_menu_model(self.sketch_studio.menu_model)
+            self.insert_action_group("sketch", self.sketch_studio.action_group)
+            self.add_controller(self.sketch_studio.shortcut_controller)
+        except Exception as e:
+            logger.error(
+                f"Failed to load sketch for editing: {e}", exc_info=True
+            )
+
+    def exit_sketch_mode(self):
+        """Returns to the main 2D/3D view from the SketchStudio."""
+        # Restore menu and actions
+        self.menubar.set_menu_model(self.menu_model)
+        self.insert_action_group("sketch", None)
+        self.remove_controller(self.sketch_studio.shortcut_controller)
+
+        self.main_stack.set_visible_child_name("main")
+        self.active_sketch_workpiece = None
+        self._is_editing_new_sketch = False
+
+    def enter_sketch_definition_mode(self, sketch: Sketch):
+        """Switches to SketchStudio to edit a sketch definition directly."""
+        try:
+            self.active_sketch_workpiece = None
+            self._is_editing_new_sketch = False
+            self.sketch_studio.set_sketch(sketch)
+            self.main_stack.set_visible_child_name("sketch")
+
+            # Swap menu and actions
+            self.menubar.set_menu_model(self.sketch_studio.menu_model)
+            self.insert_action_group("sketch", self.sketch_studio.action_group)
+            self.add_controller(self.sketch_studio.shortcut_controller)
+        except Exception as e:
+            logger.error(
+                f"Failed to load sketch definition for editing: {e}",
+                exc_info=True,
+            )
+
+    def _on_sketch_definition_activated(self, sender, *, sketch: Sketch):
+        """Handles activation of a sketch definition from the sketch list."""
+        self.enter_sketch_definition_mode(sketch)
+
+    def _on_sketch_finished(self, sender, *, sketch: Sketch):
+        """Handles the 'finished' signal from the SketchStudio."""
+        cmd = UpdateSketchCommand(
+            doc=self.doc_editor.doc,
+            sketch_uid=sketch.uid,
+            new_sketch_dict=sketch.to_dict(),
+        )
+        self.doc_editor.history_manager.execute(cmd)
+        self.exit_sketch_mode()
+
+    def _on_sketch_cancelled(self, sender):
+        """Handles the 'cancelled' signal from the SketchStudio."""
+        was_new = self._is_editing_new_sketch
+        self.exit_sketch_mode()
+
+        if was_new:
+            # If we just created this sketch, remove it from the doc by
+            # undoing the creation command.
+            self.doc_editor.history_manager.undo()
+
+    def on_new_sketch(self, action=None, param=None):
+        """Action handler for creating a new sketch definition."""
+        # 1. Create a new, empty sketch object
+        new_sketch = Sketch(name=_("New Sketch"))
+
+        # 2. Create and execute an undoable command to add it to the document
+        command = ListItemCommand(
+            owner_obj=self.doc_editor.doc,
+            item=new_sketch,
+            undo_command="remove_asset",
+            redo_command="add_asset",
+            name=_("Create Sketch Definition"),
+        )
+        self.doc_editor.history_manager.execute(command)
+
+        # 3. Immediately enter edit mode for the new definition
+        self.enter_sketch_definition_mode(new_sketch)
+        self._is_editing_new_sketch = True
+
+    def on_edit_sketch(self, action, param):
+        """Action handler for editing the selected sketch."""
+        selected_items = self.surface.get_selected_workpieces()
+        if len(selected_items) == 1 and isinstance(
+            selected_items[0], WorkPiece
+        ):
+            wp = selected_items[0]
+            if wp.sketch_uid:
+                self.enter_sketch_mode(wp)
+            else:
+                self._on_editor_notification(
+                    self, _("Selected item is not an editable sketch.")
+                )
+        else:
+            self._on_editor_notification(
+                self, _("Please select a single sketch to edit.")
+            )
+
+    def _on_edit_sketch_requested(self, sender, *, workpiece: WorkPiece):
+        """Signal handler for edit sketch requests from the surface."""
+        logger.debug(f"Sketch edit requested for workpiece {workpiece.name}")
+        self.enter_sketch_mode(workpiece)
+
+    def _on_edit_stock_item_requested(self, sender, *, stock_item: StockItem):
+        """Signal handler for edit stock item requests from the surface."""
+        logger.debug(
+            f"Stock properties requested for stock item {stock_item.name}"
+        )
+        dialog = StockPropertiesDialog(self, stock_item, self.doc_editor)
+        dialog.present()
+
+    def on_export_sketch(self, action, param):
+        """Action handler for exporting the selected sketch."""
+        selected_items = self.surface.get_selected_workpieces()
+        if len(selected_items) == 1:
+            # The ActionManager already validates that this is a sketch-based
+            # workpiece
+            file_dialogs.show_export_sketch_dialog(
+                self, self._on_export_sketch_save_response
+            )
+        else:
+            self._on_editor_notification(
+                self, _("Please select a single sketch to export.")
+            )
+
+    def _on_export_sketch_save_response(self, dialog, result, user_data):
+        """Callback for the export sketch dialog."""
+        try:
+            file = dialog.save_finish(result)
+            if not file:
+                return
+            file_path = Path(file.get_path())
+
+            # Re-verify selection to be safe
+            selected = self.surface.get_selected_workpieces()
+            if len(selected) != 1:
+                return
+
+            wp = selected[0]
+            exporter = SketchExporter(wp)
+            data = exporter.export()
+
+            try:
+                file_path.write_bytes(data)
+                self._on_editor_notification(
+                    self, _("Sketch exported successfully.")
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to write sketch file: {e}", exc_info=True
+                )
+                self._on_editor_notification(
+                    self, _("Failed to save sketch file.")
+                )
+
+        except GLib.Error as e:
+            logger.error(f"Error saving file: {e.message}")
+            return
+        except ValueError as e:
+            logger.error(f"Error exporting sketch: {e}")
+            self._on_editor_notification(
+                self, _("Error exporting sketch: {error}").format(error=str(e))
+            )
 
     def _update_macros_menu(self, *args):
         """Rebuilds the dynamic 'Macros' menu."""
@@ -556,7 +787,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.canvas3d.update_scene_from_doc()
 
     def _update_gcode_preview(
-        self, gcode_string: Optional[str], op_map: Optional[GcodeOpMap]
+        self, gcode_string: Optional[str], op_map: Optional[MachineCodeOpMap]
     ):
         """Updates the G-code preview panel from a pre-generated string."""
         if gcode_string is None:
@@ -867,7 +1098,7 @@ class MainWindow(Adw.ApplicationWindow):
 
             if is_gcode_visible and final_artifact:
                 self._update_gcode_preview(
-                    final_artifact.gcode, final_artifact.op_map
+                    final_artifact.machine_code, final_artifact.op_map
                 )
             else:
                 self._update_gcode_preview(None, None)
@@ -964,6 +1195,15 @@ class MainWindow(Adw.ApplicationWindow):
             self._current_machine.job_finished.connect(self._on_job_finished)
             self._current_machine.changed.connect(self._update_macros_menu)
 
+        # Define new machine dimensions
+        new_machine = config.machine
+        if new_machine:
+            width_mm, height_mm = new_machine.dimensions
+            y_down = getattr(new_machine, "y_axis_down", False)
+        else:
+            width_mm, height_mm = 100.0, 100.0
+            y_down = False
+
         # Update the 3D canvas to match the new machine.
         if canvas3d_initialized and hasattr(self, "view_stack"):
             # Always switch back to 2D view on machine change for simplicity.
@@ -976,15 +1216,6 @@ class MainWindow(Adw.ApplicationWindow):
 
             # Replace the 3D canvas with one configured for the new machine.
             self.view_stack.remove(self.canvas3d)
-
-            new_machine = config.machine
-            if new_machine:
-                width_mm, height_mm = new_machine.dimensions
-                y_down = getattr(new_machine, "y_axis_down", False)
-            else:
-                width_mm, height_mm = 100.0, 100.0
-                y_down = False
-
             self.canvas3d = Canvas3D(
                 get_context(),
                 self.doc_editor.doc,
@@ -998,8 +1229,10 @@ class MainWindow(Adw.ApplicationWindow):
         # Update the status monitor to observe the new machine
         self.status_monitor.set_machine(config.machine)
 
-        # Update the surface to use the new machine
+        # Update the main WorkSurface AND the SketchStudio to use the new size
         self.surface.set_machine(config.machine)
+        self.sketch_studio.set_world_size(width_mm, height_mm)
+
         self.surface.update_from_doc()
         self._update_macros_menu()
         self._update_actions_and_ui()
@@ -1048,14 +1281,18 @@ class MainWindow(Adw.ApplicationWindow):
             state = active_machine.device_state
             active_driver = active_machine.driver
 
-            can_export = doc.has_workpiece() and not task_mgr.has_tasks()
+            can_export = doc.has_result() and not task_mgr.has_tasks()
             am.get_action("export").set_enabled(can_export)
             export_tooltip = _("Generate G-code")
-            if not doc.has_workpiece():
-                export_tooltip = _("Add a workpiece to enable export")
-            elif task_mgr.has_tasks():
+            if task_mgr.has_tasks():
                 export_tooltip = _(
                     "Cannot export while other tasks are running"
+                )
+            elif not doc.has_workpiece():
+                export_tooltip = _("Add a workpiece to enable export")
+            elif not doc.has_result():
+                export_tooltip = _(
+                    "Add or enable a processing step to enable export"
                 )
             self.toolbar.export_button.set_tooltip_text(export_tooltip)
 

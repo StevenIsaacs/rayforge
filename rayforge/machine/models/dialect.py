@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field, asdict, replace
 from typing import List, Dict, Optional, Any
-from ...shared.varset import VarSet, Var, TextAreaVar
+from ...core.varset import VarSet, Var, TextAreaVar
 
 
 _DIALECT_REGISTRY: Dict[str, "GcodeDialect"] = {}
@@ -114,14 +114,17 @@ class GcodeDialect:
         scripts_vs = VarSet(title=_("Scripts"))
         scripts_vs.add(
             TextAreaVar(
-                "preamble", _("Preamble"), str, value="\n".join(self.preamble)
+                "preamble",
+                _("Preamble"),
+                description=_("Preamble script"),
+                value="\n".join(self.preamble),
             )
         )
         scripts_vs.add(
             TextAreaVar(
                 "postscript",
                 _("Postscript"),
-                str,
+                description=_("Postscript script"),
                 value="\n".join(self.postscript),
             )
         )

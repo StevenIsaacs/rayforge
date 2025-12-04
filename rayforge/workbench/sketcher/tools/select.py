@@ -1,5 +1,7 @@
+import logging
 import math
-from typing import Optional, Tuple, Dict, cast
+import cairo
+from typing import Optional, Tuple, Dict, cast, TYPE_CHECKING
 from rayforge.core.sketcher.entities import Entity, Line, Arc, Circle
 from rayforge.core.matrix import Matrix
 from rayforge.core.sketcher.constraints import (
@@ -10,7 +12,13 @@ from rayforge.core.sketcher.constraints import (
     CoincidentConstraint,
     PointOnLineConstraint,
 )
+from ..sketch_cmd import AddItemsCommand, MovePointCommand
 from .base import SketchTool
+
+if TYPE_CHECKING:
+    from ..selection import SketchSelection
+
+logger = logging.getLogger(__name__)
 
 
 class SelectTool(SketchTool):
@@ -19,6 +27,14 @@ class SelectTool(SketchTool):
     def __init__(self, element):
         super().__init__(element)
         self.hovered_point_id: Optional[int] = None
+        self.hovered_constraint_idx: Optional[int] = None
+        self.hovered_junction_pid: Optional[int] = None
+
+        # --- Box Selection State ---
+        self.is_box_selecting: bool = False
+        self.drag_start_world_pos: Optional[Tuple[float, float]] = None
+        self.drag_current_world_pos: Optional[Tuple[float, float]] = None
+        self.drag_initial_selection: Optional["SketchSelection"] = None
 
         # --- Drag State ---
         # For dragging a single point
@@ -39,9 +55,14 @@ class SelectTool(SketchTool):
         hit_type, hit_obj = self.element.hittester.get_hit_data(
             world_x, world_y, self.element
         )
+        logger.debug(
+            f"SelectTool.on_press: n_press={n_press}, hit_type='{hit_type}'"
+        )
 
-        # Double click on entity to add/edit constraints
+        # Double click on entity to add/edit constraints. This is a terminal
+        # action, so returning True is correct.
         if n_press == 2 and hit_type == "entity":
+            logger.debug("Double-click on entity detected.")
             entity = cast(Entity, hit_obj)
             if isinstance(entity, Arc):
                 # Find an existing RadiusConstraint for this arc
@@ -57,6 +78,10 @@ class SelectTool(SketchTool):
 
                 # If a constraint exists, edit it.
                 if found_constr:
+                    logger.debug(
+                        f"Found existing constraint, emitting signal: "
+                        f"{found_constr}"
+                    )
                     self.element.constraint_edit_requested.send(
                         self.element, constraint=found_constr
                     )
@@ -70,11 +95,18 @@ class SelectTool(SketchTool):
                     )
                     if s and c:
                         radius = math.hypot(s.x - c.x, s.y - c.y)
-                        new_constr = self.element.sketch.constrain_radius(
-                            entity.id, radius
+                        new_constr = RadiusConstraint(entity.id, radius)
+                        cmd = AddItemsCommand(
+                            self.element,
+                            _("Add Radius"),
+                            constraints=[new_constr],
                         )
-                        self.element.sketch.solve()
-                        self.element.mark_dirty()
+                        if self.element.editor:
+                            self.element.editor.history_manager.execute(cmd)
+                        logger.debug(
+                            f"Created new constraint, emitting signal: "
+                            f"{new_constr}"
+                        )
                         self.element.constraint_edit_requested.send(
                             self.element, constraint=new_constr
                         )
@@ -92,6 +124,10 @@ class SelectTool(SketchTool):
                             break
 
                 if found_constr:
+                    logger.debug(
+                        f"Found existing constraint, emitting signal: "
+                        f"{found_constr}"
+                    )
                     self.element.constraint_edit_requested.send(
                         self.element, constraint=found_constr
                     )
@@ -100,11 +136,18 @@ class SelectTool(SketchTool):
                     p2 = self.element.sketch.registry.get_point(p2_id)
                     if p1 and p2:
                         dist = math.hypot(p1.x - p2.x, p1.y - p2.y)
-                        new_constr = self.element.sketch.constrain_distance(
-                            p1_id, p2_id, dist
+                        new_constr = DistanceConstraint(p1_id, p2_id, dist)
+                        cmd = AddItemsCommand(
+                            self.element,
+                            _("Add Distance"),
+                            constraints=[new_constr],
                         )
-                        self.element.sketch.solve()
-                        self.element.mark_dirty()
+                        if self.element.editor:
+                            self.element.editor.history_manager.execute(cmd)
+                        logger.debug(
+                            f"Created new constraint, emitting signal: "
+                            f"{new_constr}"
+                        )
                         self.element.constraint_edit_requested.send(
                             self.element, constraint=new_constr
                         )
@@ -122,6 +165,10 @@ class SelectTool(SketchTool):
                         break
 
                 if found_constr:
+                    logger.debug(
+                        f"Found existing constraint, emitting signal: "
+                        f"{found_constr}"
+                    )
                     self.element.constraint_edit_requested.send(
                         self.element, constraint=found_constr
                     )
@@ -130,11 +177,18 @@ class SelectTool(SketchTool):
                     r_pt = self._safe_get_point(entity.radius_pt_idx)
                     if c and r_pt:
                         radius = math.hypot(r_pt.x - c.x, r_pt.y - c.y)
-                        new_constr = self.element.sketch.constrain_diameter(
-                            entity.id, radius * 2
+                        new_constr = DiameterConstraint(entity.id, radius * 2)
+                        cmd = AddItemsCommand(
+                            self.element,
+                            _("Add Diameter"),
+                            constraints=[new_constr],
                         )
-                        self.element.sketch.solve()
-                        self.element.mark_dirty()
+                        if self.element.editor:
+                            self.element.editor.history_manager.execute(cmd)
+                        logger.debug(
+                            f"Created new constraint, emitting signal: "
+                            f"{new_constr}"
+                        )
                         self.element.constraint_edit_requested.send(
                             self.element, constraint=new_constr
                         )
@@ -142,6 +196,7 @@ class SelectTool(SketchTool):
 
         # Double click edits constraint value
         if n_press == 2 and hit_type == "constraint":
+            logger.debug("Double-click on constraint detected.")
             idx = cast(int, hit_obj)
             constraints = self.element.sketch.constraints
             if constraints and idx < len(constraints):
@@ -150,10 +205,18 @@ class SelectTool(SketchTool):
                     constr,
                     (DistanceConstraint, RadiusConstraint, DiameterConstraint),
                 ):
+                    logger.debug(
+                        f"Emitting signal for constraint edit: {constr}"
+                    )
                     self.element.constraint_edit_requested.send(
                         self.element, constraint=constr
                     )
                     return True
+
+        # --- SINGLE CLICK LOGIC ---
+        # For single-clicks (n_press == 1), we must return False to allow the
+        # GTK gesture to continue listening for a potential second click.
+        # Returning True here would terminate the gesture recognition.
 
         is_multi = False
         if self.element.canvas:
@@ -180,24 +243,21 @@ class SelectTool(SketchTool):
                     self._prepare_point_drag(pid_to_drag)
 
             self.element.mark_dirty()
-            return True
+            return False
 
         if hit_type == "junction":
             pid = cast(int, hit_obj)
             self.element.selection.select_junction(pid, is_multi)
             self._prepare_point_drag(pid)
             self.element.mark_dirty()
-            return True
-
-        if not is_multi:
-            self.element.selection.clear()
+            return False
 
         if hit_type == "point":
             pid = cast(int, hit_obj)
             self.element.selection.select_point(pid, is_multi)
             self._prepare_point_drag(pid)
             self.element.mark_dirty()
-            return True
+            return False
 
         elif hit_type == "entity":
             entity = cast(Entity, hit_obj)
@@ -207,12 +267,22 @@ class SelectTool(SketchTool):
             )
             self._prepare_entity_drag(entity, mx, my)
             self.element.mark_dirty()
-            return True
+            return False
 
         else:
-            # Click on empty space
+            # Click on empty space: Prepare for Box Selection
+            if not is_multi:
+                self.element.selection.clear()
+                self.drag_initial_selection = None
+            else:
+                # Store the selection state BEFORE the drag
+                self.drag_initial_selection = self.element.selection.copy()
+
+            self.is_box_selecting = True
+            self.drag_start_world_pos = (world_x, world_y)
+            self.drag_current_world_pos = (world_x, world_y)
             self.element.mark_dirty()
-            return True
+            return False
 
     def on_drag(self, world_dx: float, world_dy: float):
         # Route to the correct drag handler based on what was pressed
@@ -220,10 +290,53 @@ class SelectTool(SketchTool):
             self._handle_point_drag(world_dx, world_dy)
         elif self.dragged_entity is not None:
             self._handle_entity_drag(world_dx, world_dy)
+        elif self.is_box_selecting and self.drag_start_world_pos:
+            # Update current drag position and perform live selection
+            start_x, start_y = self.drag_start_world_pos
+            self.drag_current_world_pos = (
+                start_x + world_dx,
+                start_y + world_dy,
+            )
+            self._update_live_box_selection()
+            self.element.mark_dirty()
 
     def on_release(self, world_x: float, world_y: float):
+        # Handle the end of a Box Selection
+        if self.is_box_selecting:
+            # Selection is already live. Just clean up the drag state.
+            self.is_box_selecting = False
+            self.drag_start_world_pos = None
+            self.drag_current_world_pos = None
+            self.drag_initial_selection = None
+            self.element.mark_dirty()
+            return
+
+        # If a point was dragged, create an undoable command
+        if self.dragged_point_id is not None and self.drag_point_start_pos:
+            p = self._safe_get_point(self.dragged_point_id)
+            if p:
+                start_x, start_y = self.drag_point_start_pos
+                end_x, end_y = p.x, p.y
+
+                # Only create a command if the point actually moved
+                if abs(start_x - end_x) > 1e-6 or abs(start_y - end_y) > 1e-6:
+                    # Pass the full snapshot of initial positions to the
+                    # command. This ensures that when undo is pressed, ALL
+                    # points return to their pre-drag state, not just the
+                    # single dragged point.
+                    cmd = MovePointCommand(
+                        self.element,
+                        self.dragged_point_id,
+                        (start_x, start_y),
+                        (end_x, end_y),
+                        snapshot=self.drag_initial_positions,
+                    )
+                    if self.element.editor:
+                        self.element.editor.history_manager.execute(cmd)
+
         # Clear all drag-related state
         self.dragged_point_id = None
+        self.drag_point_start_pos = None
         self.dragged_entity = None
         self.drag_start_model_pos = None
         self.drag_initial_positions.clear()
@@ -232,21 +345,137 @@ class SelectTool(SketchTool):
         self.drag_start_ct_inv = None
 
         # Final solve, now allowing constraint status to be updated.
+        # Note: The command execution will have already triggered a solve.
+        # This solve is for the final state after releasing the mouse.
         self.element.sketch.solve()
         # Perform a final, guaranteed update to settle the bounds.
         self.element.update_bounds_from_sketch()
         self.element.mark_dirty()
 
     def on_hover_motion(self, world_x: float, world_y: float):
+        if self.is_box_selecting:
+            return
+
         hit_type, hit_obj = self.element.hittester.get_hit_data(
             world_x, world_y, self.element
         )
-        new_hover_pid = hit_obj if hit_type == "point" else None
-        if self.hovered_point_id != new_hover_pid:
+
+        new_hover_pid = None
+        new_hover_constraint_idx = None
+        new_hover_junction_pid = None
+
+        if hit_type == "point":
+            new_hover_pid = hit_obj
+        elif hit_type == "constraint":
+            new_hover_constraint_idx = hit_obj
+        elif hit_type == "junction":
+            new_hover_junction_pid = hit_obj
+
+        if (
+            self.hovered_point_id != new_hover_pid
+            or self.hovered_constraint_idx != new_hover_constraint_idx
+            or self.hovered_junction_pid != new_hover_junction_pid
+        ):
             self.hovered_point_id = new_hover_pid
+            self.hovered_constraint_idx = new_hover_constraint_idx
+            self.hovered_junction_pid = new_hover_junction_pid
             self.element.mark_dirty()
 
+    def draw_overlay(self, ctx: cairo.Context):
+        """Draws the selection box."""
+        if (
+            not self.is_box_selecting
+            or not self.drag_start_world_pos
+            or not self.drag_current_world_pos
+        ):
+            return
+
+        if not self.element.canvas:
+            return
+
+        # Transform World Coordinates to Screen Coordinates
+        view_transform = self.element.canvas.view_transform
+        start_px = view_transform.transform_point(self.drag_start_world_pos)
+        curr_px = view_transform.transform_point(self.drag_current_world_pos)
+
+        x, y = start_px
+        w = curr_px[0] - x
+        h = curr_px[1] - y
+
+        ctx.save()
+
+        # Draw a blue selection box.
+        ctx.set_source_rgba(0.2, 0.6, 1.0, 0.2)  # Selection Fill: Blue
+        ctx.set_dash([4, 2])
+        ctx.rectangle(x, y, w, h)
+        ctx.fill_preserve()
+
+        # Stroke border
+        ctx.set_source_rgba(0.2, 0.6, 1.0, 0.7)  # Selection Border: Blue
+        ctx.set_line_width(1.0)
+        ctx.stroke()
+
+        ctx.restore()
+
     # --- Drag Logic Handlers ---
+
+    def _update_live_box_selection(self):
+        """
+        Calculates and updates the selection based on the current drag box.
+        """
+        if not self.drag_start_world_pos or not self.drag_current_world_pos:
+            return
+
+        # Calculate box in world coords
+        start_wx, start_wy = self.drag_start_world_pos
+        end_wx, end_wy = self.drag_current_world_pos
+
+        # Convert world box to Model Space for query
+        mx1, my1 = self.element.hittester.screen_to_model(
+            start_wx, start_wy, self.element
+        )
+        mx2, my2 = self.element.hittester.screen_to_model(
+            end_wx, end_wy, self.element
+        )
+        model_min_x = min(mx1, mx2)
+        model_max_x = max(mx1, mx2)
+        model_min_y = min(my1, my2)
+        model_max_y = max(my1, my2)
+
+        # Perform a "crossing" selection.
+        points_hit, entities_hit = self.element.hittester.get_objects_in_rect(
+            model_min_x,
+            model_min_y,
+            model_max_x,
+            model_max_y,
+            self.element,
+            strict_containment=False,
+        )
+
+        is_additive = self.drag_initial_selection is not None
+
+        if is_additive:
+            # Restore the pre-drag state
+            initial_state = self.drag_initial_selection
+            if initial_state:
+                self.element.selection.point_ids = initial_state.point_ids[:]
+                self.element.selection.entity_ids = initial_state.entity_ids[:]
+
+            # Add newly found items
+            for pid in points_hit:
+                if pid not in self.element.selection.point_ids:
+                    self.element.selection.point_ids.append(pid)
+
+            for eid in entities_hit:
+                if eid not in self.element.selection.entity_ids:
+                    self.element.selection.entity_ids.append(eid)
+        else:
+            # Not additive, so the selection is exactly what's in the box
+            self.element.selection.point_ids = points_hit
+            self.element.selection.entity_ids = entities_hit
+            # Clear other selection types
+            self.element.selection.constraint_idx = None
+            self.element.selection.junction_pid = None
 
     def _get_model_delta(
         self, world_dx: float, world_dy: float
