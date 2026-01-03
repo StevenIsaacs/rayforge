@@ -43,6 +43,14 @@ class Transport(ABC):
         self.received = Signal()
         self.status_changed = Signal()
 
+    @property
+    @abstractmethod
+    def is_connected(self) -> bool:
+        """
+        True when the transport exists and can communicate.
+        """
+        pass
+
     @abstractmethod
     async def connect(self) -> None:
         """

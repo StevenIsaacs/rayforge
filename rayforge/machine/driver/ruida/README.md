@@ -69,39 +69,54 @@ This layer is the interface between Rayforge and Ruida controllers and uses the 
 - Operation commands and blobs -- for running jobs
 
 This layer is responsible for:
-- **Translating** Rayforge API calls into corresponding Ruida commands
+- **Translating** Rayforge API calls into corresponding Ruida commands.
 - **Relaying** commands and data to and from a Ruida controller using the _Session_ and _RTP_ layers.
 
 This layer conforms to the structure described in: https://rayforge.org/docs/0.22/developer/driver.html
 
 # Session
+The _Session_ layer manages connections with Ruida controllers. Ruida controllers typically support two types of physical devices; Ethernet and USB. When disconnected this layer monitors both and automatically connects to one when detected. If both interfaces are available, the USB interface is selected because of slightly better performance characteristics.
+
+For Ethernet the transport protocol is UDP and requires an IP address or host name to connect. For USB the transport protocol is serial and requires a USB device name (e.g. `/dev/ttyUSB0`).
+
+NOTE: For Linux, UDEV rules can be used to create symlinks which will be consistent across sessions. For a symlink to be used it must match the `/dev/tty*` pattern. For example, the symlink name and path for a laser named "Banger" must have a UDEV rule to create a symlink named `/dev/ttyBanger`.
+
 This layer is responsible for:
-- **Connection** using the configured transport protocol (UDP or Serial)
-- **Connection monitoring** and signalling
-- **Auto-connect and reconnect** to restore a connection or when switching transports.
-- **Connection status** change notifications including:
-    - Connecting -- initial connect or when reconnecting
-    - Connected -- ready to communicate with the machine
-    - Connection failure -- a problem with the transport (e.g. could not open port or invalid IP)
-- **Machine status** monitoring to detect when the machine is busy and inform upper layers of status changes which include:
-    - Hardware version info (e.g. Card ID)
-    - Machine bed size
-    - Machine busy -- moving or running a job
-    - Current head position
-- **Decoding** status related data received from the controller.
+- **Connection**: Automatic connection using the configured transport protocol (UDP or Serial).
+- **Connection monitoring**:  the Ruida controller and signals whether the controller is responding.
+- **Auto-connect and reconnect**: Automatically restore a connection or when switching transports.
+- **Connection status**: Signal connection status change notifications including:
+    - Connecting -- initial connect or when reconnecting.
+    - Connected -- ready to communicate with the machine.
+    - Connection failure -- a problem with the transport (e.g. could not open port or invalid IP).
+- **Machine status**: Poll the Ruida controller to detect when the machine is busy and inform upper layers of status changes which include:
+    - Hardware version info (e.g. Card ID).
+    - Machine bed size.
+    - Machine busy -- moving or running a job.
+    - Current head position.
 
 # Ruida Transport Protocol (RTP)
-This layer is responsible for:
-- **Swizzle/unswizzle** Ruida controllers require a light obfuscation of data which is handled in this layer so that other layers are not concerned with obfuscated data
-- **Checksums** -- for UDP transport, each message sent to the Ruida controller must be preceded by a simple checksum
-- **Command/response** handling of sequence and timing of sending commands and receiving replies which can be ACKs or, in the case of memory reads, data
-- **Failure notification** to inform the session layer of timeouts or unexpected replies
-- **Chunking** -- breaking large jobs into transport compatible chunks for transmission to the machine
+This layer deals with the idiosyncrasies of communication with a Ruida controller and provides a common transport interface regardless of the actual transport layer. This means the upper layers need not know whether they are communicating using a UDP or Serial/USB interface.
 
-# Encoding and Decoding (ruida_translator:RDCTranslator)
+This layer is responsible for:
+- **Swizzle/unswizzle**: Ruida controllers require a light obfuscation of data which is handled in this layer so that other layers are not concerned with obfuscated data.
+- **Checksums**: For UDP transport, each message sent to the Ruida controller must be preceded by a simple checksum.
+- **Command/response**: Handling of sequence and timing of sending commands and receiving replies which can be ACKs (UDP only) or, in the case of memory reads, data.
+- **Failure notification**: Informs the session layer of timeouts or unexpected replies.
+- **Chunking**: Breaking large jobs into transport compatible chunks for transmission to the machine.
+
+# Encoding and Decoding (ruida_transcoder:[RDCEncoder | RDCDecoder])
 Jogging commands, machine status monitoring and job execution require translation to and from Ruida controller commands and data formats. The _Driver_ and _Session_ layers in particular need to encode and decode data. Because multiple layers need this capability, this is a separate module.
 
+Two key functions are performed by this module:
+ 1. **Encoding**: Translating internal functions and data into Ruida commands and data.
+ 1. **Decoding**: Translating Ruida replies into internal data formats. This is used primarily for reading data from the controller (e.g. memory reads).
+
 The most notable characteristic of Ruida data is that it is transmitted and received in a 7 bit format. Only command bytes, either commands or in replies to commands, have the top bit set. Because of this, data such as integers are transferred as 7 bit values. Large integers are expressed using five bytes making the full range what can be expressed in 35 bits. Two byte values are therefore 14 bits. This module hides the complexity of performing these conversions.
+
+Ruida controllers support a rich set of commands. This implementation includes only those commands necessary to enable using Rayforge with Ruida controllers.
+
+If additional commands are needed a fairly comprehensive list is available available with the [Ruida Protocoal Analyzer](https://github.com/StevenIsaacs/ruida-protocol-analyzer). Failing that, more discovery is required.
 
 # Development Plan
 Development of this driver involves a number of development iterations as shown below. As development progresses the plan will be updated as needed and completed features will be checked off.
@@ -120,6 +135,7 @@ Development of this driver involves a number of development iterations as shown 
 	- [ ] Demo video for iteration on streamable.
 2. USB Connection
 	- [ ] Add `purge` method to `serial.py` (and other transports?) -- needed for resync of comms
+    - [ ] Add ability to use symlink device names to `transport/serial.py`
 	- [ ] Add USB to code from *UDP Connection* iteration.
 	- [ ] Test connect/reconnect use cases.
 		- [ ] Status monitoring
@@ -141,7 +157,7 @@ Development of this driver involves a number of development iterations as shown 
 		- [ ] Min/max for corner decel/accel (may require upper layer support)
 	- [ ] Assume 20KHz frequency for time being
 	- [ ] Job running status updates
-	- [ ] Demo video for iteration on streamable.
+	- [ ] Demo video for iteration on _streamable_.
 5. Running Jobs -- Raster and Fill
 	- [ ] Horizontal
 	- [ ] Vertical
@@ -158,5 +174,6 @@ This work is possible because of the hard work of others.
 
  - MeerK40t: https://github.com/meerk40t/meerk40t/tree/main/meerk40t/ruida
  - Ruida protocol: https://edutechwiki.unige.ch/en/Ruida
+ - [Ruida Protocoal Analyzer](https://github.com/StevenIsaacs/ruida-protocol-analyzer)
 
  And, of course, Rayforge itself for providing the framework which greatly simplified the structure of this driver.

@@ -23,6 +23,11 @@ class HttpTransport(Transport):
         self._receive_interval = receive_interval
         self._connection_task: Optional[asyncio.Task] = None
 
+    @property
+    def is_connected(self) -> bool:
+        """Check if the transport is actively connected."""
+        return self._running
+
     async def connect(self) -> None:
         """
         Maintain persistent connection with reconnect logic.

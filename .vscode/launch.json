@@ -14,7 +14,8 @@
             // "args": "${command:pickArgs}",
             "env": {
                 // Customize if needed. This works for Fedora 41.
-                "GI_TYPELIB_PATH": "/usr/lib64/girepository-1.0"
+                "GI_TYPELIB_PATH": "/usr/lib64/girepository-1.0",
+                "PYTHONASYNCIODEBUG": "1"
             }
         }
     ]
