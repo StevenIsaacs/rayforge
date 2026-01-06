@@ -25,7 +25,7 @@ gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
 from gi.repository import Adw, GLib
 
-from rayforge.mainwindow import MainWindow
+from rayforge.ui_gtk.mainwindow import MainWindow
 from rayforge.core.vectorization_spec import TraceSpec
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,7 @@ def test_file_path(assets_path: Path) -> Path:
 @pytest.fixture
 def app_and_window(ui_context_initializer):
     """Sets up the Adw.Application and MainWindow without blocking."""
-    from rayforge.workbench import canvas3d
+    from rayforge.ui_gtk import canvas3d
 
     canvas3d.initialize()
     assert canvas3d.initialized, "Canvas3D failed to initialize"

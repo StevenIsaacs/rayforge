@@ -1,8 +1,20 @@
 import math
+import uuid
 import pytest
 from pathlib import Path
-from rayforge.core.geo import ArcToCommand, Geometry
+from rayforge.core.geo import Geometry
+from rayforge.core.geo.constants import (
+    CMD_TYPE_LINE,
+    CMD_TYPE_ARC,
+    COL_TYPE,
+    COL_X,
+    COL_Z,
+    COL_I,
+    COL_J,
+    COL_CW,
+)
 from rayforge.core.sketcher import Sketch
+from rayforge.core.sketcher.sketch import Fill
 from rayforge.core.sketcher.constraints import (
     EqualDistanceConstraint,
     PointOnLineConstraint,
@@ -45,7 +57,7 @@ def test_sketch_workflow():
     # 5. Check geometry export
     geo = s.to_geometry()
     assert isinstance(geo, Geometry)
-    assert len(geo.commands) == 8  # 4 moves + 4 lines (simple export)
+    assert len(geo) == 8  # 4 moves + 4 lines (simple export)
 
     # Check bounding box is approx 10x10
     min_x, min_y, max_x, max_y = geo.rect()
@@ -90,17 +102,18 @@ def test_sketch_arc_export():
     s.add_arc(p1, p2, c, clockwise=False)
 
     geo = s.to_geometry()
+    data = geo.data
+    assert data is not None
 
     # Should contain a MoveTo(10,0) and ArcTo(0,10)
-    # Filter for ArcTo
-    arcs = [cmd for cmd in geo.commands if isinstance(cmd, ArcToCommand)]
-    assert len(arcs) == 1
+    arc_rows = data[data[:, COL_TYPE] == CMD_TYPE_ARC]
+    assert len(arc_rows) == 1
 
-    arc = arcs[0]
-    assert arc.end == (0.0, 10.0, 0.0)
+    arc_row = arc_rows[0]
+    assert (arc_row[COL_X : COL_Z + 1] == (0.0, 10.0, 0.0)).all()
     # Check offsets. Center (0,0) relative to Start (10,0) is (-10, 0)
-    assert arc.center_offset == (-10.0, 0.0)
-    assert arc.clockwise is False
+    assert (arc_row[COL_I : COL_J + 1] == (-10.0, 0.0)).all()
+    assert arc_row[COL_CW] == 0.0
 
 
 def test_sketch_circle_workflow():
@@ -125,7 +138,9 @@ def test_sketch_circle_workflow():
     geo = s.to_geometry()
     # Should export as two semi-circles -> 2 ArcToCommands
     assert isinstance(geo, Geometry)
-    arcs = [cmd for cmd in geo.commands if isinstance(cmd, ArcToCommand)]
+    data = geo.data
+    assert data is not None
+    arcs = data[data[:, COL_TYPE] == CMD_TYPE_ARC]
     assert len(arcs) == 2
 
 
@@ -176,7 +191,7 @@ def test_sketch_construction_geometry_is_ignored_on_roundtrip():
     # The simple export creates a MoveTo and a LineTo for each line.
     # We only have one non-construction line.
     # So we expect exactly 2 commands total after the round trip.
-    assert len(geo.commands) == 2
+    assert len(geo) == 2
 
 
 def test_sketch_equal_length_workflow():
@@ -736,6 +751,568 @@ def test_sketch_deserialization_backward_compatibility():
     # Assert an empty VarSet was created
     assert sketch.input_parameters is not None
     assert len(sketch.input_parameters) == 0
+    # Assert fills list is initialized and empty for backward compatibility
+    assert sketch.fills == []
     # Make sure other parts loaded correctly
     assert sketch.params.get("width") == 100.0
     assert sketch.name == ""
+
+
+def test_sketch_serialization_roundtrip_with_fill():
+    """
+    Verify that a sketch with a Fill can be serialized and deserialized
+    correctly.
+    """
+    # 1. Create a sketch with a simple closed shape
+    s = Sketch()
+    p1 = s.add_point(0, 0)
+    p2 = s.add_point(10, 0)
+    p3 = s.add_point(10, 10)
+    p4 = s.add_point(0, 10)
+    s.add_line(p1, p2)
+    s.add_line(p2, p3)
+    s.add_line(p3, p4)
+    s.add_line(p4, p1)
+
+    # 2. Find the loop and create a Fill object for it
+    loops = s._find_all_closed_loops()
+    assert len(loops) == 1
+    boundary = loops[0]
+    fill_uid = str(uuid.uuid4())
+    s.fills.append(Fill(uid=fill_uid, boundary=boundary))
+
+    # 3. Serialize the sketch to a dictionary
+    sketch_data = s.to_dict()
+    assert "fills" in sketch_data
+    assert len(sketch_data["fills"]) == 1
+    fill_data = sketch_data["fills"][0]
+    assert fill_data["uid"] == fill_uid
+    # to_dict() should return lists for JSON compatibility
+    expected_boundary = [list(item) for item in boundary]
+    assert fill_data["boundary"] == expected_boundary
+
+    # 4. Deserialize back into a new sketch
+    new_sketch = Sketch.from_dict(sketch_data)
+    assert new_sketch.uid == s.uid
+    assert len(new_sketch.fills) == 1
+    reloaded_fill = new_sketch.fills[0]
+    assert isinstance(reloaded_fill, Fill)
+    assert reloaded_fill.uid == fill_uid
+    assert reloaded_fill.boundary == boundary
+
+
+def test_fill_is_removed_when_boundary_is_broken():
+    """
+    Tests that a Fill is automatically removed if its boundary is no longer
+    a valid closed loop after a geometry change.
+    """
+    # 1. Create a sketch with a filled square
+    s = Sketch()
+    p1 = s.add_point(0, 0)
+    p2 = s.add_point(10, 0)
+    p3 = s.add_point(10, 10)
+    p4 = s.add_point(0, 10)
+    s.add_line(p1, p2)
+    s.add_line(p2, p3)
+    l3 = s.add_line(p3, p4)
+    s.add_line(p4, p1)
+
+    loops = s._find_all_closed_loops()
+    assert len(loops) == 1
+    s.fills.append(Fill(uid=str(uuid.uuid4()), boundary=loops[0]))
+    assert len(s.fills) == 1
+
+    # 2. Get the entity to remove and call the public removal method
+    l3_entity = s.registry.get_entity(l3)
+    assert l3_entity is not None
+    s.remove_entities([l3_entity])
+
+    # 3. Assert that the fill has been automatically removed by the method
+    assert len(s.fills) == 0
+
+
+def test_remove_point_if_unused():
+    """
+    Tests the remove_point_if_unused method.
+    """
+    s = Sketch()
+
+    # 1. Test removing a point that is not used by any entity
+    unused_pid = s.add_point(100, 100)
+    assert s.remove_point_if_unused(unused_pid) is True
+    assert unused_pid not in [p.id for p in s.registry.points]
+
+    # 2. Test that None returns False and does nothing
+    assert s.remove_point_if_unused(None) is False
+
+    # 3. Test that a point used by an entity is not removed
+    p1 = s.add_point(0, 0)
+    p2 = s.add_point(10, 0)
+    s.add_line(p1, p2)
+    assert s.remove_point_if_unused(p1) is False
+    assert p1 in [p.id for p in s.registry.points]
+
+    # 4. Test removing a point after its entity is removed
+    p3 = s.add_point(20, 0)
+    p4 = s.add_point(30, 0)
+    l2 = s.add_line(p3, p4)
+    entity = s.registry.get_entity(l2)
+    if entity is not None:
+        s.remove_entities([entity])
+    assert s.remove_point_if_unused(p3) is True
+    assert s.remove_point_if_unused(p4) is True
+    assert p3 not in [p.id for p in s.registry.points]
+    assert p4 not in [p.id for p in s.registry.points]
+
+    # 5. Test that origin point is removed when not used by any entity
+    # (in a new sketch with no entities, origin is considered unused)
+    origin_pid = s.origin_id
+    assert s.remove_point_if_unused(origin_pid) is True
+    assert origin_pid not in [p.id for p in s.registry.points]
+
+    # 6. Test that origin point is NOT removed when used by an entity
+    s2 = Sketch()
+    origin_pid2 = s2.origin_id
+    p_other = s2.add_point(10, 0)
+    s2.add_line(origin_pid2, p_other)
+    assert s2.remove_point_if_unused(origin_pid2) is False
+    assert origin_pid2 in [p.id for p in s2.registry.points]
+
+
+class TestSketchLoopFindingHelpers:
+    @pytest.fixture
+    def cross_sketch(self):
+        """A sketch with 4 lines meeting at the origin."""
+        s = Sketch()
+        p_center = s.origin_id
+        p_right = s.add_point(10, 0)
+        p_up = s.add_point(0, 10)
+        p_left = s.add_point(-10, 0)
+        p_down = s.add_point(0, -10)
+        l_right = s.add_line(p_center, p_right)  # Angle 0
+        l_up = s.add_line(p_center, p_up)  # Angle pi/2
+        l_left = s.add_line(p_center, p_left)  # Angle pi
+        l_down = s.add_line(p_center, p_down)  # Angle -pi/2
+        return s, {
+            "center": p_center,
+            "l_right": l_right,
+            "l_up": l_up,
+            "l_left": l_left,
+            "l_down": l_down,
+        }
+
+    def test_build_adjacency_list(self):
+        s = Sketch()
+        p1 = s.add_point(0, 0)
+        p2 = s.add_point(10, 0)
+        l1 = s.add_line(p1, p2)
+        adj = s._build_adjacency_list()
+
+        assert p1 in adj
+        assert p2 in adj
+        assert len(adj[p1]) == 1
+        assert len(adj[p2]) == 1
+
+        edge_from_p1 = adj[p1][0]
+        assert edge_from_p1["id"] == l1
+        assert edge_from_p1["to"] == p2
+        assert edge_from_p1["fwd"] is True
+
+        edge_from_p2 = adj[p2][0]
+        assert edge_from_p2["id"] == l1
+        assert edge_from_p2["to"] == p1
+        assert edge_from_p2["fwd"] is False
+
+    def test_sort_edges_by_angle(self, cross_sketch):
+        s, ids = cross_sketch
+        adj = s._build_adjacency_list()
+        sorted_adj = s._sort_edges_by_angle(adj)
+
+        center_edges = sorted_adj[ids["center"]]
+        assert len(center_edges) == 4
+
+        # Expected order: down (-pi/2), right (0), up (pi/2), left (pi)
+        sorted_ids = [e["id"] for e in center_edges]
+        assert sorted_ids == [
+            ids["l_down"],
+            ids["l_right"],
+            ids["l_up"],
+            ids["l_left"],
+        ]
+
+    def test_get_next_edge_ccw(self, cross_sketch):
+        s, ids = cross_sketch
+        adj = s._build_adjacency_list()
+        sorted_adj = s._sort_edges_by_angle(adj)
+
+        center_id = ids["center"]
+
+        # To test finding the next edge in a loop, we simulate arriving
+        # at the center.
+        #
+        # Scene: We arrive at Center from the Right.
+        # The entity 'l_right' connects Center(0,0) and Right(10,0).
+        # We traveled Right -> Center. This is the reverse direction of
+        # l_right. So incoming_fwd = False.
+        #
+        # To continue the loop CCW (keeping face on left), we need to make a
+        # LEFT turn at the Center.
+        # In: (-1, 0) (Right -> Center)
+        # Options: Up (0, 1), Left (-1, 0), Down (0, -1), Right (1, 0).
+        # A left turn relative to (-1, 0) is Down (0, -1).
+        # Note: In standard Cartesian coords:
+        # Vector A=(-1,0). Vector B=(0,-1).
+        #   Cross Z = (-1*-1) - 0 = 1 (Positive/CCW).
+        # Vector B=(0,1) (Up). Cross Z = (-1*1) - 0 = -1 (Negative/CW).
+        # So Down is the correct Left turn.
+
+        next_edge = s._get_next_edge_ccw(
+            center_id, ids["l_right"], False, sorted_adj
+        )
+        assert next_edge["id"] == ids["l_down"]
+
+    def test_calculate_loop_signed_area(self):
+        s = Sketch()
+        p1 = s.add_point(0, 0)
+        p2 = s.add_point(10, 0)
+        p3 = s.add_point(10, 10)
+        p4 = s.add_point(0, 10)
+        l1 = s.add_line(p1, p2)
+        l2 = s.add_line(p2, p3)
+        l3 = s.add_line(p3, p4)
+        l4 = s.add_line(p4, p1)
+
+        # CCW Loop: P1->P2->P3->P4->P1
+        ccw_loop = [(l1, True), (l2, True), (l3, True), (l4, True)]
+        area_ccw = s._calculate_loop_signed_area(ccw_loop)
+        assert area_ccw == pytest.approx(100.0)
+
+        # CW Loop: P1->P4->P3->P2->P1
+        # L4 is P4->P1. False is P1->P4.
+        # L3 is P3->P4. False is P4->P3.
+        # L2 is P2->P3. False is P3->P2.
+        # L1 is P1->P2. False is P2->P1.
+        cw_loop = [(l4, False), (l3, False), (l2, False), (l1, False)]
+        area_cw = s._calculate_loop_signed_area(cw_loop)
+        assert area_cw == pytest.approx(-100.0)
+
+        # Degenerate Loop (back and forth)
+        degen_loop = [(l1, True), (l1, False)]
+        area_degen = s._calculate_loop_signed_area(degen_loop)
+        assert area_degen == pytest.approx(0.0)
+
+
+def test_sketch_find_all_closed_loops():
+    """Tests the core graph traversal algorithm for finding faces."""
+
+    def get_loop_ids(loops):
+        """Helper to get sets of entity IDs for easy comparison."""
+        return [set(item[0] for item in loop) for loop in loops]
+
+    # --- Test Case 1: Simple Square ---
+    s1 = Sketch()
+    p1 = s1.add_point(0, 0)
+    p2 = s1.add_point(10, 0)
+    p3 = s1.add_point(10, 10)
+    p4 = s1.add_point(0, 10)
+    l1 = s1.add_line(p1, p2)
+    l2 = s1.add_line(p2, p3)
+    l3 = s1.add_line(p3, p4)
+    l4 = s1.add_line(p4, p1)
+    loops1 = s1._find_all_closed_loops()
+    assert len(loops1) == 1
+    assert get_loop_ids(loops1)[0] == {l1, l2, l3, l4}
+
+    # --- Test Case 2: Dangling Edge ---
+    s2 = Sketch()
+    p1 = s2.add_point(0, 0)
+    p2 = s2.add_point(10, 0)
+    p3 = s2.add_point(10, 10)
+    p4 = s2.add_point(0, 10)
+    p5 = s2.add_point(20, 0)
+    l1 = s2.add_line(p1, p2)
+    l2 = s2.add_line(p2, p3)
+    l3 = s2.add_line(p3, p4)
+    l4 = s2.add_line(p4, p1)
+    s2.add_line(p2, p5)  # Dangling line, no assignment needed
+    loops2 = s2._find_all_closed_loops()
+    assert len(loops2) == 1
+    assert get_loop_ids(loops2)[0] == {l1, l2, l3, l4}
+
+    # --- Test Case 3: Two Separate Shapes ---
+    s3 = Sketch()
+    # Shape A
+    p1 = s3.add_point(0, 0)
+    p2 = s3.add_point(1, 0)
+    p3 = s3.add_point(1, 1)
+    p4 = s3.add_point(0, 1)
+    la1 = s3.add_line(p1, p2)
+    la2 = s3.add_line(p2, p3)
+    la3 = s3.add_line(p3, p4)
+    la4 = s3.add_line(p4, p1)
+    # Shape B
+    p5 = s3.add_point(10, 10)
+    p6 = s3.add_point(11, 10)
+    p7 = s3.add_point(11, 11)
+    p8 = s3.add_point(10, 11)
+    lb1 = s3.add_line(p5, p6)
+    lb2 = s3.add_line(p6, p7)
+    lb3 = s3.add_line(p7, p8)
+    lb4 = s3.add_line(p8, p5)
+    loops3 = s3._find_all_closed_loops()
+    assert len(loops3) == 2
+    loop_sets3 = get_loop_ids(loops3)
+    assert {la1, la2, la3, la4} in loop_sets3
+    assert {lb1, lb2, lb3, lb4} in loop_sets3
+
+    # --- Test Case 4: Figure-Eight (Shared Point/Edge) ---
+    s4 = Sketch()
+    # Left loop
+    p1 = s4.add_point(-1, -1)
+    p2 = s4.add_point(0, -1)
+    p3 = s4.add_point(0, 0)  # Shared point
+    p4 = s4.add_point(-1, 0)
+    ll1 = s4.add_line(p1, p2)
+    ll2 = s4.add_line(p2, p3)
+    ll3 = s4.add_line(p3, p4)
+    ll4 = s4.add_line(p4, p1)
+    # Right loop
+    p5 = s4.add_point(1, 0)
+    p6 = s4.add_point(1, -1)
+    rl1 = s4.add_line(p3, p5)
+    rl2 = s4.add_line(p5, p6)
+    rl3 = s4.add_line(p6, p2)
+    loops4 = s4._find_all_closed_loops()
+    assert len(loops4) == 2
+    loop_sets4 = get_loop_ids(loops4)
+    assert {ll1, ll2, ll3, ll4} in loop_sets4
+    assert {rl1, rl2, rl3, ll2} in loop_sets4  # ll2 is shared edge
+
+    # --- Test Case 5: Shape with an Arc (D-Shape) ---
+    s5 = Sketch()
+    p1 = s5.add_point(-10, 0)
+    p2 = s5.add_point(10, 0)
+    c = s5.add_point(0, 0)
+    l1 = s5.add_line(p1, p2)
+    a1 = s5.add_arc(p2, p1, c, clockwise=False)  # Semicircle
+    loops5 = s5._find_all_closed_loops()
+    assert len(loops5) == 1
+    assert get_loop_ids(loops5)[0] == {l1, a1}
+
+    # --- Test Case 6: Circle ---
+    s6 = Sketch()
+    c = s6.add_point(0, 0)
+    r = s6.add_point(10, 0)
+    c1 = s6.add_circle(c, r)
+    loops6 = s6._find_all_closed_loops()
+    assert len(loops6) == 1
+    assert get_loop_ids(loops6)[0] == {c1}
+
+    # --- Test Case 7: Shape with Hole ---
+    s7 = Sketch()
+    # Outer
+    op1 = s7.add_point(0, 0)
+    op2 = s7.add_point(10, 0)
+    op3 = s7.add_point(10, 10)
+    op4 = s7.add_point(0, 10)
+    ol1 = s7.add_line(op1, op2)
+    ol2 = s7.add_line(op2, op3)
+    ol3 = s7.add_line(op3, op4)
+    ol4 = s7.add_line(op4, op1)
+    # Inner
+    ip1 = s7.add_point(2, 2)
+    ip2 = s7.add_point(8, 2)
+    ip3 = s7.add_point(8, 8)
+    ip4 = s7.add_point(2, 8)
+    il1 = s7.add_line(ip1, ip2)
+    il2 = s7.add_line(ip2, ip3)
+    il3 = s7.add_line(ip3, ip4)
+    il4 = s7.add_line(ip4, ip1)
+    loops7 = s7._find_all_closed_loops()
+    assert len(loops7) == 2
+    loop_sets7 = get_loop_ids(loops7)
+    assert {ol1, ol2, ol3, ol4} in loop_sets7
+    assert {il1, il2, il3, il4} in loop_sets7
+
+
+def test_find_all_closed_loops_with_circle_hole():
+    """Tests finding loops when a circle is used as a hole."""
+    s = Sketch()
+    # Outer square
+    p1 = s.add_point(-10, -10)
+    p2 = s.add_point(10, -10)
+    p3 = s.add_point(10, 10)
+    p4 = s.add_point(-10, 10)
+    l1 = s.add_line(p1, p2)
+    l2 = s.add_line(p2, p3)
+    l3 = s.add_line(p3, p4)
+    l4 = s.add_line(p4, p1)
+    # Inner circle
+    c = s.add_point(0, 0)
+    r = s.add_point(5, 0)
+    c1 = s.add_circle(c, r)
+
+    loops = s._find_all_closed_loops()
+    assert len(loops) == 2
+
+    loop_sets = [set(item[0] for item in loop) for loop in loops]
+    assert {l1, l2, l3, l4} in loop_sets
+    assert {c1} in loop_sets
+
+    # Verify area calculation is correct for the circle loop
+    circle_loop = next(loop for loop in loops if loop[0][0] == c1)
+    area = s._calculate_loop_signed_area(circle_loop)
+    assert area == pytest.approx(math.pi * 5**2)
+
+
+def test_sketch_fill_geometry_generation_circle():
+    """Test generating fill geometry for a single Circle loop."""
+    sketch = Sketch()
+    c = sketch.add_point(0, 0)
+    r = sketch.add_point(10, 0)
+
+    # Create circle
+    cid = sketch.add_circle(c, r)
+
+    # Define fill
+    fill = Fill(uid="fill1", boundary=[(cid, True)])
+    sketch.fills.append(fill)
+
+    # Generate geometries
+    geos = sketch.get_fill_geometries()
+
+    assert len(geos) == 1
+    geo = geos[0]
+    data = geo.data
+    assert data is not None
+
+    # Check commands: should be 1 MoveTo + 2 ArcTo (semicircles)
+    assert len(geo) == 3
+
+    # Start at radius point (10, 0)
+    assert (data[0, COL_X : COL_Z + 1] == (10.0, 0.0, 0.0)).all()
+
+    # First arc to (-10, 0). Center is (0,0). Offset from (10,0) is (-10, 0).
+    arc1 = data[1]
+    assert arc1[COL_TYPE] == CMD_TYPE_ARC
+    assert (arc1[COL_X : COL_Z + 1] == (-10.0, 0.0, 0.0)).all()
+    assert (arc1[COL_I : COL_J + 1] == (-10.0, 0.0)).all()
+    assert not bool(arc1[COL_CW])
+
+    # Second arc to (10, 0). Offset from (-10,0) is (10, 0).
+    arc2 = data[2]
+    assert arc2[COL_TYPE] == CMD_TYPE_ARC
+    assert (arc2[COL_X : COL_Z + 1] == (10.0, 0.0, 0.0)).all()
+    assert (arc2[COL_I : COL_J + 1] == (10.0, 0.0)).all()
+    assert not bool(arc2[COL_CW])
+
+
+def test_sketch_fill_geometry_generation_rect():
+    """Test generating fill geometry for a rectangle (multi-segment lines)."""
+    sketch = Sketch()
+    p1 = sketch.add_point(0, 0)
+    p2 = sketch.add_point(10, 0)
+    p3 = sketch.add_point(10, 10)
+    p4 = sketch.add_point(0, 10)
+
+    l1 = sketch.add_line(p1, p2)
+    l2 = sketch.add_line(p2, p3)
+    l3 = sketch.add_line(p3, p4)
+    l4 = sketch.add_line(p4, p1)
+
+    # Define fill loop
+    boundary = [
+        (l1, True),  # p1 -> p2
+        (l2, True),  # p2 -> p3
+        (l3, True),  # p3 -> p4
+        (l4, True),  # p4 -> p1
+    ]
+    fill = Fill(uid="fill_rect", boundary=boundary)
+    sketch.fills.append(fill)
+
+    geos = sketch.get_fill_geometries()
+    assert len(geos) == 1
+    geo = geos[0]
+    data = geo.data
+    assert data is not None
+
+    assert len(geo) == 5  # MoveTo + 4 LineTo
+
+    # Check start
+    assert (data[0, COL_X : COL_Z + 1] == (0.0, 0.0, 0.0)).all()
+
+    # Check sequence
+    assert data[1, COL_TYPE] == CMD_TYPE_LINE
+    assert (data[1, COL_X : COL_Z + 1] == (10.0, 0.0, 0.0)).all()
+
+    assert data[2, COL_TYPE] == CMD_TYPE_LINE
+    assert (data[2, COL_X : COL_Z + 1] == (10.0, 10.0, 0.0)).all()
+
+    assert data[3, COL_TYPE] == CMD_TYPE_LINE
+    assert (data[3, COL_X : COL_Z + 1] == (0.0, 10.0, 0.0)).all()
+
+    assert data[4, COL_TYPE] == CMD_TYPE_LINE
+    assert (data[4, COL_X : COL_Z + 1] == (0.0, 0.0, 0.0)).all()
+
+
+def test_sketch_fill_geometry_generation_arc_shape():
+    """Test fill with mixed Lines and Arcs, including reverse traversal."""
+    sketch = Sketch()
+
+    # Shape: A semi-circle connected by a straight line.
+    # Points: (-10, 0) and (10, 0). Center (0,0).
+
+    p_left = sketch.add_point(-10, 0)
+    p_right = sketch.add_point(10, 0)
+    p_center = sketch.add_point(0, 0)
+
+    # Line from Left to Right
+    line_id = sketch.add_line(p_left, p_right)
+
+    # Arc from Left to Right (top half). Clockwise.
+    # Start: Left, End: Right, Center: Center.
+    # If CW: goes Left -> Top -> Right.
+    arc_id = sketch.add_arc(p_left, p_right, p_center, clockwise=True)
+
+    # Loop definition:
+    # 1. Line: Left -> Right (Forward)
+    # 2. Arc: Right -> Left (Reverse of Arc definition Left->Right)
+
+    boundary = [
+        (line_id, True),  # (-10,0) -> (10,0)
+        (arc_id, False),  # (10,0) -> (-10,0) via arc
+    ]
+
+    fill = Fill(uid="fill_arc", boundary=boundary)
+    sketch.fills.append(fill)
+
+    geos = sketch.get_fill_geometries()
+    assert len(geos) == 1
+    geo = geos[0]
+    data = geo.data
+    assert data is not None
+
+    assert len(geo) == 3  # MoveTo + LineTo + ArcTo
+
+    # 1. MoveTo Start of Line (-10, 0)
+    assert (data[0, COL_X : COL_Z + 1] == (-10.0, 0.0, 0.0)).all()
+
+    # 2. LineTo End of Line (10, 0)
+    assert data[1, COL_TYPE] == CMD_TYPE_LINE
+    assert (data[1, COL_X : COL_Z + 1] == (10.0, 0.0, 0.0)).all()
+
+    # 3. ArcTo back to (-10, 0)
+    # Entity is CW. Traversal is Reverse.
+    # In `get_fill_geometries`: is_cw = not entity.clockwise if not fwd.
+    # So is_cw should be False (CCW).
+
+    cmd_arc = data[2]
+    assert cmd_arc[COL_TYPE] == CMD_TYPE_ARC
+    assert (cmd_arc[COL_X : COL_Z + 1] == (-10.0, 0.0, 0.0)).all()
+
+    # Center offset relative to current point (10, 0). Center is (0,0).
+    # Offset = (0 - 10, 0 - 0) = (-10, 0)
+    assert (cmd_arc[COL_I : COL_J + 1] == (-10.0, 0.0)).all()
+
+    # Direction check
+    assert not bool(cmd_arc[COL_CW])

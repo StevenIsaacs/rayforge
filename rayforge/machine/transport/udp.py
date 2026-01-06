@@ -30,9 +30,7 @@ class UdpTransport(Transport):
 
         self._running = True
         self.status_changed.send(self, status=TransportStatus.CONNECTING)
-        logger.info(
-            f"Connecting to server at {self.host}:{self.port}..."
-        )
+        logger.info(f"Connecting to server at {self.host}:{self.port}...")
         try:
             self.reader = await asyncudp.create_socket(
                 remote_addr=(self.host_ip, self.port)
@@ -72,9 +70,7 @@ class UdpTransport(Transport):
             self.status_changed.send(self, status=TransportStatus.DISCONNECTED)
 
     async def disconnect(self) -> None:
-        logger.info(
-            f"Disconnecting from server at {self.host}:{self.port}..."
-        )
+        logger.info(f"Disconnecting from server at {self.host}:{self.port}...")
         self._running = False
         if self._connection_task:
             self._connection_task.cancel()
@@ -95,12 +91,14 @@ class UdpTransport(Transport):
     async def send(self, data: bytes) -> None:
         if not self.writer:
             raise ConnectionError("Not connected")
-        self.writer.sendto(data, self.host_ip)
+        # Since the socket was created with remote_addr, it is "connected".
+        # We must not specify the destination address in sendto().
+        self.writer.sendto(data)
 
     async def _receive_loop(self) -> None:
         while self.reader:
             try:
-                data = await self.reader.recvfrom()
+                data, _ = await self.reader.recvfrom()
                 if data:
                     self.received.send(self, data=data)
                 else:

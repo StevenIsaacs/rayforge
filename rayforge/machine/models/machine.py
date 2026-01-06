@@ -1,39 +1,54 @@
-import yaml
-import uuid
-import logging
 import asyncio
-import multiprocessing
 import json
-import numpy as np
+import logging
+import multiprocessing
+import uuid
 from dataclasses import asdict
-from typing import List, Dict, Any, Optional, Tuple, TYPE_CHECKING, Type
+from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
+
+import numpy as np
+import yaml
 from blinker import Signal
+
+from rayforge.core.ops.commands import MovingCommand
+
 from ...camera.models.camera import Camera
-from ...context import get_context, RayforgeContext
+from ...context import RayforgeContext, get_context
 from ...core.varset import ValidationError
 from ...shared.tasker import task_mgr
-from ..transport import TransportStatus
+from ..driver import get_driver_cls
 from ..driver.driver import (
-    Driver,
+    Axis,
     DeviceConnectionError,
     DeviceState,
     DeviceStatus,
-    DriverSetupError,
+    Driver,
     DriverPrecheckError,
+    DriverSetupError,
+    ResourceBusyError,
 )
 from ..driver.dummy import NoDeviceDriver
-from ..driver import get_driver_cls
-from ..driver.driver import Axis
+from ..transport import TransportStatus
+from .dialect import GcodeDialect, get_dialect
 from .laser import Laser
+from .machine_hours import MachineHours
 from .macro import Macro, MacroTrigger
-from .dialect import get_dialect, GcodeDialect
+
+
+class Origin(Enum):
+    TOP_LEFT = "top_left"
+    BOTTOM_LEFT = "bottom_left"
+    TOP_RIGHT = "top_right"
+    BOTTOM_RIGHT = "bottom_right"
+
 
 if TYPE_CHECKING:
+    from ...core.doc import Doc
+    from ...core.ops import Ops
     from ...core.varset import VarSet
     from ...shared.tasker.context import ExecutionContext
-    from ...core.ops import Ops
-    from ...core.doc import Doc
 
 
 logger = logging.getLogger(__name__)
@@ -66,8 +81,10 @@ class Machine:
 
         self.driver: Driver = NoDeviceDriver(context, self)
 
+        self.auto_connect: bool = True
         self.home_on_start: bool = False
         self.clear_alarm_on_connect: bool = False
+        self.single_axis_homing_enabled: bool = True
         self.dialect_uid: str = "grbl"
         self.gcode_precision: int = 3
         self.hookmacros: Dict[MacroTrigger, Macro] = {}
@@ -80,9 +97,16 @@ class Machine:
         self.max_cut_speed: int = 1000  # in mm/min
         self.acceleration: int = 1000  # in mm/s²
         self.dimensions: Tuple[int, int] = 200, 200
-        self.y_axis_down: bool = False
+        self.offsets: Tuple[int, int] = 0, 0
+        self.origin: Origin = Origin.BOTTOM_LEFT
+        self.reverse_x_axis: bool = False
+        self.reverse_y_axis: bool = False
+        self.reverse_z_axis: bool = False
         self.soft_limits_enabled: bool = True
         self._settings_lock = asyncio.Lock()
+
+        self.machine_hours: MachineHours = MachineHours()
+        self.machine_hours.changed.connect(self._on_machine_hours_changed)
 
         # Signals
         self.changed = Signal()
@@ -96,6 +120,22 @@ class Machine:
 
         self._connect_driver_signals()
         self.add_head(Laser())
+
+    async def connect(self):
+        """Public method to connect the driver."""
+        if self.driver is not None:
+            await self.driver.connect()
+
+    async def disconnect(self):
+        """Public method to disconnect the driver."""
+        # Cancel any pending connection tasks for this driver
+        task_mgr.cancel_task((self.id, "driver-connect"))
+        if self.driver is not None:
+            await self.driver.cleanup()
+            # After cleanup, the driver might need to be rebuilt to reconnect
+            task_mgr.add_coroutine(
+                self._rebuild_driver_instance, key=(self.id, "rebuild-driver")
+            )
 
     async def shutdown(self):
         """
@@ -138,8 +178,8 @@ class Machine:
         self, ctx: Optional["ExecutionContext"] = None
     ):
         """
-        Instantiates, sets up, and connects the driver based on the
-        machine's current configuration. This is managed by the task manager.
+        Instantiates and sets up the driver based on the machine's current
+        configuration. It does NOT connect it.
         """
         logger.info(
             f"Machine '{self.name}' (id:{self.id}) rebuilding driver to "
@@ -174,27 +214,14 @@ class Machine:
             new_driver.setup_error = str(e)
 
         self.driver = new_driver
-
         self._connect_driver_signals()
 
-        # A setup error prevents connection, but a precheck error does not.
-        if self.driver is not None and not self.driver.setup_error:
-            # Add the connect task with a key unique to this machine
-            task_mgr.add_coroutine(
-                lambda ctx: self.driver.connect(),
-                key=(self.id, "driver-connect"),
-            )
-        else:
-            logger.error(
-                "Driver setup failed, connection will not be attempted."
-            )
-
         # Notify the UI of the change *after* the new driver is in place.
-        # This MUST be done on the main thread to prevent UI corruption.
         self._scheduler(self.changed.send, self)
 
         # Now it is safe to clean up the old driver.
-        await old_driver.cleanup()
+        if old_driver:
+            await old_driver.cleanup()
 
     def _reset_status(self):
         """Resets status to a disconnected/unknown state and signals it."""
@@ -334,6 +361,12 @@ class Machine:
         self.clear_alarm_on_connect = clear_alarm
         self.changed.send(self)
 
+    def set_single_axis_homing_enabled(self, enabled: bool = True):
+        if self.single_axis_homing_enabled == enabled:
+            return
+        self.single_axis_homing_enabled = enabled
+        self.changed.send(self)
+
     def set_max_travel_speed(self, speed: int):
         self.max_travel_speed = speed
         self.changed.send(self)
@@ -350,9 +383,83 @@ class Machine:
         self.dimensions = (width, height)
         self.changed.send(self)
 
-    def set_y_axis_down(self, y_axis_down: bool):
-        self.y_axis_down = y_axis_down
+    def set_offsets(self, x_offset: int, y_offset: int):
+        self.offsets = (x_offset, y_offset)
         self.changed.send(self)
+
+    def set_origin(self, origin: Origin):
+        self.origin = origin
+        self.changed.send(self)
+
+    def set_reverse_x_axis(self, is_reversed: bool):
+        """Sets if the X-axis coordinate display is inverted."""
+        if self.reverse_x_axis == is_reversed:
+            return
+        self.reverse_x_axis = is_reversed
+        self.changed.send(self)
+
+    def set_reverse_y_axis(self, is_reversed: bool):
+        """Sets if the Y-axis coordinate display is inverted."""
+        if self.reverse_y_axis == is_reversed:
+            return
+        self.reverse_y_axis = is_reversed
+        self.changed.send(self)
+
+    def set_reverse_z_axis(self, is_reversed: bool):
+        """Sets if the Z-axis direction is reversed."""
+        if self.reverse_z_axis == is_reversed:
+            return
+        self.reverse_z_axis = is_reversed
+        self.changed.send(self)
+
+    @property
+    def y_axis_down(self) -> bool:
+        """
+        True if the Y coordinate decreases as the head moves away from the
+        user (i.e., origin is at the top). Used for G-code generation.
+        """
+        return self.origin in (Origin.TOP_LEFT, Origin.TOP_RIGHT)
+
+    @property
+    def x_axis_right(self) -> bool:
+        """
+        True if the X coordinate decreases as the head moves left
+        (i.e., origin is on the right). Used for G-code generation.
+        """
+        return self.origin in (Origin.TOP_RIGHT, Origin.BOTTOM_RIGHT)
+
+    def get_visual_jog_deltas(
+        self, distance: float
+    ) -> Tuple[float, float, float]:
+        """
+        Calculate the signed coordinate deltas for a jog operation based on a
+        user's visual intent (e.g., clicking the "Right" arrow).
+
+        Args:
+            distance: The positive distance for the jog.
+
+        Returns:
+            A tuple of (delta_for_east, delta_for_north, delta_for_up).
+        """
+        # "Visual" refers to the UI controls (Arrows).
+        # "RIGHT" Arrow (East) -> Physical Positive X movement.
+        # "UP" Arrow (North/Away) -> Physical Positive Y movement.
+
+        # We IGNORE self.reverse_x_axis and self.reverse_y_axis here.
+        # Rationale: Those settings are intended to invert the *displayed*
+        # coordinates (DRO) for machines with negative workspaces
+        # (e.g. Top-Right origin), NOT to invert the physical motor direction.
+        # Standard G-code behavior is: X+ is Right, Y+ is Away.
+        # The user expects the Right Arrow to move the head Right.
+
+        x_delta = distance
+        y_delta = distance
+
+        # Z-axis is different. Often "Reverse Z" implies kinematic inversion
+        # (Bed moves up vs Head moves up). We respect it for jogging.
+        z_delta = distance * (-1.0 if self.reverse_z_axis else 1.0)
+
+        return x_delta, y_delta, z_delta
 
     def set_soft_limits_enabled(self, enabled: bool):
         """Enable or disable soft limits for jog operations."""
@@ -371,29 +478,36 @@ class Machine:
         return (0.0, 0.0, float(self.dimensions[0]), float(self.dimensions[1]))
 
     def would_jog_exceed_limits(self, axis: Axis, distance: float) -> bool:
-        """Check if a jog operation would exceed soft limits."""
+        """
+        Check if a jog operation would exceed soft limits.
+
+        Note: The `distance` argument must be the final, signed coordinate
+        delta that will be sent to the machine.
+        """
         if not self.soft_limits_enabled:
             return False
 
         current_pos = self.get_current_position()
         x_pos, y_pos, z_pos = current_pos
-
-        if x_pos is None or y_pos is None:
-            return False
-
         x_min, y_min, x_max, y_max = self.get_soft_limits()
 
         # Check X axis
         if axis & Axis.X:
+            if x_pos is None:
+                return False  # Cannot check limits if position is unknown
             new_x = x_pos + distance
             if new_x < x_min or new_x > x_max:
                 return True
 
         # Check Y axis
         if axis & Axis.Y:
+            if y_pos is None:
+                return False  # Cannot check limits if position is unknown
             new_y = y_pos + distance
             if new_y < y_min or new_y > y_max:
                 return True
+
+        # Note: Z-axis soft limits are not currently implemented
 
         return False
 
@@ -406,23 +520,23 @@ class Machine:
 
         current_pos = self.get_current_position()
         x_pos, y_pos, z_pos = current_pos
-
-        if x_pos is None or y_pos is None:
-            return distance
-
         x_min, y_min, x_max, y_max = self.get_soft_limits()
         adjusted_distance = distance
 
         # Check X axis
         if axis & Axis.X:
+            if x_pos is None:
+                return distance  # Cannot adjust if position is unknown
             new_x = x_pos + distance
             if new_x < x_min:
                 adjusted_distance = x_min - x_pos
             elif new_x > x_max:
                 adjusted_distance = x_max - x_pos
 
-        # Check Y axis (only if not already adjusted for X)
-        if axis & Axis.Y and adjusted_distance == distance:
+        # Check Y axis
+        if axis & Axis.Y:
+            if y_pos is None:
+                return distance  # Cannot adjust if position is unknown
             new_y = y_pos + distance
             if new_y < y_min:
                 adjusted_distance = y_min - y_pos
@@ -526,6 +640,26 @@ class Machine:
     def _on_camera_changed(self, camera, *args):
         self.changed.send(self)
 
+    def _on_machine_hours_changed(self, machine_hours, *args):
+        """
+        Handle machine hours changes and propagate to machine changed
+        signal.
+        """
+        self._scheduler(self.changed.send, self)
+
+    def add_machine_hours(self, hours: float) -> None:
+        """
+        Add hours to the machine's total hours and all counters.
+
+        Args:
+            hours: Hours to add (can be fractional).
+        """
+        self.machine_hours.add_hours(hours)
+
+    def get_machine_hours(self) -> MachineHours:
+        """Get the machine hours tracker."""
+        return self.machine_hours
+
     def add_macro(self, macro: Macro):
         """Adds a macro and notifies listeners."""
         if macro.uid in self.macros:
@@ -623,18 +757,51 @@ class Machine:
         """
         encoder = self.driver.get_encoder()
 
-        # If the machine is Y-down, we must transform the ops coordinate
-        # system (Y-Up Internal -> Y-Down Machine) before generating G-code.
-        # The transform is Y_new = Height - Y_old.
+        # Transform the ops coordinate system (Y-Up Internal -> Machine)
+        # before generating G-code based on the origin setting.
+        # We assume Internal Ops are Y-Up (Cartesian, 0,0 at Bottom-Left).
         ops_for_encoder = ops
-        if self.y_axis_down:
+
+        # Apply offsets
+        for command in ops_for_encoder.commands:
+            if isinstance(command, MovingCommand):
+                base_end = command.end or (0, 0, 0)
+                command.end = (
+                    base_end[0] + self.offsets[0],
+                    base_end[1] + self.offsets[1],
+                    base_end[2],
+                )
+
+        # If Origin is BOTTOM_LEFT, it matches Internal (Y-Up, X-Right).
+        # Any other origin requires transformation.
+        if self.origin != Origin.BOTTOM_LEFT:
             ops_for_encoder = ops.copy()
-            height = self.dimensions[1]
-            # Create transform matrix: Translate(0, H) @ Scale(1, -1)
-            # Result: y -> -y -> -y + H
+            width, height = self.dimensions
+
+            # Create the origin transformation matrix
             transform = np.identity(4)
-            transform[1, 1] = -1.0
-            transform[1, 3] = height
+
+            if self.origin == Origin.TOP_LEFT:
+                # Machine is Y-Down (0,0 at Top-Left).
+                # Flip Y: Y_new = Height - Y_old
+                transform[1, 1] = -1.0
+                transform[1, 3] = height
+
+            elif self.origin == Origin.TOP_RIGHT:
+                # Machine is Y-Down, X-Left (0,0 at Top-Right).
+                # Flip X: X_new = Width - X_old
+                # Flip Y: Y_new = Height - Y_old
+                transform[0, 0] = -1.0
+                transform[0, 3] = width
+                transform[1, 1] = -1.0
+                transform[1, 3] = height
+
+            elif self.origin == Origin.BOTTOM_RIGHT:
+                # Machine is Y-Up, X-Left (0,0 at Bottom-Right).
+                # Flip X: X_new = Width - X_old
+                transform[0, 0] = -1.0
+                transform[0, 3] = width
+
             ops_for_encoder.transform(transform)
 
         gcode_str, op_map_obj = encoder.encode(ops_for_encoder, self, doc)
@@ -739,11 +906,17 @@ class Machine:
                 "name": self.name,
                 "driver": self.driver_name,
                 "driver_args": self.driver_args,
+                "auto_connect": self.auto_connect,
                 "clear_alarm_on_connect": self.clear_alarm_on_connect,
                 "home_on_start": self.home_on_start,
+                "single_axis_homing_enabled": self.single_axis_homing_enabled,
                 "dialect_uid": self.dialect_uid,
                 "dimensions": list(self.dimensions),
-                "y_axis_down": self.y_axis_down,
+                "offsets": list(self.offsets),
+                "origin": self.origin.value,
+                "reverse_x_axis": self.reverse_x_axis,
+                "reverse_y_axis": self.reverse_y_axis,
+                "reverse_z_axis": self.reverse_z_axis,
                 "heads": [head.to_dict() for head in self.heads],
                 "cameras": [camera.to_dict() for camera in self.cameras],
                 "hookmacros": {
@@ -761,6 +934,7 @@ class Machine:
                 "gcode": {
                     "gcode_precision": self.gcode_precision,
                 },
+                "machine_hours": self.machine_hours.to_dict(),
             }
         }
 
@@ -832,10 +1006,14 @@ class Machine:
         ma.name = ma_data.get("name", ma.name)
         ma.driver_name = ma_data.get("driver")
         ma.driver_args = ma_data.get("driver_args", {})
+        ma.auto_connect = ma_data.get("auto_connect", ma.auto_connect)
         ma.clear_alarm_on_connect = ma_data.get(
             "clear_alarm_on_connect", ma.clear_alarm_on_connect
         )
         ma.home_on_start = ma_data.get("home_on_start", ma.home_on_start)
+        ma.single_axis_homing_enabled = ma_data.get(
+            "single_axis_homing_enabled", ma.single_axis_homing_enabled
+        )
 
         dialect_uid = ma_data.get("dialect_uid")
         if not dialect_uid:  # backward compatibility
@@ -851,7 +1029,30 @@ class Machine:
 
         ma.dialect_uid = dialect_uid
         ma.dimensions = tuple(ma_data.get("dimensions", ma.dimensions))
-        ma.y_axis_down = ma_data.get("y_axis_down", ma.y_axis_down)
+        ma.offsets = tuple(ma_data.get("offsets", ma.offsets))
+        origin_value = ma_data.get("origin", None)
+        if origin_value is not None:
+            ma.origin = Origin(origin_value)
+        else:  # Legacy support for y_axis_down
+            ma.origin = (
+                Origin.BOTTOM_LEFT
+                if ma_data.get("y_axis_down", False) is False
+                else Origin.TOP_LEFT
+            )
+
+        # Load new reverse axis settings if they exist
+        ma.reverse_x_axis = ma_data.get("reverse_x_axis", False)
+        ma.reverse_y_axis = ma_data.get("reverse_y_axis", False)
+        ma.reverse_z_axis = ma_data.get("reverse_z_axis", False)
+
+        # Migrate from old "negative" settings if present
+        if "x_axis_negative" in ma_data:
+            logger.info("Migrating legacy 'x_axis_negative' setting.")
+            ma.reverse_x_axis = ma_data["x_axis_negative"]
+        if "y_axis_negative" in ma_data:
+            logger.info("Migrating legacy 'y_axis_negative' setting.")
+            ma.reverse_y_axis = ma_data["y_axis_negative"]
+
         ma.soft_limits_enabled = ma_data.get(
             "soft_limits_enabled", ma.soft_limits_enabled
         )
@@ -886,10 +1087,9 @@ class Machine:
         gcode = ma_data.get("gcode", {})
         ma.gcode_precision = gcode.get("gcode_precision", 3)
 
-        if not is_inert:
-            task_mgr.add_coroutine(
-                ma._rebuild_driver_instance, key=(ma.id, "rebuild-driver")
-            )
+        hours_data = ma_data.get("machine_hours", {})
+        ma.machine_hours = MachineHours.from_dict(hours_data)
+        ma.machine_hours.changed.connect(ma._on_machine_hours_changed)
 
         return ma
 
@@ -914,6 +1114,94 @@ class MachineManager:
         if tasks:
             await asyncio.gather(*tasks)
         logger.info("All machines shut down.")
+
+    def initialize_connections(self):
+        """
+        Initializes machine connections on startup by rebuilding all drivers
+        and then connecting, prioritizing the active machine.
+        """
+        context = get_context()
+        active_machine = context.config.machine
+
+        # Define a lambda to use with add_coroutine that captures the machine
+        def connect_task(m):
+            return lambda ctx: self._rebuild_and_connect_machine(m)
+
+        # First, schedule the task for the active machine
+        if active_machine:
+            task_mgr.add_coroutine(connect_task(active_machine))
+
+        # Then, schedule tasks for the rest
+        for machine in self.machines.values():
+            if machine is not active_machine:
+                task_mgr.add_coroutine(connect_task(machine))
+
+    async def _rebuild_and_connect_machine(self, machine: "Machine"):
+        """
+        A single, sequenced task that rebuilds a machine's driver and then
+        connects if auto_connect is on.
+        """
+        await machine._rebuild_driver_instance()
+        if machine.auto_connect:
+            await self._safe_connect(machine)
+
+    async def _safe_connect(self, machine: "Machine"):
+        """
+        Attempts to connect a machine, suppressing ResourceBusyErrors.
+        """
+        try:
+            await machine.connect()
+        except ResourceBusyError:
+            context = get_context()
+            if machine is context.config.machine:
+                logger.warning(
+                    f"Active machine '{machine.name}' could not connect "
+                    "because resource is busy."
+                )
+            else:
+                logger.debug(
+                    f"Inactive machine '{machine.name}' deferred connection: "
+                    "resource busy."
+                )
+        except Exception as e:
+            logger.error(
+                f"Failed to auto-connect machine '{machine.name}': {e}"
+            )
+
+    def set_active_machine(self, new_machine: Machine):
+        """
+        Sets the active machine, handling the connection lifecycle for
+        shared resources.
+        """
+        context = get_context()
+        old_machine = context.config.machine
+
+        if old_machine and old_machine.id == new_machine.id:
+            return  # No change
+
+        logger.info(f"Switching active machine to '{new_machine.name}'")
+
+        async def switch_routine(ctx):
+            # 1. Disconnect the old machine if it's connected
+            if old_machine and old_machine.is_connected():
+                logger.info(
+                    f"Disconnecting previous machine '{old_machine.name}'"
+                )
+                await old_machine.disconnect()
+                # Add a small delay for the OS to release the port
+                await asyncio.sleep(0.2)
+
+            # 2. Update the global config. This triggers UI updates.
+            context.config.set_machine(new_machine)
+
+            # 3. Connect the new machine if it's set to auto-connect
+            if new_machine.auto_connect:
+                logger.info(
+                    f"Connecting to new active machine '{new_machine.name}'"
+                )
+                await self._safe_connect(new_machine)
+
+        task_mgr.add_coroutine(switch_routine)
 
     def filename_from_id(self, machine_id: str) -> Path:
         return self.base_dir / f"{machine_id}.yaml"

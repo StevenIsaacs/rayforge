@@ -89,6 +89,7 @@ def main():
 
     gi.require_version("Adw", "1")
     from gi.repository import Adw, GLib
+    from rayforge.context import get_context
 
     class App(Adw.Application):
         def __init__(self, args):
@@ -99,7 +100,7 @@ def main():
 
         def do_activate(self):
             # Import the window here to avoid module-level side-effects
-            from rayforge.mainwindow import MainWindow
+            from rayforge.ui_gtk.mainwindow import MainWindow
 
             self.win = MainWindow(application=self)
 
@@ -110,6 +111,11 @@ def main():
                 self.win.connect("map", self._load_initial_files)
 
             self.win.present()
+
+            # Now that the UI is active, trigger the initial machine connections.
+            context = get_context()
+            if context.machine_mgr:
+                context.machine_mgr.initialize_connections()
 
         def _load_initial_files(self, widget):
             """
@@ -212,13 +218,12 @@ def main():
     # making Gtk available in gi, as the canvas uses Gtk.
     # The rest of the app can now check `rayforge.canvas3d.initialized`.
     # It is safe to import other modules that depend on canvas3d after this.
-    from rayforge.workbench import canvas3d
+    from rayforge.ui_gtk import canvas3d
 
     canvas3d.initialize()
 
     # Import modules that depend on GTK or manage global state
     import rayforge.shared.tasker
-    from rayforge.context import get_context
 
     # Initialize the full application context. This creates all managers
     # and sets up the backward-compatibility shim for old code.
@@ -247,6 +252,7 @@ def main():
     # 2. Run the async shutdown on the TaskManager's event loop and wait for it.
     loop = rayforge.shared.tasker.task_mgr.loop
     if loop.is_running():
+        logger.info(f"Running async shutdown on loop {loop}...")
         future = asyncio.run_coroutine_threadsafe(shutdown_async(), loop)
         try:
             # Block until the async cleanup is finished.
@@ -259,16 +265,22 @@ def main():
         )
 
     # 3. Save configuration. This happens AFTER async tasks are done.
+    logger.info("Saving configuration")
     if context.config_mgr:
         context.config_mgr.save()
         logger.info("Saved config.")
+    else:
+        logger.info("No config manager to save.")
 
     # 4. As the final step, clean up the document editor,
     # and shut down the task manager itself.
     # The context shutdown (including artifact store) now happens in the async
     # part above, so we only need to clean up the editor here.
+    logger.info("Cleaning up DocEditor")
     app.win.doc_editor.cleanup()
     logger.info("DocEditor cleaned up.")
+
+    logger.info("Shutting down TaskManager")
     rayforge.shared.tasker.task_mgr.shutdown()
     logger.info("Task manager shut down.")
 

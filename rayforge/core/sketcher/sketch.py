@@ -1,8 +1,10 @@
 import json
 import uuid
 from pathlib import Path
-from typing import Union, List, Optional, Set, Dict, Any, Sequence
+from typing import Union, List, Optional, Set, Dict, Any, Sequence, Tuple
 from blinker import Signal
+from collections import defaultdict
+import math
 from ..geo import Geometry
 from ..varset import VarSet
 from ..asset import IAsset
@@ -20,10 +22,18 @@ from .constraints import (
     TangentConstraint,
     EqualLengthConstraint,
     SymmetryConstraint,
+    CollinearConstraint,
 )
-from .entities import EntityRegistry, Line, Arc, Circle
+from .entities import Line, Arc, Circle, Entity
 from .params import ParameterContext
+from .registry import EntityRegistry
 from .solver import Solver
+
+
+_DEFAULT_VARSET_TITLE = _("Sketch Parameters")
+_DEFAULT_VARSET_DESCRIPTION = _(
+    "Parameters that control this sketch's geometry"
+)
 
 
 _CONSTRAINT_CLASSES = {
@@ -39,7 +49,32 @@ _CONSTRAINT_CLASSES = {
     "TangentConstraint": TangentConstraint,
     "EqualLengthConstraint": EqualLengthConstraint,
     "SymmetryConstraint": SymmetryConstraint,
+    "CollinearConstraint": CollinearConstraint,
 }
+
+
+class Fill:
+    """Represents a filled area bounded by sketch entities."""
+
+    def __init__(self, uid: str, boundary: List[Tuple[int, bool]]):
+        self.uid = uid
+        self.boundary = boundary  # List of (entity_id, is_forward_traversal)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "uid": self.uid,
+            "boundary": [list(item) for item in self.boundary],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Fill":
+        # JSON deserializes tuples as lists. Convert back to tuples so they
+        # are hashable (required for FillTool set operations).
+        boundary = [tuple(item) for item in data["boundary"]]
+        return cls(
+            uid=data.get("uid", str(uuid.uuid4())),
+            boundary=boundary,
+        )
 
 
 class Sketch(IAsset):
@@ -54,14 +89,37 @@ class Sketch(IAsset):
         self.params = ParameterContext()
         self.registry = EntityRegistry()
         self.constraints: List[Constraint] = []
+        self.fills: List[Fill] = []
         self.input_parameters = VarSet(
-            title="Input Parameters",
-            description="Parameters that control this sketch's geometry.",
+            title=_DEFAULT_VARSET_TITLE,
+            description=_DEFAULT_VARSET_DESCRIPTION,
         )
         self.updated = Signal()
 
         # Initialize the Origin Point (Fixed Anchor)
         self.origin_id = self.registry.add_point(0.0, 0.0, fixed=True)
+
+    def notify_update(self):
+        """Public method to signal that the sketch has been modified."""
+        self.updated.send(self)
+
+    def _validate_and_cleanup_fills(self):
+        """
+        Removes any Fill objects whose boundary entities no longer form a
+        valid, closed loop (e.g., if an entity was deleted).
+        """
+        valid_fills = []
+        # Find all currently valid loops to check against
+        current_loops = self._find_all_closed_loops()
+        # For efficient lookup, convert lists to sets of tuples
+        current_loop_sets = {frozenset(loop) for loop in current_loops}
+
+        for fill in self.fills:
+            fill_boundary_set = frozenset(fill.boundary)
+            if fill_boundary_set in current_loop_sets:
+                valid_fills.append(fill)
+
+        self.fills = valid_fills
 
     @property
     def name(self) -> str:
@@ -152,11 +210,12 @@ class Sketch(IAsset):
             "type": self.asset_type_name,
             "name": self.name,
             "input_parameters": self.input_parameters.to_dict(
-                include_value=include_input_values
+                include_value=include_input_values, include_metadata=False
             ),
             "params": self.params.to_dict(),
             "registry": self.registry.to_dict(),
             "constraints": [c.to_dict() for c in self.constraints],
+            "fills": [f.to_dict() for f in self.fills],
             "origin_id": self.origin_id,
         }
 
@@ -179,6 +238,12 @@ class Sketch(IAsset):
             new_sketch.input_parameters = VarSet.from_dict(
                 data["input_parameters"]
             )
+            # Re-apply the default title and description, as they are not
+            # serialized in the file.
+            new_sketch.input_parameters.title = _DEFAULT_VARSET_TITLE
+            new_sketch.input_parameters.description = (
+                _DEFAULT_VARSET_DESCRIPTION
+            )
 
         new_sketch.params = ParameterContext.from_dict(data["params"])
         new_sketch.registry = EntityRegistry.from_dict(data["registry"])
@@ -189,6 +254,10 @@ class Sketch(IAsset):
             c_cls = _CONSTRAINT_CLASSES.get(c_type)
             if c_cls:
                 new_sketch.constraints.append(c_cls.from_dict(c_data))
+
+        new_sketch.fills = []
+        for f_data in data.get("fills", []):
+            new_sketch.fills.append(Fill.from_dict(f_data))
 
         return new_sketch
 
@@ -229,6 +298,339 @@ class Sketch(IAsset):
     ) -> int:
         """Adds a circle defined by a center and a point on its radius."""
         return self.registry.add_circle(center, radius_pt, construction)
+
+    def remove_entities(self, entities_to_remove: List[Entity]):
+        """
+        Removes entities from the sketch and automatically cleans up any
+        dependent fills.
+        """
+        if not entities_to_remove:
+            return
+        ids_to_remove = [e.id for e in entities_to_remove]
+        self.registry.remove_entities_by_id(ids_to_remove)
+        self._validate_and_cleanup_fills()
+
+    def remove_point_if_unused(self, pid: Optional[int]) -> bool:
+        """
+        Removes a point from the registry if it's not part of any entity.
+
+        Args:
+            pid: The point ID to remove. If None, returns False.
+
+        Returns:
+            True if the point was removed, False otherwise.
+        """
+        if pid is None:
+            return False
+        if not self.registry.is_point_used(pid):
+            self.registry.points = [
+                p for p in self.registry.points if p.id != pid
+            ]
+            return True
+        return False
+
+    def _get_edge_tangent_at_start(
+        self, entity: Any, start_pid: int
+    ) -> Tuple[float, float]:
+        """Helper to get the tangent vector for an entity at a given point."""
+        if isinstance(entity, Line):
+            p1 = self.registry.get_point(entity.p1_idx)
+            p2 = self.registry.get_point(entity.p2_idx)
+            if start_pid == p1.id:
+                return (p2.x - p1.x, p2.y - p1.y)
+            else:
+                return (p1.x - p2.x, p1.y - p2.y)
+
+        elif isinstance(entity, Arc):
+            start = self.registry.get_point(entity.start_idx)
+            center = self.registry.get_point(entity.center_idx)
+            if start_pid == start.id:
+                # Traversing forward from the arc's start point
+                # Tangent of circle at P is perp to Radius CP.
+                # If CCW: (-dy, dx). If CW: (dy, -dx).
+                dx, dy = start.x - center.x, start.y - center.y
+                return (dy, -dx) if entity.clockwise else (-dy, dx)
+            else:
+                # Traversing backward from the arc's end point
+                end = self.registry.get_point(entity.end_idx)
+                dx, dy = end.x - center.x, end.y - center.y
+                # Tangent of curve at End is T. Traversal is -T.
+                # T_ccw = (-dy, dx). Traversal = (dy, -dx).
+                # T_cw = (dy, -dx). Traversal = (-dy, dx).
+                return (-dy, dx) if entity.clockwise else (dy, -dx)
+        return (1.0, 0.0)
+
+    def _build_adjacency_list(self) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Builds a map of point_id -> list of outgoing edges.
+        Each edge dict contains: {'to': point_id, 'id': entity_id, 'fwd': bool}
+
+        Coincident points are treated as the same node in the graph, so edges
+        are added for all points in a coincident group.
+        """
+        adj = defaultdict(list)
+
+        # Build a mapping from each point to its coincident group
+        point_to_group = {}
+        for p in self.registry.points:
+            if p.id not in point_to_group:
+                coincident_group = self.get_coincident_points(p.id)
+                for pid in coincident_group:
+                    point_to_group[pid] = coincident_group
+
+        for e in self.registry.entities:
+            # Skip circles in graph traversal (handled separately)
+            if isinstance(e, Circle):
+                continue
+            if isinstance(e, (Line, Arc)):
+                p_ids = e.get_point_ids()
+                # Lines/Arcs have 2 endpoints for traversal
+                p1_id, p2_id = p_ids[0], p_ids[1]
+
+                # Get the coincident groups for both endpoints
+                group1 = point_to_group.get(p1_id, {p1_id})
+                group2 = point_to_group.get(p2_id, {p2_id})
+
+                # Add edges from all points in group1 to all points in group2
+                for src in group1:
+                    for dst in group2:
+                        if src != dst:
+                            adj[src].append(
+                                {"to": dst, "id": e.id, "fwd": True}
+                            )
+
+                # Add edges from all points in group2 to all points in group1
+                for src in group2:
+                    for dst in group1:
+                        if src != dst:
+                            adj[src].append(
+                                {"to": dst, "id": e.id, "fwd": False}
+                            )
+        return adj
+
+    def _sort_edges_by_angle(
+        self, adj: Dict[int, List[Dict[str, Any]]]
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Sorts the outgoing edges at each node by angle (CCW).
+        """
+        sorted_adj = {}
+        for p_id, edges in adj.items():
+            edges_with_angle = []
+            for edge in edges:
+                entity = self.registry.get_entity(edge["id"])
+                if not entity:
+                    continue
+                tangent_vec = self._get_edge_tangent_at_start(entity, p_id)
+                angle = math.atan2(tangent_vec[1], tangent_vec[0])
+                edges_with_angle.append({"angle": angle, **edge})
+
+            # Sort by angle [-pi, pi]
+            edges_with_angle.sort(key=lambda x: x["angle"])
+            sorted_adj[p_id] = edges_with_angle
+        return sorted_adj
+
+    def _get_next_edge_ccw(
+        self,
+        current_p_id: int,
+        incoming_entity_id: int,
+        incoming_fwd: bool,
+        sorted_adj: Dict[int, List[Dict[str, Any]]],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Given an incoming edge to a node, picks the next edge in CCW order
+        (left-most turn) to traverse faces.
+        """
+        outgoing_edges = sorted_adj.get(current_p_id, [])
+        if not outgoing_edges:
+            return None
+
+        # If we arrived via `incoming_entity_id` traveling `incoming_fwd`,
+        # then looking back from the current node, that edge is the reverse.
+        rev_fwd = not incoming_fwd
+
+        try:
+            # Find the edge entry in the current node's list that corresponds
+            # to where we came from.
+            idx = next(
+                i
+                for i, e in enumerate(outgoing_edges)
+                if e["id"] == incoming_entity_id and e["fwd"] == rev_fwd
+            )
+            # Pick the previous edge in the sorted list (CCW rotation)
+            next_idx = (idx - 1) % len(outgoing_edges)
+            return outgoing_edges[next_idx]
+        except StopIteration:
+            return None
+
+    def _calculate_loop_signed_area(
+        self, loop: List[Tuple[int, bool]]
+    ) -> float:
+        """Calculates signed area of the loop using Shoelace formula."""
+        if not loop:
+            return 0.0
+
+        # Special case for circles
+        if len(loop) == 1:
+            entity = self.registry.get_entity(loop[0][0])
+            if isinstance(entity, Circle):
+                center = self.registry.get_point(entity.center_idx)
+                radius_pt = self.registry.get_point(entity.radius_pt_idx)
+                radius = math.hypot(
+                    radius_pt.x - center.x, radius_pt.y - center.y
+                )
+                # By convention, a single circle loop is CCW -> positive area
+                return math.pi * radius**2
+
+        points = []
+        # Calculate polygon area (straight chords)
+        first_ent = self.registry.get_entity(loop[0][0])
+        if not first_ent:
+            return 0.0
+        first_fwd = loop[0][1]
+        p_ids = first_ent.get_point_ids()
+        curr_p_id = p_ids[0] if first_fwd else p_ids[1]
+
+        for eid, fwd in loop:
+            try:
+                pt = self.registry.get_point(curr_p_id)
+                points.append((pt.x, pt.y))
+                ent = self.registry.get_entity(eid)
+                if not ent:
+                    return 0.0
+                p_ids = ent.get_point_ids()
+                curr_p_id = p_ids[1] if curr_p_id == p_ids[0] else p_ids[0]
+            except IndexError:
+                return 0.0
+
+        area = 0.0
+        for i in range(len(points)):
+            p1 = points[i]
+            p2 = points[(i + 1) % len(points)]
+            area += p1[0] * p2[1] - p2[0] * p1[1]
+        area *= 0.5
+
+        # Add contributions from Arcs (area between chord and arc)
+        for eid, fwd in loop:
+            ent = self.registry.get_entity(eid)
+            if isinstance(ent, Arc):
+                # Calculate area of the circular segment
+                start = self.registry.get_point(ent.start_idx)
+                end = self.registry.get_point(ent.end_idx)
+                center = self.registry.get_point(ent.center_idx)
+
+                # Vectors from center
+                r_vec_start = (start.x - center.x, start.y - center.y)
+                r_vec_end = (end.x - center.x, end.y - center.y)
+                radius_sq = r_vec_start[0] ** 2 + r_vec_start[1] ** 2
+
+                # Calculate sweep angle of the arc definition
+                ang_start = math.atan2(r_vec_start[1], r_vec_start[0])
+                ang_end = math.atan2(r_vec_end[1], r_vec_end[0])
+
+                if ent.clockwise:
+                    # CW: Start -> End decreases angle
+                    diff = ang_start - ang_end
+                else:
+                    # CCW: Start -> End increases angle
+                    diff = ang_end - ang_start
+
+                # Normalize to [0, 2pi)
+                while diff < 0:
+                    diff += 2 * math.pi
+                while diff >= 2 * math.pi:
+                    diff -= 2 * math.pi
+
+                # Area of segment = 0.5 * r^2 * (theta - sin(theta))
+                # This area is always positive.
+                seg_area = 0.5 * radius_sq * (diff - math.sin(diff))
+
+                # Determine sign contribution to the loop area (assumed
+                # CCW positive).
+                # If Arc is CCW and we traverse Fwd: Left turn. Add.
+                # If Arc is CW and we traverse Fwd: Right turn. Subtract.
+                # If Arc is CCW and we traverse Rev: Right turn. Subtract.
+                # If Arc is CW and we traverse Rev: Left turn. Add.
+
+                is_ccw_arc = not ent.clockwise
+                is_left_turn = is_ccw_arc == fwd
+
+                if is_left_turn:
+                    area += seg_area
+                else:
+                    area -= seg_area
+
+        return area
+
+    def _find_all_closed_loops(self) -> List[List[Tuple[int, bool]]]:
+        """
+        Finds all closed loops (faces) in the sketch graph.
+        """
+        adj = self._build_adjacency_list()
+        sorted_adj = self._sort_edges_by_angle(adj)
+
+        loops = []
+        visited_half_edges: Set[Tuple[int, int, bool]] = set()
+
+        for p_start, edges in sorted_adj.items():
+            for start_edge in edges:
+                half_edge_key = (p_start, start_edge["id"], start_edge["fwd"])
+                if half_edge_key in visited_half_edges:
+                    continue
+
+                loop: List[Tuple[int, bool]] = []
+                loop_half_edges: List[Tuple[int, int, bool]] = []
+                curr_p = p_start
+                curr_edge = start_edge
+
+                for _ in range(len(self.registry.entities) + 1):
+                    current_half_edge = (
+                        curr_p,
+                        curr_edge["id"],
+                        curr_edge["fwd"],
+                    )
+                    if current_half_edge in visited_half_edges:
+                        loop = []
+                        break
+
+                    loop.append((curr_edge["id"], curr_edge["fwd"]))
+                    loop_half_edges.append(current_half_edge)
+
+                    next_p = curr_edge["to"]
+
+                    next_edge_info = self._get_next_edge_ccw(
+                        next_p, curr_edge["id"], curr_edge["fwd"], sorted_adj
+                    )
+
+                    if not next_edge_info:
+                        loop = []
+                        break
+
+                    next_key = (
+                        next_p,
+                        next_edge_info["id"],
+                        next_edge_info["fwd"],
+                    )
+                    if next_key == half_edge_key:
+                        break  # Loop closed
+
+                    curr_p = next_p
+                    curr_edge = next_edge_info
+                else:
+                    loop = []  # Loop did not close
+
+                if loop:
+                    if self._calculate_loop_signed_area(loop) > 1e-6:
+                        loops.append(loop)
+                        # Mark all half-edges from the valid loop as visited
+                        visited_half_edges.update(loop_half_edges)
+
+        # Add circles as single-entity loops
+        for e in self.registry.entities:
+            if isinstance(e, Circle):
+                loops.append([(e.id, True)])
+
+        return loops
 
     # --- Validation ---
 
@@ -539,31 +941,34 @@ class Sketch(IAsset):
         """
         success = False
         try:
-            # Step 1: Build the evaluation context with correct precedence.
-            # a) Start with legacy parameters.
-            ctx = {}
-            if self.params:
-                ctx.update(self.params.get_all_values())
+            # Step 1: Create a disposable ParameterContext clone for this
+            # solve.
+            solve_params = ParameterContext.from_dict(self.params.to_dict())
 
-            # b) Add/overwrite with values from the new VarSet system.
-            if self.input_parameters is not None:
-                ctx.update(self.input_parameters.get_values())
-
-            # c) Add/overwrite with runtime overrides (highest precedence).
+            # Step 2: Build the seed dictionary, starting with defaults from
+            # the VarSet, then applying instance-specific overrides.
+            initial_values = {}
+            if self.input_parameters:
+                initial_values.update(self.input_parameters.get_values())
             if variable_overrides:
-                ctx.update(variable_overrides)
+                initial_values.update(variable_overrides)
 
-            # Step 2: Update constraints with the final context.
+            # Step 3: Evaluate all expressions from scratch using the temporary
+            # context, seeded with the combined values.
+            solve_params.evaluate_all(initial_values=initial_values)
+            ctx = solve_params.get_all_values()
+
+            # Step 4: Update constraints with the final, resolved values.
             all_constraints = self.constraints
             if extra_constraints:
                 all_constraints = self.constraints + extra_constraints
-
             for c in all_constraints:
                 if hasattr(c, "update_from_context"):
                     c.update_from_context(ctx)
 
-            # Step 3: Run the solver.
-            solver = Solver(self.registry, self.params, all_constraints)
+            # Step 5: Run the solver with the disposable, correctly evaluated
+            # context.
+            solver = Solver(self.registry, solve_params, all_constraints)
             success = solver.solve(update_dof=update_constraint_status)
 
         except Exception as e:
@@ -633,3 +1038,119 @@ class Sketch(IAsset):
                 geo.arc_to(radius_pt.x, radius_pt.y, i2, j2, clockwise=False)
 
         return geo
+
+    def get_fill_geometries(self) -> List[Geometry]:
+        """
+        Generates Geometry objects for all defined fills.
+        Each geometry object represents a single closed filled region.
+        """
+        fill_geometries = []
+        for fill in self.fills:
+            if not fill.boundary:
+                continue
+
+            geo = Geometry()
+
+            # Case 1: Single entity loop (Circle)
+            if len(fill.boundary) == 1:
+                eid, _ = fill.boundary[0]
+                entity = self.registry.get_entity(eid)
+                if isinstance(entity, Circle):
+                    center = self.registry.get_point(entity.center_idx)
+                    radius_pt = self.registry.get_point(entity.radius_pt_idx)
+
+                    # Draw as two semi-circles to form a closed loop
+                    dx = radius_pt.x - center.x
+                    dy = radius_pt.y - center.y
+
+                    # Start at radius point
+                    geo.move_to(radius_pt.x, radius_pt.y)
+
+                    # To opposite point
+                    opposite_x = center.x - dx
+                    opposite_y = center.y - dy
+
+                    # Offset from start (radius_pt) to center is (-dx, -dy)
+                    geo.arc_to(
+                        opposite_x, opposite_y, -dx, -dy, clockwise=False
+                    )
+
+                    # Back to start. Offset from opposite to center is (dx, dy)
+                    geo.arc_to(
+                        radius_pt.x, radius_pt.y, dx, dy, clockwise=False
+                    )
+
+                    fill_geometries.append(geo)
+                continue
+
+            # Case 2: Multi-segment loop
+            try:
+                # 1. Start point
+                first_eid, first_fwd = fill.boundary[0]
+                first_ent = self.registry.get_entity(first_eid)
+                if not first_ent:
+                    continue
+
+                p_ids = first_ent.get_point_ids()
+                # If forward: Start -> End. Start is p_ids[0].
+                # If backward: End -> Start. Start is p_ids[1].
+                start_pid = p_ids[0] if first_fwd else p_ids[1]
+                start_pt = self.registry.get_point(start_pid)
+
+                geo.move_to(start_pt.x, start_pt.y)
+
+                valid_loop = True
+
+                for eid, fwd in fill.boundary:
+                    entity = self.registry.get_entity(eid)
+                    if not entity:
+                        valid_loop = False
+                        break
+
+                    if isinstance(entity, Line):
+                        p_ids = entity.get_point_ids()
+                        # If fwd, end is p2 (index 1).
+                        # If back, end is p1 (index 0).
+                        end_pid = p_ids[1] if fwd else p_ids[0]
+                        end_pt = self.registry.get_point(end_pid)
+                        geo.line_to(end_pt.x, end_pt.y)
+
+                    elif isinstance(entity, Arc):
+                        arc_start_pt = self.registry.get_point(
+                            entity.start_idx
+                        )
+                        arc_end_pt = self.registry.get_point(entity.end_idx)
+                        center_pt = self.registry.get_point(entity.center_idx)
+
+                        # Target point of this segment
+                        target_pt = arc_end_pt if fwd else arc_start_pt
+
+                        # Current point (start of this segment)
+                        current_pt = arc_start_pt if fwd else arc_end_pt
+
+                        # Center offset relative to current point
+                        offset_x = center_pt.x - current_pt.x
+                        offset_y = center_pt.y - current_pt.y
+
+                        # Determine direction for geometry
+                        # If traversing fwd (S->E), use entity direction.
+                        # If traversing back (E->S), invert entity direction.
+                        is_cw = (
+                            entity.clockwise if fwd else not entity.clockwise
+                        )
+
+                        geo.arc_to(
+                            target_pt.x,
+                            target_pt.y,
+                            offset_x,
+                            offset_y,
+                            clockwise=is_cw,
+                        )
+
+                if valid_loop:
+                    fill_geometries.append(geo)
+
+            except (IndexError, AttributeError):
+                continue
+
+        return fill_geometries

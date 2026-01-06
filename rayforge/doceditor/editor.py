@@ -8,28 +8,29 @@ from blinker import Signal
 from ..core.doc import Doc
 from ..core.layer import Layer
 from ..core.vectorization_spec import VectorizationSpec
-from ..pipeline.pipeline import Pipeline
 from ..machine.cmd import MachineCmd
 from ..pipeline.artifact import JobArtifactHandle, JobArtifact
+from ..pipeline.pipeline import Pipeline
 from .asset_cmd import AssetCmd
 from .edit_cmd import EditCmd
-from .split_cmd import SplitCmd
 from .file_cmd import FileCmd
 from .group_cmd import GroupCmd
 from .layer_cmd import LayerCmd
 from .layout_cmd import LayoutCmd
 from .material_test_cmd import MaterialTestCmd
-from .stock_cmd import StockCmd
+from .sketch_cmd import SketchCmd
+from .split_cmd import SplitCmd
 from .step_cmd import StepCmd
+from .stock_cmd import StockCmd
 from .tab_cmd import TabCmd
 from .transform_cmd import TransformCmd
 
 if TYPE_CHECKING:
-    from ..undo import HistoryManager
-    from ..shared.tasker.manager import TaskManager
     from ..context import RayforgeContext
-    from ..core.workpiece import WorkPiece
+    from ..core.undo import HistoryManager
     from ..core.tab import Tab
+    from ..core.workpiece import WorkPiece
+    from ..shared.tasker.manager import TaskManager
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,7 @@ class DocEditor:
         self.layer = LayerCmd(self)
         self.layout = LayoutCmd(self, self.task_manager)
         self.material_test = MaterialTestCmd(self)
+        self.sketch = SketchCmd(self)
         self.split = SplitCmd(self)
         self.stock = StockCmd(self)
         self.step = StepCmd(self)
