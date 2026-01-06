@@ -5,14 +5,14 @@ from typing import TYPE_CHECKING, List, Tuple, Optional
 from copy import deepcopy
 from dataclasses import replace
 
-from ..core.tab import Tab
-from ..core.geo import (
-    Geometry,
-    LineToCommand,
-    ArcToCommand,
-    MoveToCommand,
+from ..core.geo import Geometry
+from ..core.geo.constants import (
+    CMD_TYPE_MOVE,
+    CMD_TYPE_LINE,
+    CMD_TYPE_ARC,
 )
-from ..undo import Command
+from ..core.tab import Tab
+from ..core.undo import Command
 from ..core.workpiece import WorkPiece
 
 if TYPE_CHECKING:
@@ -68,7 +68,7 @@ class TabCmd:
         self, geometry: Geometry, count: int, width: float
     ) -> List[Tab]:
         """Calculates positions for a number of equally spaced tabs."""
-        if not geometry.commands or count <= 0:
+        if count <= 0:
             return []
 
         # 1. Calculate total perimeter and individual segment lengths
@@ -76,30 +76,31 @@ class TabCmd:
         segment_lengths: List[Tuple[int, float]] = []
         last_point = (0.0, 0.0, 0.0)
 
-        for i, cmd in enumerate(geometry.commands):
+        for segment_idx, (cmd_type, x, y, z, i, j, cw) in enumerate(
+            geometry.iter_commands()
+        ):
+            end_point = (x, y, z)
+
             # MoveTo just updates the pen position for the next drawable
             # command. It has no length and cannot contain a tab.
-            if isinstance(cmd, MoveToCommand):
-                if cmd.end:
-                    last_point = cmd.end
+            if cmd_type == CMD_TYPE_MOVE:
+                last_point = end_point
                 continue
 
-            # Only process drawable commands (LineTo, ArcTo)
-            if (
-                not isinstance(cmd, (LineToCommand, ArcToCommand))
-                or cmd.end is None
-            ):
+            if cmd_type not in (CMD_TYPE_LINE, CMD_TYPE_ARC):
                 continue
 
             length = 0.0
-            if isinstance(cmd, LineToCommand):
-                length = math.dist(last_point[:2], cmd.end[:2])
-            elif isinstance(cmd, ArcToCommand):
-                # Use analytical arc length for accuracy.
+            if cmd_type == CMD_TYPE_LINE:
+                length = math.dist(last_point[:2], end_point[:2])
+            elif cmd_type == CMD_TYPE_ARC:
+                center_offset = (i, j)
+                clockwise = bool(cw)
+
                 p0 = last_point
                 center = (
-                    p0[0] + cmd.center_offset[0],
-                    p0[1] + cmd.center_offset[1],
+                    p0[0] + center_offset[0],
+                    p0[1] + center_offset[1],
                 )
                 radius = math.dist(p0[:2], center)
                 if radius > 1e-9:
@@ -107,10 +108,10 @@ class TabCmd:
                         p0[1] - center[1], p0[0] - center[0]
                     )
                     end_angle = math.atan2(
-                        cmd.end[1] - center[1], cmd.end[0] - center[0]
+                        end_point[1] - center[1], end_point[0] - center[0]
                     )
                     angle_range = end_angle - start_angle
-                    if cmd.clockwise:
+                    if clockwise:
                         if angle_range > 0:
                             angle_range -= 2 * math.pi
                     else:
@@ -118,14 +119,14 @@ class TabCmd:
                             angle_range += 2 * math.pi
                     length = radius * abs(angle_range)
                 else:
-                    length = math.dist(last_point[:2], cmd.end[:2])
+                    length = math.dist(last_point[:2], end_point[:2])
 
             if length > 1e-6:
-                segment_lengths.append((i, length))
+                segment_lengths.append((segment_idx, length))
                 total_length += length
 
             # Update last_point for the next segment
-            last_point = cmd.end
+            last_point = end_point
 
         if total_length == 0:
             return []
@@ -155,7 +156,7 @@ class TabCmd:
         self, geometry: Geometry, width: float
     ) -> List[Tab]:
         """Calculates positions for 4 tabs at the cardinal points."""
-        if not geometry.commands:
+        if geometry.is_empty():
             return []
 
         # 1. Get bounding box of the geometry
@@ -325,7 +326,7 @@ class TabCmd:
         workpiece.tabs_enabled = enabled
 
         # This is a simple property change, so we can use a generic command
-        from ..undo import ChangePropertyCommand
+        from ..core.undo import ChangePropertyCommand
 
         cmd = ChangePropertyCommand(
             target=workpiece,

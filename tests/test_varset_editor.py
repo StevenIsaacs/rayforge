@@ -19,8 +19,9 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gtk, GLib
 import time
 
+from rayforge.core.undo import HistoryManager
 from rayforge.core.varset import VarSet, IntVar, FloatVar
-from rayforge.shared.ui.varset_editor import (
+from rayforge.ui_gtk.varset.varset_editor import (
     VarSetEditorWidget,
     VarDefinitionRowWidget,
 )
@@ -53,7 +54,8 @@ def editor_widget_in_window(ui_context_initializer, var_set):
     Adw.Window for testing.
     """
     window = Adw.Window()
-    editor = VarSetEditorWidget()
+    undo_manager = HistoryManager()
+    editor = VarSetEditorWidget(undo_manager=undo_manager)
     editor.populate(var_set)
 
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)

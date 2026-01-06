@@ -24,6 +24,7 @@ def mock_serial_transport(mocker):
     mock.send = AsyncMock()
     mock.received = MagicMock()
     mock.status_changed = MagicMock()
+    mock.port = "/dev/ttyUSB0"
     return mock
 
 
@@ -107,7 +108,7 @@ class TestGrblSerialDriver:
 
         await driver.cleanup()
         await asyncio.sleep(0.01)
-        assert driver._connection_task.cancelled()
+        assert driver._connection_task is None
 
     @pytest.mark.asyncio
     async def test_status_report_parsing(

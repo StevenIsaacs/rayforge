@@ -68,6 +68,7 @@ class WorkPiece(DocItem):
         super().__init__(name=name)
         self._source_segment = source_segment
         self._boundaries_cache: Optional[Geometry] = None
+        self._fills_cache: Optional[List[Geometry]] = None
 
         # Natural (untransformed) dimensions of the workpiece content.
         self.natural_width_mm: float = 0.0
@@ -92,6 +93,10 @@ class WorkPiece(DocItem):
         self.sketch_uid: Optional[str] = None
         self._sketch_params: Dict[str, Any] = {}
         self._transient_sketch_definition: Optional["Sketch"] = None
+
+        # For sketches and other workpieces without a source_segment,
+        # we store the UID of the SourceAsset to track the source file.
+        self.source_asset_uid: Optional[str] = None
 
         self._tabs: List[Tab] = []
         self._tabs_enabled: bool = True
@@ -131,12 +136,14 @@ class WorkPiece(DocItem):
         # 1. Solve a transient copy to determine natural size without side
         # effects.
         geometry = None
+        fill_geometries = []
         min_x, min_y = 0.0, 0.0
 
         try:
             temp_sketch = Sketch.from_dict(sketch.to_dict())
             temp_sketch.solve()
             geometry = temp_sketch.to_geometry()
+            fill_geometries = temp_sketch.get_fill_geometries()
 
             if not geometry.is_empty():
                 min_x, min_y, max_x, max_y = geometry.rect()
@@ -153,6 +160,7 @@ class WorkPiece(DocItem):
             from .geo import Geometry
 
             geometry = Geometry()
+            fill_geometries = []
 
         # 2. Create the instance
         instance = cls(name=sketch.name or "Sketch")
@@ -164,17 +172,20 @@ class WorkPiece(DocItem):
         if width > 1e-6 and height > 1e-6:
             instance.set_size(width, height)
 
-        # 4. Pre-populate boundaries cache to avoid immediate re-solve on
-        # first render. We perform the same normalization here that the
-        # boundaries property does.
+        # 4. Pre-populate caches to avoid immediate re-solve on first render.
+        # We perform the same normalization here that the boundaries property
+        # does.
         if geometry and not geometry.is_empty():
             norm_matrix = Matrix.scale(
                 1.0 / width, 1.0 / height
             ) @ Matrix.translation(-min_x, -min_y)
             geometry.transform(norm_matrix.to_4x4_numpy())
+            for fill_geo in fill_geometries:
+                fill_geo.transform(norm_matrix.to_4x4_numpy())
 
-        # Cache the result (even if empty) to ensure fast rendering
+        # Cache the results (even if empty) to ensure fast rendering
         instance._boundaries_cache = geometry
+        instance._fills_cache = fill_geometries
 
         return instance
 
@@ -221,9 +232,8 @@ class WorkPiece(DocItem):
             f"WP {self.uid[:8]}: Clearing all caches (render and boundaries)."
         )
         self._render_cache.clear()
-        self._boundaries_cache = (
-            None  # Also clear the boundaries cache on update
-        )
+        self._boundaries_cache = None
+        self._fills_cache = None
 
     @property
     def source(self) -> "Optional[SourceAsset]":
@@ -277,9 +287,21 @@ class WorkPiece(DocItem):
 
     @property
     def source_file(self) -> Optional[Path]:
-        """Retrieves the source file path from the linked SourceAsset."""
+        """
+        Retrieves the source file path from the linked SourceAsset.
+
+        For workpieces with a source_segment, this retrieves the source file
+        from the segment's SourceAsset. For sketches and other workpieces
+        without a source_segment, this retrieves the source file from the
+        directly linked SourceAsset via source_asset_uid.
+        """
         source = self.source
-        return source.source_file if source else None
+        if source:
+            return source.source_file
+        if self.source_asset_uid and self.doc:
+            asset = self.doc.get_source_asset_by_uid(self.source_asset_uid)
+            return asset.source_file if asset else None
+        return None
 
     @property
     def _active_renderer(self) -> "Optional[Renderer]":
@@ -339,32 +361,55 @@ class WorkPiece(DocItem):
             from .sketcher.sketch import Sketch
 
             instance_sketch = Sketch.from_dict(sketch_def.to_dict())
-            for key, val in self.sketch_params.items():
-                if key in instance_sketch.input_parameters.keys():
-                    try:
-                        instance_sketch.input_parameters[key] = val
-                    except Exception:
-                        pass
 
-            instance_sketch.solve()
+            # Solve the sketch clone with this instance's specific parameter
+            # overrides to generate the correct, unnormalized geometry.
+            logger.debug(
+                f"WP {self.uid[:8]}: Solving clone for boundaries with "
+                f"overrides: {self.sketch_params}"
+            )
+            instance_sketch.solve(variable_overrides=self.sketch_params)
             unnormalized_geo = instance_sketch.to_geometry()
+            # Also get fill geometries from the same solved state.
+            unnormalized_fills = instance_sketch.get_fill_geometries()
 
             # Cache the geometry even if it is empty, to prevent
             # re-solving on every render frame.
             if unnormalized_geo.is_empty():
                 self._boundaries_cache = unnormalized_geo
+                self._fills_cache = unnormalized_fills
                 return self._boundaries_cache
 
-            # Normalize the solved geometry to a 0-1 box (Y-Up)
+            # Normalize the solved geometry to a 0-1 box (Y-Up) based on
+            # the boundaries (strokes).
             min_x, min_y, max_x, max_y = unnormalized_geo.rect()
             width = max(max_x - min_x, 1e-9)
             height = max(max_y - min_y, 1e-9)
+
+            # Detect natural size change and update metadata
+            old_w = self.natural_width_mm
+            old_h = self.natural_height_mm
+
+            if abs(width - old_w) > 1e-5 or abs(height - old_h) > 1e-5:
+                # Update natural dimensions to match the actual geometry.
+                self.natural_width_mm = width
+                self.natural_height_mm = height
+                logger.debug(
+                    f"WP {self.uid[:8]}: Natural size changed to "
+                    f"{width:.2f}x{height:.2f}"
+                )
+
             norm_matrix = Matrix.scale(
                 1.0 / width, 1.0 / height
             ) @ Matrix.translation(-min_x, -min_y)
+
+            # Apply same normalization to both strokes and fills
             unnormalized_geo.transform(norm_matrix.to_4x4_numpy())
+            for fill_geo in unnormalized_fills:
+                fill_geo.transform(norm_matrix.to_4x4_numpy())
 
             self._boundaries_cache = unnormalized_geo
+            self._fills_cache = unnormalized_fills
             return self._boundaries_cache
 
         # --- SourceAssetSegment-based Geometry (legacy/other formats) ---
@@ -480,6 +525,7 @@ class WorkPiece(DocItem):
         world_wp.tabs_enabled = self.tabs_enabled
         world_wp.sketch_uid = self.sketch_uid
         world_wp.sketch_params = deepcopy(self._sketch_params)
+        world_wp.source_asset_uid = self.source_asset_uid
 
         # Ensure any edited boundaries are carried over.
         if self._edited_boundaries:
@@ -646,10 +692,19 @@ class WorkPiece(DocItem):
         kwargs = {}
         renderer_name = renderer.__class__.__name__
 
-        if renderer_name in ("OpsRenderer", "DxfRenderer", "SketchRenderer"):
+        # For OpsRenderer, only pass boundaries (strokes).
+        if renderer_name == "OpsRenderer":
             kwargs["boundaries"] = self.boundaries
 
+        # For SketchRenderer, pass boundaries AND fills. The call to
+        # self.boundaries ensures the fills cache is populated.
+        if renderer_name == "SketchRenderer":
+            kwargs["boundaries"] = self.boundaries
+            if self._fills_cache:
+                kwargs["fills"] = self._fills_cache
+
         if renderer_name == "DxfRenderer":
+            kwargs["boundaries"] = self.boundaries
             kwargs["source_metadata"] = metadata
             kwargs["workpiece_matrix"] = self.matrix
 
@@ -822,6 +877,7 @@ class WorkPiece(DocItem):
             ),
             "sketch_uid": self.sketch_uid,
             "sketch_params": self._sketch_params,
+            "source_asset_uid": self.source_asset_uid,
         }
         # Include hydrated data for subprocesses
         if self._data is not None:
@@ -873,6 +929,7 @@ class WorkPiece(DocItem):
 
         wp.sketch_uid = data.get("sketch_uid")
         wp._sketch_params = data.get("sketch_params", {})
+        wp.source_asset_uid = data.get("source_asset_uid")
 
         # Hydrate with transient data if provided for subprocesses
         if "data" in data:
@@ -914,6 +971,7 @@ class WorkPiece(DocItem):
         if self._sketch_params != new_params:
             self._sketch_params = new_params
             if self.sketch_uid:
+                # Regenerate the internal geometry and natural size
                 self.regenerate_from_sketch()
 
     def natural_sizes(self) -> Optional[Tuple[float, float]]:
@@ -1187,9 +1245,7 @@ class WorkPiece(DocItem):
         Gets the workpiece's anchor position in the machine's native
         coordinate system.
         """
-        current_pos = self.pos
-        current_size = self.size
-        if current_pos is None or current_size is None:
+        if not self.pos or not self.size:
             return None
 
         context = get_context()
@@ -1197,16 +1253,21 @@ class WorkPiece(DocItem):
             return None
 
         machine = context.machine
-        model_x, model_y = current_pos  # Canonical: Y-up, bottom-left
+        model_x, model_y = self.pos
+        width, height = self.size
+        mach_w, mach_h = machine.dimensions
 
-        if machine.y_axis_down:
-            # Convert to machine: Y-down, top-left
-            machine_height = machine.dimensions[1]
-            machine_y = machine_height - model_y - current_size[1]
-            return model_x, machine_y
-        else:
-            # Machine is Y-up, same as model
-            return current_pos
+        # Calculate Machine X
+        machine_x = (
+            (mach_w - model_x - width) if machine.x_axis_right else model_x
+        )
+
+        # Calculate Machine Y
+        machine_y = (
+            (mach_h - model_y - height) if machine.y_axis_down else model_y
+        )
+
+        return machine_x, machine_y
 
     @pos_machine.setter
     def pos_machine(self, pos: Tuple[float, float]):
@@ -1214,8 +1275,7 @@ class WorkPiece(DocItem):
         Sets the workpiece's position from the machine's native
         coordinate system.
         """
-        current_size = self.size
-        if pos is None or current_size is None:
+        if not pos or not self.size:
             return
 
         context = get_context()
@@ -1224,19 +1284,22 @@ class WorkPiece(DocItem):
 
         machine = context.machine
         machine_x, machine_y = pos
-        model_pos = (0.0, 0.0)
+        width, height = self.size
+        mach_w, mach_h = machine.dimensions
 
-        if machine.y_axis_down:
-            # Convert from machine (Y-down, top-left) to
-            # model (Y-up, bottom-left)
-            machine_height = machine.dimensions[1]
-            model_y = machine_height - machine_y - current_size[1]
-            model_pos = machine_x, model_y
+        # Handle X Axis
+        if machine.x_axis_right:
+            model_x = mach_w - machine_x - width
         else:
-            # Machine is Y-up, same as model
-            model_pos = machine_x, machine_y
+            model_x = machine_x
 
-        self.pos = model_pos
+        # Handle Y Axis
+        if machine.y_axis_down:
+            model_y = mach_h - machine_y - height
+        else:
+            model_y = machine_y
+
+        self.pos = (model_x, model_y)
 
     def apply_split(self, fragments: List[Geometry]) -> List["WorkPiece"]:
         """
@@ -1255,8 +1318,8 @@ class WorkPiece(DocItem):
         Returns:
             A list of new WorkPiece instances.
         """
-        if len(fragments) <= 1:
-            return [self]
+        if not fragments or len(fragments) <= 1:
+            return []
 
         new_workpieces = []
         original_matrix = self.matrix
@@ -1323,12 +1386,12 @@ class WorkPiece(DocItem):
         Regenerates the workpiece from its sketch definition.
 
         This method:
-        1. Fetches the Sketch definition using self.sketch_uid
-        2. Solves a CLONE of the sketch (to match boundaries behavior)
-        3. Calculates the natural size from the solved geometry's bounding box
-        4. Updates self.natural_width_mm and self.natural_height_mm
-        5. Invalidates the geometry cache
-        6. Sends an updated signal
+        1. Fetches and clones the sketch definition.
+        2. Solves the clone with instance-specific parameter overrides.
+        3. Calculates the new natural size from the solved geometry.
+        4. Updates the instance's `natural_width/height_mm`.
+        5. It resizes the on-canvas item.
+        6. Invalidates caches and signals the UI to redraw.
         """
         if not self.sketch_uid:
             logger.warning(
@@ -1355,8 +1418,14 @@ class WorkPiece(DocItem):
 
         instance_sketch = Sketch.from_dict(sketch_def.to_dict())
 
-        # Solve the sketch with current parameter overrides
-        success = instance_sketch.solve(variable_overrides=self.sketch_params)
+        # Solve the sketch with current parameter overrides.
+        variable_overrides = self.sketch_params or {}
+        logger.debug(
+            f"WP {self.uid[:8]}: Solving clone with overrides: "
+            f"{variable_overrides}"
+        )
+        success = instance_sketch.solve(variable_overrides=variable_overrides)
+
         if not success:
             logger.warning(
                 f"WP {self.uid[:8]}: Sketch solve failed during regeneration"
@@ -1383,6 +1452,8 @@ class WorkPiece(DocItem):
                 f"WP {self.uid[:8]}: New natural size: "
                 f"{width:.2f}x{height:.2f}mm"
             )
+            # Update the workpiece's actual size to match its new natural size.
+            self.set_size(width, height)
 
         # Invalidate the geometry cache to force regeneration on next render
         self.clear_render_cache()

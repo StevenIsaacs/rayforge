@@ -66,7 +66,7 @@ class GrblSerialDriver(Driver):
         self._cmd_lock = asyncio.Lock()
         self._command_queue: asyncio.Queue[CommandRequest] = asyncio.Queue()
         self._command_task: Optional[asyncio.Task] = None
-        self._status_buffer = ""
+        self._status_buffer = bytearray()
         self._is_cancelled = False
         self._job_running = False
         self._on_command_done: Optional[
@@ -81,6 +81,12 @@ class GrblSerialDriver(Driver):
         )
         self._buffer_has_space = asyncio.Event()
         self._job_exception: Optional[Exception] = None
+
+    @property
+    def resource_uri(self) -> Optional[str]:
+        if self.serial_transport and self.serial_transport.port:
+            return f"serial://{self.serial_transport.port}"
+        return None
 
     @classmethod
     def precheck(cls, **kwargs: Any) -> None:
@@ -155,10 +161,32 @@ class GrblSerialDriver(Driver):
         self._on_command_done = None
         self._rx_buffer_count = 0
         self._job_exception = None
+
+        # Cancel tasks and wait for them to ensure loops terminate
         if self._connection_task:
             self._connection_task.cancel()
+            try:
+                await self._connection_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(
+                    f"Ignored exception in connection task during cleanup: {e}"
+                )
+            self._connection_task = None
+
         if self._command_task:
             self._command_task.cancel()
+            try:
+                await self._command_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(
+                    f"Ignored exception in command task during cleanup: {e}"
+                )
+            self._command_task = None
+
         if self.serial_transport:
             self.serial_transport.received.disconnect(
                 self.on_serial_data_received
@@ -166,6 +194,10 @@ class GrblSerialDriver(Driver):
             self.serial_transport.status_changed.disconnect(
                 self.on_serial_status_changed
             )
+            # Close the serial port to prevent duplicate readers/writers
+            if self.serial_transport.is_connected:
+                await self.serial_transport.disconnect()
+
         await super().cleanup()
         logger.debug("GrblNextSerialDriver cleanup completed.")
 
@@ -184,11 +216,40 @@ class GrblSerialDriver(Driver):
         )
         await self.serial_transport.send(payload)
 
-    async def connect(self):
+    async def _connect_implementation(self):
         """
         Launches the connection loop as a background task and returns,
         allowing the UI to remain responsive.
         """
+        # Defensive cleanup of existing tasks
+        if self._connection_task and not self._connection_task.done():
+            logger.warning(
+                "Connect called with active connection task. Cleaning up."
+            )
+            self._connection_task.cancel()
+            try:
+                await self._connection_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._command_task and not self._command_task.done():
+            self._command_task.cancel()
+            try:
+                await self._command_task
+            except asyncio.CancelledError:
+                pass
+
+        # Check if setup was successful (serial_transport exists)
+        if not self.serial_transport:
+            logger.error(
+                "Cannot connect: Serial transport not initialized "
+                "(check port settings)."
+            )
+            self._update_connection_status(
+                TransportStatus.ERROR, _("Port not configured")
+            )
+            return
+
         logger.debug("GrblNextSerialDriver connect initiated.")
         self.keep_running = True
         self._is_cancelled = False
@@ -208,10 +269,11 @@ class GrblSerialDriver(Driver):
             self._update_connection_status(TransportStatus.CONNECTING)
             logger.debug("Attempting connection…")
 
-            transport = self.serial_transport
-            assert transport, "Transport not initialized"
-
             try:
+                transport = self.serial_transport
+                if not transport:
+                    raise DriverSetupError("Transport not initialized")
+
                 await transport.connect()
                 logger.info("Connection established successfully.")
                 self._update_connection_status(TransportStatus.CONNECTED)
@@ -258,9 +320,12 @@ class GrblSerialDriver(Driver):
                 logger.error(f"Unexpected error in connection loop: {e}")
                 self._update_connection_status(TransportStatus.ERROR, str(e))
             finally:
-                if transport and transport.is_connected:
+                if (
+                    self.serial_transport
+                    and self.serial_transport.is_connected
+                ):
                     logger.debug("Disconnecting transport in finally block")
-                    await transport.disconnect()
+                    await self.serial_transport.disconnect()
 
             if not self.keep_running:
                 break
@@ -421,9 +486,14 @@ class GrblSerialDriver(Driver):
                             "data": command_bytes,
                         },
                     )
-                    await self.serial_transport.send(command_bytes)
+
+                    # Add to queue BEFORE sending.
+                    # Fast machines can reply with 'ok' before await send()
+                    # returns. If we queue after sending, the RX handler finds
+                    # an empty queue and drops the 'ok', causing a deadlock.
                     self._rx_buffer_count += command_len
-                    await self._sent_gcode_queue.put((command_len, op_index))
+                    self._sent_gcode_queue.put_nowait((command_len, op_index))
+                    await self.serial_transport.send(command_bytes)
 
             # Wait for all sent commands to be acknowledged
             if not self._is_cancelled and not self._job_exception:
@@ -527,7 +597,19 @@ class GrblSerialDriver(Driver):
         self._is_cancelled = False
         request = CommandRequest(command)
         await self._command_queue.put(request)
-        await asyncio.wait_for(request.finished.wait(), timeout=10.0)
+        try:
+            await asyncio.wait_for(request.finished.wait(), timeout=10.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            # If the wait times out or is cancelled, we MUST ensure the
+            # finished event is set. Otherwise, the _process_command_queue
+            # background task will hang forever awaiting this request, holding
+            # the lock and preventing any future commands from running.
+            logger.warning(
+                f"Command '{command}' timed out or was cancelled. "
+                "Unblocking queue."
+            )
+            request.finished.set()
+            raise
         return request.response_lines
 
     async def set_hold(self, hold: bool = True) -> None:
@@ -677,6 +759,8 @@ class GrblSerialDriver(Driver):
         self.settings_read.send(self, settings=result)
 
     async def write_setting(self, key: str, value: Any) -> None:
+        if isinstance(value, bool):
+            value = 1 if value else 0
         cmd = f"${key}={value}"
         await self._execute_command(cmd)
 
@@ -689,19 +773,22 @@ class GrblSerialDriver(Driver):
             f"RX: {data!r}",
             extra={"log_category": "RAW_IO", "direction": "RX", "data": data},
         )
-        try:
-            data_str = data.decode("utf-8")
-        except UnicodeDecodeError:
-            logger.warning("Received invalid UTF-8 data, ignoring.")
-            return
+        # Buffer bytes directly to avoid decoding errors on split characters
+        self._status_buffer.extend(data)
 
-        self._status_buffer += data_str
         # Process all complete messages (ending with '\r\n') in the buffer
-        while "\r\n" in self._status_buffer:
-            end_idx = self._status_buffer.find("\r\n") + 2
-            message = self._status_buffer[:end_idx]
+        while b"\r\n" in self._status_buffer:
+            end_idx = self._status_buffer.find(b"\r\n") + 2
+            message_bytes = self._status_buffer[:end_idx]
             self._status_buffer = self._status_buffer[end_idx:]
-            self._process_message(message)
+
+            try:
+                message = message_bytes.decode("utf-8")
+                self._process_message(message)
+            except UnicodeDecodeError:
+                logger.warning(
+                    f"Dropped invalid UTF-8 message bytes: {message_bytes!r}"
+                )
 
     def _process_message(self, message: str):
         """
@@ -751,6 +838,14 @@ class GrblSerialDriver(Driver):
         or settings output.
         """
         logger.debug(f"Processing received line: {line}")
+
+        # Basic heuristic to filter out broken/fragmented status reports that
+        # missed the opening '<' due to serial corruption. Treating them as
+        # general responses can confuse command handlers.
+        if "Pos:" in line and "|" in line:
+            logger.debug(f"Ignoring fragmented status report line: {line}")
+            return
+
         logger.info(line, extra={"log_category": "MACHINE_EVENT"})
 
         # Logic for character-counting streaming protocol during a job
