@@ -83,8 +83,8 @@ class RuidaTransport(Transport):
         return b
 
     def _gen_swizzle_luts(self):
-        self._swizzle_lut = [self._swizzle_byte(s) for s in range(256)]
-        self._unswizzle_lut = [self._unswizzle_byte(s) for s in range(256)]
+        self._swizzle_lut = [self._swizzle_byte(b) for b in range(256)]
+        self._unswizzle_lut = [self._unswizzle_byte(b) for b in range(256)]
 
     def _swizzle(self, data: bytes) -> bytes:
         _r = list()
@@ -137,12 +137,53 @@ class RuidaTransport(Transport):
             raise
 
     async def disconnect(self) -> None:
-        logger.info(
-            f"Disconnecting from controller at {self._urn}..."
-        )
+        """Disconnects from the Ruida controller."""
+        if self.writer:
+            logger.info(f"Disconnecting from controller at {self._urn}...")
+            await self.writer.disconnect()
+            self.writer = None
+            self.reader = None
+        else:
+            raise ConnectionError("No active transport to disconnect.")
 
     async def send(self, data: bytes) -> None:
+        """Sends data to the connected Ruida controller.
+
+        NOTE: Each call to send() is assumed to be a discrete Ruida command."""
         if not self.is_connected:
             raise ConnectionError("Not connected")
         _pack = self._package(data)
-        await self.writer.send(_pack) # pylance complains but this is OK.
+        if self.writer:
+            await self.writer.send(_pack)
+        else:
+            raise ConnectionError("No active transport to send data")
+
+    async def send_queued(self, data: asyncio.Queue) -> None:
+        """Sends data to the connected Ruida controller using a queued
+        transport. Each item in the queue is a assumed to be a discrete Ruida
+        command and is sent in order.
+
+        Commands are accumulated into a buffer until the either the queue is
+        empty or the buffer exceeds 1024 bytes in size, at which point the
+        buffer is sent as a single packet to the controller. This repeats until
+        the queue is empty.
+
+        NOTE: Although this method can be used to send discrete commands, it is
+        primarily intended to be used for sending Ruida file data in a streaming
+        manner.
+        """
+        if not self.is_connected:
+            raise ConnectionError("Not connected")
+        while True:
+            _buffer = bytearray()
+            while not data.empty() and len(_buffer) <= 1024:
+                _cmd = await data.get()
+                _buffer.extend(_cmd)
+            if _buffer:
+                _pack = self._package(bytes(_buffer))
+                if self.writer:
+                    await self.writer.send(_pack)
+                else:
+                    raise ConnectionError("No active transport to send data")
+            else:
+                break

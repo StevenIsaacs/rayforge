@@ -125,8 +125,10 @@ Development of this driver involves a number of development iterations as shown 
 
 1. UDP Connection (first because can use `tshark` to verify)
 	- [x] Create `driver/ruida` directory and add to `driver/__init__.py`
-	- [ ]  Create `transport/udp.py` and add `udp` to `transport/__init__.py`
-	- [ ] Implement `connect` logic and tasks/coroutines (using asyncio)
+	- [x]  Create `transport/udp.py` and add `udp` to `transport/__init__.py`
+	- [x] Create `driver/ruida/ruida_transport` and implement `connect` logic and tasks/coroutines (using asyncio)
+        - [x] Add logic to send a queue of commands to support sending Ruida files.
+    - [ ] Create `driver/ruida/ruida_session`
 		- [ ] Implement status monitoring logic and status change events
 	- [ ] Test connect/reconnect use cases.
 		- [ ] Status monitoring
