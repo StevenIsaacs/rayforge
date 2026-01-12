@@ -128,6 +128,7 @@ Development of this driver involves a number of development iterations as shown 
 	- [x]  Create `transport/udp.py` and add `udp` to `transport/__init__.py`
 	- [x] Create `driver/ruida/ruida_transport` and implement `connect` logic and tasks/coroutines (using asyncio)
         - [x] Add logic to send a queue of commands to support sending Ruida files.
+        - [ ] Add transaction state machine to handle sending data, ACK (UDP only) and reply data dispatch.
     - [ ] Create `driver/ruida/ruida_session`
 		- [ ] Implement status monitoring logic and status change events
 	- [ ] Test connect/reconnect use cases.
@@ -137,7 +138,7 @@ Development of this driver involves a number of development iterations as shown 
 	- [ ] Demo video for iteration on streamable.
 2. USB Connection
 	- [ ] Add `purge` method to `serial.py` (and other transports?) -- needed for resync of comms
-    - [ ] Add ability to use symlink device names to `transport/serial.py`
+    - [x] Add ability to use symlink device names to `transport/serial.py`
 	- [ ] Add USB to code from *UDP Connection* iteration.
 	- [ ] Test connect/reconnect use cases.
 		- [ ] Status monitoring
