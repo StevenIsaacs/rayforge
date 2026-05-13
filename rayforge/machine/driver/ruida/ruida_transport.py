@@ -3,11 +3,11 @@ import struct
 import logging
 import asyncio
 
-from ...transport.transport import Transport, TransportStatus
+from ...transport.transport import Transport, NullTransport, TransportStatus
 from ...transport.udp import UdpTransport
 from ...transport.serial import SerialTransport
 
-from .ruida_transcoder import RtcEncoder, RtcDecoder
+from .ruida_transcoder import ACK
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,20 @@ class RuidaTransport(Transport):
     with and ACK. On the other hand, there are no ACKs when using a USB/Serial
     transport. Another difference is that UDP packets are preceded with a 16 bit
     unsigned integer checksum and USB/Serial packets have no checksum.
+
+    Key features:
+    - Automatic connection using either UDP or Serial transports.
+    - Swizzling and unswizzling of data according to the Ruida protocol.
+    - Packetizing data with checksums for UDP transport.
+    - ACK handshaking for UDP transport.
+    - Queued sending of data to optimize throughput.
+
+    When using UDP transport, each packet sent to the Ruida controller is expected
+    to be acknowledged with an ACK byte. It is possible to send multiple packets
+    without waiting for an ACK.
+
+    It is also possible to package multiple commands in a single packet
+    regardless of the transport used.
 
     Attributes:
         host    The IP address or host name of the Ruida controller for a UDP
@@ -43,8 +57,8 @@ class RuidaTransport(Transport):
         self.baud: int = kwargs.get("baud", 115200)
         self.magic: int = kwargs.get("magic", 0x88)
 
-        self.writer: Optional[Transport] = None
-        self.reader: Optional[Transport] = None
+        self.writer: Optional[Transport] = NullTransport()
+        self.reader: Optional[Transport] = NullTransport()
 
         self._urn = '' # host or tty depending upon connected transport.
 
@@ -65,6 +79,15 @@ class RuidaTransport(Transport):
 
         self._reconnect_interval = 5
         self._connection_task: Optional[asyncio.Task] = None
+
+        self._send_task: Optional[asyncio.Task] = None
+        self._send_queue: asyncio.Queue = asyncio.Queue()
+        self._acks_expected: int = 0 # Number of ACKs expected
+
+        self._receive_task: Optional[asyncio.Task] = None
+        self._expecting_ack = False
+
+        self.keep_running = False
 
     def _swizzle_byte(self, b: int) -> int:
         b ^= (b >> 7) & 0xFF
@@ -154,19 +177,20 @@ class RuidaTransport(Transport):
             raise ConnectionError("Not connected")
         _pack = self._package(data)
         if self.writer:
-            await self.writer.send(_pack)
+            await self._send_queue.put(_pack)
         else:
             raise ConnectionError("No active transport to send data")
 
-    async def send_queued(self, data: asyncio.Queue) -> None:
-        """Sends data to the connected Ruida controller using a queued
-        transport. Each item in the queue is a assumed to be a discrete Ruida
-        command and is sent in order.
+    async def send_list(self, commands: list[bytearray]) -> None:
+        """Sends a list of commands to the connected Ruida controller.
 
-        Commands are accumulated into a buffer until the either the queue is
+        Each item in the list is a assumed to be a discrete Ruida command and is
+        sent in order.
+
+        Commands are accumulated into a buffer until the either the list is
         empty or the buffer exceeds 1024 bytes in size, at which point the
-        buffer is sent as a single packet to the controller. This repeats until
-        the queue is empty.
+        buffer is added to the send queue. This repeats until the list has been
+        consumed.
 
         NOTE: Although this method can be used to send discrete commands, it is
         primarily intended to be used for sending Ruida file data in a streaming
@@ -174,16 +198,58 @@ class RuidaTransport(Transport):
         """
         if not self.is_connected:
             raise ConnectionError("Not connected")
+
         while True:
             _buffer = bytearray()
-            while not data.empty() and len(_buffer) <= 1024:
-                _cmd = await data.get()
-                _buffer.extend(_cmd)
+            _i = 0
+            while _i < len(commands) and len(_buffer) <= 1024:
+                _buffer.extend(commands[_i])
+                _i += 1
             if _buffer:
                 _pack = self._package(bytes(_buffer))
+                _buffer = bytearray()
                 if self.writer:
-                    await self.writer.send(_pack)
+                    await self._send_queue.put(_pack)
                 else:
                     raise ConnectionError("No active transport to send data")
             else:
                 break
+
+    async def _send_loop(self) -> None:
+        """ Send queued packages to the Ruida controller and handle ACKs.
+        """
+        logger.debug("RuidaTransport send loop started.")
+        while self.keep_running:
+            try:
+                _packet = self._send_queue.get()
+                await self.writer.send(_packet)
+                if isinstance(self.writer, UdpTransport):
+                    self._acks_expected += 1
+            except Exception as e:
+                logger.error(f"RuidaTransport send loop error: {e}")
+
+    def _on_receive(self) -> None:
+        """ Receive packages from the Ruida controller and handle ACKs.
+
+        Only two types of packets are expected from the Ruida controller:
+        - ACK packets in response to sent commands.
+        - Data packets in response to read memory commands.
+
+        Received data is unswizzled and emitted via the `received` signal.
+        """
+        logger.debug("RuidaTransport receive loop started.")
+        while self.keep_running:
+            try:
+                data = await self.reader.receive()
+                if not data:
+                    continue
+                if isinstance(self.reader, UdpTransport):
+                    if self._acks_expected > 0 and data == ACK:
+                        self._acks_expected -= 1
+                        continue
+                _unswizzled = self._unswizzle(data)
+                self.received.send(self, data=_unswizzled)
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"RuidaTransport receive loop error: {e}")
