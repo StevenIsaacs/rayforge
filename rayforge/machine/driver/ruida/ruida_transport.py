@@ -3,7 +3,7 @@ import struct
 import logging
 import asyncio
 
-from ...transport.transport import Transport, NullTransport, TransportStatus
+from ...transport.transport import Transport, TransportStatus
 from ...transport.udp import UdpTransport
 from ...transport.serial import SerialTransport
 
@@ -57,8 +57,7 @@ class RuidaTransport(Transport):
         self.baud: int = kwargs.get("baud", 115200)
         self.magic: int = kwargs.get("magic", 0x88)
 
-        self.writer: Optional[Transport] = NullTransport()
-        self.reader: Optional[Transport] = NullTransport()
+        self.transport: Optional[Transport] = None
 
         self._urn = '' # host or tty depending upon connected transport.
 
@@ -71,7 +70,7 @@ class RuidaTransport(Transport):
             self._serial_transport = SerialTransport(self.tty, self.baud)
 
         if not self._udp_transport and not self._serial_transport:
-            self._udp_transport = UdpTransport(self.tty, self.baud)
+            logger.critical("No valid transport available.")
 
         self._swizzle_lut = ()
         self._unswizzle_lut = ()
@@ -146,16 +145,21 @@ class RuidaTransport(Transport):
         if self.is_connected:
             return
 
-        for _transport in [self._serial_transport, self._udp_transport]:
-            try:
-                if _transport:
-                    await _transport.connect()
-                    if _transport.is_connected():
-                        self.writer = self.reader = _transport
-                        break
-            except Exception:
-                # Interface not connected or not configured correctly
-                pass
+        try:
+            # USB first because it has slightly better performance due to
+            # the lack of ACK handshakes.
+            if _transport is not None:
+                await _transport.connect()
+                if _transport.is_connected():
+                    self.writer = self.reader = _transport
+                    self.reader.received.connect(self._on_receive)
+                    self._send_task = asyncio.create_task(self._send_loop())
+                    self._urn = self.tty if _transport == self._serial_transport else self.host
+                    logger.info(f"Successfully connected to {self._urn}.")
+                    break
+        except Exception:
+            # Interface not connected or not configured correctly
+            pass
         if not self.is_connected:
             raise
 
@@ -228,8 +232,8 @@ class RuidaTransport(Transport):
             except Exception as e:
                 logger.error(f"RuidaTransport send loop error: {e}")
 
-    def _on_receive(self) -> None:
-        """ Receive packages from the Ruida controller and handle ACKs.
+    def _on_receive(self, data: bytes) -> None:
+        """ Receive packets from the Ruida controller and handle ACKs.
 
         Only two types of packets are expected from the Ruida controller:
         - ACK packets in response to sent commands.
@@ -240,7 +244,7 @@ class RuidaTransport(Transport):
         logger.debug("RuidaTransport receive loop started.")
         while self.keep_running:
             try:
-                data = await self.reader.receive()
+                data = await self.reader.recvfrom()
                 if not data:
                     continue
                 if isinstance(self.reader, UdpTransport):
