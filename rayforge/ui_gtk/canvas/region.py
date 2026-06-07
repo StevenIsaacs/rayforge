@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from enum import Enum, auto
-from typing import Tuple, Union, Set, Optional
-from ...core.geo import Rect
+from typing import Optional, Set, Tuple, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from raygeo.geo.types import Rect
 
 
 class ElementRegion(Enum):

@@ -12,7 +12,6 @@ from ..driver.driver import ResourceBusyError
 from .controller import MachineController
 from .machine import Machine
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +78,15 @@ class MachineManager:
 
         self.controllers[machine_id] = controller
         return controller
+
+    def has_controller(self, machine_id: str) -> bool:
+        """
+        Returns whether a controller has already been instantiated for the
+        given machine. Unlike ``get_controller``, this never lazily creates
+        a controller and never raises, so it is safe to call for machines
+        that have already been removed.
+        """
+        return machine_id in self.controllers
 
     async def _rebuild_and_connect_machine(self, machine: "Machine"):
         """

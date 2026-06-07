@@ -1,16 +1,16 @@
-import pytest
-import cairo
 from typing import List
 
-from rayforge.core.workpiece import WorkPiece
-from rayforge.core.geo import Geometry
+import cairo
+import pytest
+from laser_essentials.producers import ContourProducer, CutOrder
+from raygeo import Geometry
+
 from rayforge.core.source_asset_segment import SourceAssetSegment
 from rayforge.core.vectorization_spec import PassthroughSpec
-from rayforge.pipeline.producer.base import OpsProducer, CutSide
+from rayforge.core.workpiece import WorkPiece
 from rayforge.machine.models.laser import Laser
 from rayforge.pipeline.artifact import WorkPieceArtifact
-from laser_essentials.producers import ContourProducer, CutOrder
-
+from rayforge.pipeline.producer.base import CutSide, OpsProducer
 
 # --- Helpers ---
 
@@ -41,7 +41,7 @@ def get_geo_from_artifact(artifact: WorkPieceArtifact) -> List[Geometry]:
     Ops are flattened, so we reconstruct geometries based on MoveTo commands.
     """
     # Create a single geometry from all ops
-    full_geo = Geometry.from_dict(artifact.ops.to_dict())
+    full_geo = artifact.ops.to_geometry()
     # Split into individual closed loops (contours)
     return full_geo.split_into_contours()
 
@@ -291,7 +291,7 @@ def test_cut_order_inside_outside(laser, dummy_surface, vector_workpiece):
     # The artifact.ops object contains sections. We need to convert to
     # geometries sequentially.
 
-    full_geo = Geometry.from_dict(artifact.ops.to_dict())
+    full_geo = artifact.ops.to_geometry()
     # split_into_contours preserves order of occurrence in command list
     contours = full_geo.split_into_contours()
 
@@ -320,7 +320,7 @@ def test_cut_order_outside_inside(laser, dummy_surface, vector_workpiece):
         generation_id=1,
     )
 
-    full_geo = Geometry.from_dict(artifact.ops.to_dict())
+    full_geo = artifact.ops.to_geometry()
     contours = full_geo.split_into_contours()
 
     assert len(contours) == 2
@@ -442,8 +442,8 @@ def test_overcut_zero_is_noop(laser, dummy_surface, vector_workpiece):
         generation_id=1,
     )
 
-    geo_a = Geometry.from_dict(artifact_a.ops.to_dict())
-    geo_b = Geometry.from_dict(artifact_b.ops.to_dict())
+    geo_a = artifact_a.ops.to_geometry()
+    geo_b = artifact_b.ops.to_geometry()
     assert geo_a == geo_b
 
 

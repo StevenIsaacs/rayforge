@@ -1,10 +1,13 @@
 from __future__ import annotations
+
 import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+
 from blinker import Signal
-from ...core.geo import Geometry
-from ...shared.util.size import sizes_are_close
+from raygeo import Geometry
+
 from ...shared.tasker.task import Task
+from ...shared.util.size import sizes_are_close
 from ..artifact import StepOpsArtifactHandle
 from ..artifact.key import ArtifactKey
 from ..artifact.manager import StaleGenerationError

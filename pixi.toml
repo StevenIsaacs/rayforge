@@ -31,8 +31,10 @@ PyOpenGL-accelerate = "==3.1.10"
 PyGObject = "==3.50.0"
 pkg-config = "*"
 rust = "*"
+patchelf = "*"
 
 [feature.app.pypi-dependencies]
+raygeo = { path = "external/raygeo", editable = true }
 rayforge = { editable = true, path = "." }
 aiohttp = "==3.13.5"
 asyncudp = "==0.11.0"
@@ -105,9 +107,9 @@ workdir = "."
 pre-commit-install = "pre-commit install"
 flake = "flake8 --ignore=E127,E128,E121,E123,E126,E203,E226,E24,E704,W503,W504 --builtins=_ rayforge tests"
 pyflakes = { env = { PYFLAKES_BUILTINS = "_" }, cmd = "pyflakes rayforge tests" }
-pyright = "pyright"
+pyright = { env = { VIRTUAL_ENV = ".pixi/envs/default" }, cmd = "pyright" }
 lint = { depends-on = ["flake", "pyflakes", "pyright"] }
-format = "ruff format rayforge tests scripts"
+format = { depends-on = [], cmd = "ruff format rayforge tests scripts" }
 update-translations = "bash scripts/update_translations.sh"
 compile-translations = "bash scripts/update_translations.sh --compile-only"
 print-untranslated = "bash scripts/print_untranslated.sh"
@@ -143,6 +145,9 @@ cmd = "scripts/with_gdk.sh scripts/screenshot/cli.py"
 cmd = "python3 -m build"
 depends-on = ["compile-translations"]
 
+[tasks.reinstall-raygeo]
+cmd = "rm -Rf .pixi/envs/default/lib/python3.12/site-packages/raygeo* && pixi clean cache -y && pixi install"
+
 [tasks.build-deb]
 # Builds a binary .deb package for local installation and testing.
 cmd = "bash scripts/build-deb.sh"
@@ -160,10 +165,14 @@ pyright = ">=1.1.409,<2"
 
 # Tasks for developing and generating the website
 [feature.website.tasks]
+site-gen-api = "python3 scripts/update_api_docs.py"
 site-install = { cmd = "npm install", cwd = "website" }
-site-serve = { cmd = "npm start", cwd = "website" }
-site-build = { cmd = "npm run build", cwd = "website" }
-site-deploy = "bash scripts/deploy_website.sh"
+site-serve = { cmd = "npm start", cwd = "website", depends-on = ["update-api-docs"] }
+site-build = { cmd = "npm run build", cwd = "website", depends-on = ["site-gen-api"] }
+site-deploy = { cmd = "bash scripts/deploy_website.sh", depends-on = ["site-gen-api"] }
+
+[tasks.update-api-docs]
+cmd = "python3 scripts/update_api_docs.py"
 
 # Tasks for video processing
 [feature.video-tools.tasks]

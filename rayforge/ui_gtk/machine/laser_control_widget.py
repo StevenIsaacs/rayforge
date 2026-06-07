@@ -1,9 +1,11 @@
-from gi.repository import GLib, Gtk, Adw
-from typing import Optional
 from gettext import gettext as _
-from ...machine.models.machine import Machine
-from ...machine.models.laser import Laser
+from typing import Optional
+
+from gi.repository import Adw, GLib, Gtk
+
 from ...machine.cmd import MachineCmd
+from ...machine.models.laser import Laser
+from ...machine.models.machine import Machine
 from ..icons import get_icon
 from ..shared.gtk import apply_css
 from ..shared.slider import create_slider
@@ -244,7 +246,7 @@ class LaserControlWidget(Gtk.Box):
             return
 
         percent = self._power_adj.get_value() / 100.0
-        self.machine_cmd.set_focus_power(head, percent)
+        self.machine_cmd.set_focus_power(head, percent, self.machine)
 
         self._is_on = True
         self._update_toggle_ui()
@@ -262,7 +264,7 @@ class LaserControlWidget(Gtk.Box):
         head = self._get_selected_head()
         if head and self.machine and self.machine.is_connected():
             if self.machine_cmd:
-                self.machine_cmd.set_focus_power(head, 0)
+                self.machine_cmd.set_focus_power(head, 0, self.machine)
         self._is_on = False
         self._update_toggle_ui()
         self._update_sensitivity()

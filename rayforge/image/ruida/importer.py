@@ -1,25 +1,27 @@
 import logging
-from typing import Optional, Dict
-from pathlib import Path
 from gettext import gettext as _
+from pathlib import Path
+from typing import Dict, Optional
 
-from ...core.geo import Geometry
+from raygeo import Geometry
+
+from ...core.source_asset import SourceAsset
 from ...core.vectorization_spec import VectorizationSpec
+from ...image.geo_renderer import render_geometry_to_png
 from ..base_importer import (
     Importer,
     ImporterFeature,
 )
-from ...core.source_asset import SourceAsset
-from ..structures import (
-    ParsingResult,
-    LayerGeometry,
-    VectorizationResult,
-    ImportManifest,
-)
-from .renderer import RUIDA_RENDERER
-from .parser import RuidaParser, RuidaParseError
-from .job import RuidaJob
 from ..engine import NormalizationEngine
+from ..structures import (
+    ImportManifest,
+    LayerGeometry,
+    ParsingResult,
+    VectorizationResult,
+)
+from .job import RuidaJob
+from .parser import RuidaParseError, RuidaParser
+from .renderer import RUIDA_RENDERER
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +95,12 @@ class RuidaImporter(Importer):
             if geo:
                 merged.extend(geo)
         thumbnail_data = (
-            merged.to_png(256, line_width=2.0, color=(0.2, 0.2, 0.2, 1.0))
+            render_geometry_to_png(
+                merged,
+                256,
+                line_width=2.0,
+                color=(0.2, 0.2, 0.2, 1.0),
+            )
             if not merged.is_empty()
             else None
         )

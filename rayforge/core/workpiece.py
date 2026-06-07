@@ -1,32 +1,36 @@
 from __future__ import annotations
+
 import logging
-import cairo
+import math
+import warnings
+from copy import deepcopy
+from dataclasses import asdict
+from pathlib import Path
 from typing import (
-    Generator,
-    Optional,
-    Tuple,
-    cast,
-    Dict,
-    Any,
     TYPE_CHECKING,
+    Any,
+    Dict,
+    Generator,
     List,
     NamedTuple,
+    Optional,
+    Tuple,
     Union,
+    cast,
 )
-from pathlib import Path
-import warnings
-from dataclasses import asdict
-from copy import deepcopy
-import math
+
+import cairo
 import numpy as np
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
     import pyvips
 
+from raygeo import Geometry
+from raygeo.geo.types import Point, Rect
+
 from ..context import get_context
 from .asset_registry import asset_type_registry
-from .geo import Geometry, Rect, Point
 from .geometry_provider import IGeometryProvider
 from .item import DocItem
 from .matrix import Matrix

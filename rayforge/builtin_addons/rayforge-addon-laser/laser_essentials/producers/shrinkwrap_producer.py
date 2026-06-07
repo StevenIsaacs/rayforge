@@ -1,23 +1,18 @@
+from gettext import gettext as _
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 import cairo
 import numpy as np
-from typing import Optional, TYPE_CHECKING, Dict, Any
-from gettext import gettext as _
+from raygeo.ops import Ops
+from raygeo.ops.types import SectionType
 
-from rayforge.core.geo import contours
 from rayforge.core.matrix import Matrix
-from rayforge.core.ops import (
-    Ops,
-    OpsSectionStartCommand,
-    OpsSectionEndCommand,
-    SectionType,
-)
 from rayforge.image.hull import get_concave_hull
 from rayforge.image.tracing import prepare_surface
-from rayforge.shared.tasker.progress import ProgressContext
 from rayforge.pipeline.artifact import WorkPieceArtifact
 from rayforge.pipeline.coord import CoordinateSystem
-from rayforge.pipeline.producer.base import OpsProducer, CutSide
-
+from rayforge.pipeline.producer.base import CutSide, OpsProducer
+from rayforge.shared.tasker.progress import ProgressContext
 
 if TYPE_CHECKING:
     from rayforge.core.workpiece import WorkPiece
@@ -112,9 +107,7 @@ class ShrinkWrapProducer(OpsProducer):
 
             # 4. Normalize winding order BEFORE offsetting (grow). This ensures
             #    that a positive offset correctly expands the shape.
-            normalized_geos = contours.normalize_winding_orders(
-                [hull_geometry]
-            )
+            normalized_geos = hull_geometry.normalize_winding_orders()
             if not normalized_geos:
                 hull_geometry = None
             else:
@@ -148,14 +141,12 @@ class ShrinkWrapProducer(OpsProducer):
 
             # 7. Convert to Ops
             final_ops.set_laser(laser.uid)
-            final_ops.add(
-                OpsSectionStartCommand(
-                    SectionType.VECTOR_OUTLINE, workpiece.uid
-                )
+            final_ops.ops_section_start(
+                SectionType.VECTOR_OUTLINE, workpiece.uid
             )
             final_ops.set_power(settings.get("power", 0))
             final_ops.extend(Ops.from_geometry(hull_geometry))
-            final_ops.add(OpsSectionEndCommand(SectionType.VECTOR_OUTLINE))
+            final_ops.ops_section_end(SectionType.VECTOR_OUTLINE)
 
         # 8. Create the artifact. The ops are pre-scaled, so they are not
         #    scalable in the pipeline cache sense.

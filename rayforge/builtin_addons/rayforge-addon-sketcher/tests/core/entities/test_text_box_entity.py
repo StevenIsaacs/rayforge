@@ -1,8 +1,9 @@
 import pytest
+from raygeo import Geometry
 from sketcher.core.entities import TextBoxEntity
 from sketcher.core.registry import EntityRegistry
-from rayforge.core.geo.font_config import FontConfig
-from rayforge.core.geo.geometry import Geometry
+
+from rayforge.core.font_config import FontConfig
 
 
 @pytest.fixture

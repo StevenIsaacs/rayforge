@@ -1,19 +1,20 @@
 import sys
 import tempfile
-import yaml
-import pytest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timezone, timedelta
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
+import yaml
+
 from rayforge.addon_mgr.addon import (
     Addon,
-    AddonMetadata,
-    AddonValidationError,
     AddonAuthor,
+    AddonMetadata,
     AddonProvides,
+    AddonValidationError,
 )
-from rayforge.shared.util.versioning import get_git_tag_version, UnknownVersion
-
+from rayforge.shared.util.versioning import UnknownVersion, get_git_tag_version
 
 TEST_VERSION = "1.0.0"
 
@@ -105,18 +106,18 @@ class TestAddonMetadata:
             "author": {"name": "Test", "email": "t@t.com"},
             "repository": "https://github.com/example/repo",
             "latest_stable": "v1.0.0",
-            "api_version": 2,
+            "api_version": 13,
             "versions": [
-                {"version": "v1.0.0", "api_version": 2},
-                {"version": "v0.9.0", "api_version": 1},
+                {"version": "v1.0.0", "api_version": 13},
+                {"version": "v0.9.0", "api_version": 12},
             ],
         }
         meta = AddonMetadata.from_registry_entry("my_addon", data)
         assert len(meta.version_entries) == 2
         assert meta.version_entries[0]["version"] == "v1.0.0"
-        assert meta.version_entries[0]["api_version"] == 2
+        assert meta.version_entries[0]["api_version"] == 13
         assert meta.version_entries[1]["version"] == "v0.9.0"
-        assert meta.version_entries[1]["api_version"] == 1
+        assert meta.version_entries[1]["api_version"] == 12
 
     def test_from_registry_entry_legacy_string_versions(self):
         """Test parsing legacy string-based version entries."""

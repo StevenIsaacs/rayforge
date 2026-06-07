@@ -1,10 +1,12 @@
 import logging
-import cairo
 from typing import Optional
-from ....core.stock import StockItem
-from ....core.matrix import Matrix
-from ...canvas import CanvasElement
 
+import cairo
+
+from ....core.matrix import Matrix
+from ....core.stock import StockItem
+from ....image.geo_renderer import geometry_to_cairo
+from ...canvas import CanvasElement
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +84,7 @@ class StockElement(CanvasElement):
             ctx.translate(-min_x, -min_y)
 
         # Draw the geometry path using the standard method
-        self.data.geometry.to_cairo(ctx)
+        geometry_to_cairo(self.data.geometry, ctx)
 
         # Get the material color if available
         material = self.data.material

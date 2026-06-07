@@ -1,32 +1,36 @@
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import Enum, auto
 from gettext import gettext as _
 from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
     List,
     Optional,
     Tuple,
-    Any,
-    TYPE_CHECKING,
-    Callable,
     Union,
-    Awaitable,
-    Dict,
 )
+
 from blinker import Signal
-from dataclasses import dataclass
-from enum import Enum, auto
+from raygeo.ops.axis import Axis
+
 from ...context import RayforgeContext
-from ...core.ops.axis import Axis
 
 if TYPE_CHECKING:
-    from ...core.doc import Doc
+    from raygeo.ops import Ops
+
     from ...core.capability import Capability
+    from ...core.doc import Doc
     from ...core.varset import VarSet
-    from ...pipeline.encoder.base import OpsEncoder, EncodedOutput
+    from ...pipeline.encoder.base import EncodedOutput, OpsEncoder
     from ..device.profile import DeviceProfile
     from ..models.dialect import GcodeDialect
-    from ..models.machine import Machine
     from ..models.laser import Laser
+    from ..models.machine import Machine
 
 
 logger = logging.getLogger(__name__)
@@ -388,6 +392,7 @@ class Driver(ABC):
         self,
         encoded: "EncodedOutput",
         doc: "Doc",
+        ops: "Ops",
         on_command_done: Optional[
             Callable[[int], Union[None, Awaitable[None]]]
         ] = None,
@@ -398,6 +403,7 @@ class Driver(ABC):
         Args:
             encoded: The encoded output containing machine code and op map
             doc: The document context
+            ops: The Ops object used to generate the encoded output.
             on_command_done: Optional sync or async callback called when each
                            command is done. Called with the op_index.
         """

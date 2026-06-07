@@ -1,22 +1,23 @@
-import pytest
-from unittest.mock import MagicMock, patch
 import logging
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
+from raygeo import Geometry
+from raygeo.ops import Ops
 
 from rayforge.context import get_context
-from rayforge.core.geo import Geometry
 from rayforge.core.matrix import Matrix
-from rayforge.core.ops import Ops
-from rayforge.core.step import Step
-from rayforge.core.workpiece import WorkPiece
 from rayforge.core.source_asset import SourceAsset
 from rayforge.core.source_asset_segment import SourceAssetSegment
+from rayforge.core.step import Step
 from rayforge.core.vectorization_spec import PassthroughSpec
+from rayforge.core.workpiece import WorkPiece
 from rayforge.image import SVG_RENDERER
 from rayforge.machine.models.machine import Laser
 from rayforge.pipeline.artifact import (
-    create_handle_from_dict,
     WorkPieceArtifact,
+    create_handle_from_dict,
 )
 from rayforge.pipeline.stage.workpiece_runner import (
     make_workpiece_artifact_in_subprocess,
@@ -336,7 +337,7 @@ def test_transformers_are_applied_before_put(
         reconstructed_artifact = get_context().artifact_store.get(handle)
 
         assert isinstance(reconstructed_artifact, WorkPieceArtifact)
-        assert len(reconstructed_artifact.ops.commands) >= 24
+        assert len(reconstructed_artifact.ops) >= 24
     finally:
         # Cleanup
         if handle:

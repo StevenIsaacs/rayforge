@@ -1,39 +1,40 @@
 import asyncio
 from pathlib import Path
-from typing import Tuple, Generator
+from typing import Generator, Tuple
 from unittest.mock import MagicMock
 
 import pytest
+from raygeo import Geometry
+from raygeo.ops import Ops
+from raygeo.ops.axis import Axis
 
 import rayforge.machine.driver as driver_module
 from rayforge.context import get_context
 from rayforge.core.doc import Doc
-from rayforge.core.geo import Geometry
 from rayforge.core.matrix import Matrix
-from rayforge.core.ops import Ops, Axis
 from rayforge.core.source_asset import SourceAsset
 from rayforge.core.source_asset_segment import SourceAssetSegment
+from rayforge.core.step_registry import step_registry
 from rayforge.core.vectorization_spec import PassthroughSpec
 from rayforge.core.workpiece import WorkPiece
 from rayforge.doceditor.editor import DocEditor
 from rayforge.image import SVG_RENDERER
 from rayforge.machine.cmd import MachineCmd
 from rayforge.machine.driver.driver import DeviceState
-from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 from rayforge.machine.driver.dummy import NoDeviceDriver
 from rayforge.machine.driver.grbl.grbl_network import GrblNetworkDriver
 from rayforge.machine.driver.grbl.grbl_serial import GrblSerialDriver
 from rayforge.machine.driver.smoothie import SmoothieDriver
 from rayforge.machine.models.dialect import (
-    GcodeDialect,
     GRBL_DIALECT,
     SMOOTHIEWARE_DIALECT,
+    GcodeDialect,
 )
 from rayforge.machine.models.laser import Laser
 from rayforge.machine.models.machine import JogDirection, Machine, Origin
 from rayforge.machine.models.macro import MacroTrigger
 from rayforge.machine.transport import TransportStatus
-from rayforge.core.step_registry import step_registry
+from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 from rayforge.shared.tasker.manager import TaskManager
 
 
@@ -310,12 +311,8 @@ class TestMachine:
         call_args = mock_encoder.encode.call_args
         encoded_ops = call_args[0][0]
 
-        commands = list(encoded_ops.commands)
-        move_cmd = commands[0]
-        line_cmd = commands[1]
-
-        assert move_cmd.end == (100.0, 50.0, 0.0)
-        assert line_cmd.end == (200.0, 150.0, 0.0)
+        assert encoded_ops.endpoint(0) == (100.0, 50.0, 0.0)
+        assert encoded_ops.endpoint(1) == (200.0, 150.0, 0.0)
 
     @pytest.mark.asyncio
     async def test_encode_ops_ignores_wcs_if_missing(
@@ -694,7 +691,7 @@ class TestMachine:
 
         # --- Assert ---
         run_spy.assert_called_once()
-        encoded, received_doc = run_spy.call_args.args
+        encoded, received_doc, received_ops = run_spy.call_args.args
         assert isinstance(encoded, EncodedOutput)
         assert received_doc is doc
 
@@ -741,7 +738,7 @@ class TestMachine:
 
         # --- Assert ---
         run_spy.assert_called_once()
-        encoded, received_doc = run_spy.call_args.args
+        encoded, received_doc, received_ops = run_spy.call_args.args
         from rayforge.pipeline.encoder.base import EncodedOutput
 
         assert isinstance(encoded, EncodedOutput)
@@ -2107,9 +2104,8 @@ class TestPrepareOpsForEncoding:
         ops.move_to(world_point[0], world_point[1], world_point[2])
 
         result = machine._prepare_ops_for_encoding(ops)
-        cmd = list(result.commands)[0]
 
-        assert cmd.end == pytest.approx(expected_cmd, abs=0.001)
+        assert result.endpoint(0) == pytest.approx(expected_cmd, abs=0.001)
 
     WORKAREA_WCS_MODE_SCENARIOS = [
         # (origin, reverse_x, reverse_y, world_point, expected_cmd)
@@ -2149,9 +2145,8 @@ class TestPrepareOpsForEncoding:
         ops.move_to(world_point[0], world_point[1], world_point[2])
 
         result = machine._prepare_ops_for_encoding(ops)
-        cmd = list(result.commands)[0]
 
-        assert cmd.end == pytest.approx(expected_cmd, abs=0.001)
+        assert result.endpoint(0) == pytest.approx(expected_cmd, abs=0.001)
 
     def test_wcs_z_offset_not_subtracted(self, isolated_machine: Machine):
         """
@@ -2172,10 +2167,9 @@ class TestPrepareOpsForEncoding:
         ops.line_to(50, 60, -5)
 
         result = machine._prepare_ops_for_encoding(ops)
-        commands = list(result.commands)
 
-        assert commands[0].end == pytest.approx((40, 40, 0), abs=0.001)
-        assert commands[1].end == pytest.approx((40, 40, -5), abs=0.001)
+        assert result.endpoint(0) == pytest.approx((40, 40, 0), abs=0.001)
+        assert result.endpoint(1) == pytest.approx((40, 40, -5), abs=0.001)
 
     @pytest.mark.parametrize(
         "reverse_z,input_z,expected_z",
@@ -2204,14 +2198,13 @@ class TestPrepareOpsForEncoding:
         ops.move_to(10, 20, input_z)
 
         result = machine._prepare_ops_for_encoding(ops)
-        cmds = list(result.commands)
-        assert len(cmds) > 0
-        cmd = cmds[0]
-        assert cmd.end is not None
+        assert result.len() > 0
+        end = result.endpoint(0)
+        assert end is not None
 
-        assert cmd.end[0] == pytest.approx(10.0, abs=0.001)
-        assert cmd.end[1] == pytest.approx(20.0, abs=0.001)
-        assert cmd.end[2] == pytest.approx(expected_z, abs=0.001)
+        assert end[0] == pytest.approx(10.0, abs=0.001)
+        assert end[1] == pytest.approx(20.0, abs=0.001)
+        assert end[2] == pytest.approx(expected_z, abs=0.001)
 
     def test_multiple_commands_transformed(self, isolated_machine: Machine):
         """
@@ -2231,8 +2224,7 @@ class TestPrepareOpsForEncoding:
         ops.line_to(40, 40, 0)
 
         result = machine._prepare_ops_for_encoding(ops)
-        commands = list(result.commands)
 
-        assert commands[0].end == pytest.approx((10, 10, 0))
-        assert commands[1].end == pytest.approx((20, 20, 0))
-        assert commands[2].end == pytest.approx((30, 30, 0))
+        assert result.endpoint(0) == pytest.approx((10, 10, 0))
+        assert result.endpoint(1) == pytest.approx((20, 20, 0))
+        assert result.endpoint(2) == pytest.approx((30, 30, 0))

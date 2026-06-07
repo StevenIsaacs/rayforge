@@ -1,8 +1,10 @@
 import logging
 from abc import ABC
-from typing import List, Optional, TYPE_CHECKING, Dict, Any, cast, Tuple
 from gettext import gettext as _
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+
 from blinker import Signal
+
 from ..pipeline.transformer.registry import transformer_registry
 from ..shared.units.formatter import format_value
 from .capability import Capability
@@ -95,7 +97,13 @@ class Step(DocItem, ABC):
         exists on the instance, then overwrites it with the Var's
         default. Raises AttributeError if a capability defines a key
         that does not exist as an instance attribute.
+
+        When multiple capabilities define the same key, the first
+        capability's default takes precedence (first-wins). This
+        ensures the primary capability's defaults are not overridden
+        by secondary capabilities.
         """
+        applied_keys = set()
         for cap in self.capabilities:
             for var in cap.varset:
                 if not hasattr(self, var.key):
@@ -104,7 +112,9 @@ class Step(DocItem, ABC):
                         f"'{var.key}' required by capability "
                         f"'{cap.name}'"
                     )
-                setattr(self, var.key, var.default)
+                if var.key not in applied_keys:
+                    setattr(self, var.key, var.default)
+                    applied_keys.add(var.key)
 
     @classmethod
     def create(

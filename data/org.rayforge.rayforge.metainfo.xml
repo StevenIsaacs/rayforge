@@ -66,6 +66,69 @@
   </screenshots>
 
   <releases>
+    <release version="1.7.10" date="2026-05-18">
+      <description>
+        <p>Bug fix release</p>
+        <ul>
+          <li>Fixed contour offset producing hundreds of garbage
+          micro-contours on shapes with multiple holes</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.9" date="2026-05-17">
+      <description>
+        <p>Bug fix release</p>
+        <ul>
+          <li>Raygeo version info in about dialog</li>
+          <li>Fixed mirrored bezier control points and arc parameters in
+          raygeo</li>
+          <li>Fixed raster and frame icons not showing on some GTK
+          versions</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.8" date="2026-05-17">
+      <description>
+        <p>Performance improvements and bug fixes</p>
+        <ul>
+          <li>Migrated geometry processing from Python to Rust (raygeo)
+          for improved performance</li>
+          <li>Added distance preset buttons in Print and Cut wizard for
+          quick selection</li>
+          <li>Fixed WCS offset applied twice in Move to Selection buttons
+          (#245)</li>
+          <li>Updated addon API version to 13</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.7" date="2026-05-16">
+      <description>
+        <p>Bug fix release</p>
+        <ul>
+          <li>Fixed shallow copy of extra_axes causing rotary 3D preview
+          distortion (#243)</li>
+          <li>Fixed mirrored arcs rendered as full circles in G-code and
+          3D preview</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.7.6" date="2026-05-14">
+      <description>
+        <p>Canvas pan, camera enhancements, raster performance, and bug fixes</p>
+        <ul>
+          <li>Space+drag pan gesture for canvas navigation (#241)</li>
+          <li>Custom resolution option for camera image settings</li>
+          <li>Numerous performance improvements for raster engraving
+          operations</li>
+          <li>2D canvas laser path alpha normalization for better low-power
+          visibility</li>
+          <li>Fixed capability defaults being overwritten by duplicate step
+          keys (#239)</li>
+          <li>Fixed RX buffer override not applied in Creality Falcon device
+          profiles</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.5" date="2026-05-11">
       <description>
         <p>Overcut support, performance improvements, and bug fixes</p>

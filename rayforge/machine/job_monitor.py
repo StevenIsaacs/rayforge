@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import logging
 import time
-from typing import TYPE_CHECKING, Dict, Any
 from collections import deque
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 from blinker import Signal
-from ..core.ops.commands import MovingCommand
+from raygeo.geo.types import Point3D
+from raygeo.ops.types import CommandCategory
 
 if TYPE_CHECKING:
-    from ..core.ops import Ops
+    from raygeo.ops import Ops
 
 
 logger = logging.getLogger(__name__)
@@ -36,14 +39,12 @@ class JobMonitor:
 
         # Create a map from op_index to the distance of that op
         self._distance_map: Dict[int, float] = {}
-        last_point = None
-        for i, cmd in enumerate(self.ops):
-            # Calculate distance for ANY command. It will be 0 for non-moving
-            # ones.
-            dist = cmd.distance(last_point)
+        last_point: Optional[Point3D] = None
+        for i in range(ops.len()):
+            dist = ops.distance_at(i, last_point)
             self._distance_map[i] = dist
-            if isinstance(cmd, MovingCommand):
-                last_point = cmd.end
+            if ops.category(i) == CommandCategory.MOVING:
+                last_point = ops.endpoint(i)
 
         # Deque for calculating recent average speed.
         # Stores (timestamp, distance).

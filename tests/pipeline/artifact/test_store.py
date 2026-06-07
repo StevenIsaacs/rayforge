@@ -1,18 +1,20 @@
-from typing import cast
-import numpy as np
 import multiprocessing as mp
 from multiprocessing import shared_memory
+from typing import cast
+
+import numpy as np
 import pytest
+from raygeo.ops import Ops
+
 from rayforge.context import get_context
-from rayforge.core.ops import Ops
 from rayforge.pipeline import CoordinateSystem
 from rayforge.pipeline.artifact import create_handle_from_dict
+from rayforge.pipeline.artifact.job import JobArtifact, JobArtifactHandle
 from rayforge.pipeline.artifact.store import ArtifactStore
 from rayforge.pipeline.artifact.workpiece import (
     WorkPieceArtifact,
     WorkPieceArtifactHandle,
 )
-from rayforge.pipeline.artifact.job import JobArtifact, JobArtifactHandle
 from rayforge.pipeline.encoder.base import (
     EncodedOutput,
     MachineCodeOpMap,
@@ -92,9 +94,7 @@ def test_put_get_release_vertex_artifact(handles_to_release):
 
     assert isinstance(retrieved_artifact, WorkPieceArtifact)
     assert retrieved_artifact.artifact_type == "WorkPieceArtifact"
-    assert len(original_artifact.ops.commands) == len(
-        retrieved_artifact.ops.commands
-    )
+    assert original_artifact.ops.len() == retrieved_artifact.ops.len()
     assert (
         original_artifact.generation_size == retrieved_artifact.generation_size
     )
@@ -120,9 +120,7 @@ def test_put_get_release_hybrid_artifact(handles_to_release):
 
     assert isinstance(retrieved_artifact, WorkPieceArtifact)
     assert retrieved_artifact.artifact_type == "WorkPieceArtifact"
-    assert len(original_artifact.ops.commands) == len(
-        retrieved_artifact.ops.commands
-    )
+    assert original_artifact.ops.len() == retrieved_artifact.ops.len()
 
     get_context().artifact_store.release(handle)
 

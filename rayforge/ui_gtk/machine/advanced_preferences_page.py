@@ -1,5 +1,6 @@
 import logging
 from gettext import gettext as _
+
 from gi.repository import Adw, Gtk
 
 from ..shared.preferences_page import TrackedPreferencesPage
@@ -115,9 +116,8 @@ class AdvancedPreferencesPage(TrackedPreferencesPage):
 
     def on_arcs_changed(self, switch_row, _param):
         """Update the machine's arcs support when the value changes."""
-        self.machine.supports_arcs = switch_row.get_active()
+        self.machine.set_supports_arcs(switch_row.get_active())
         self.arc_tolerance_row.set_sensitive(self.machine.supports_arcs)
-        self.machine.changed.send(self.machine)
 
     def on_arc_tolerance_changed(self, spinrow):
         """Update to machine's arc tolerance when value changes."""

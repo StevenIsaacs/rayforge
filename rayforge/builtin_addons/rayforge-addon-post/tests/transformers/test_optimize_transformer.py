@@ -1,19 +1,48 @@
 import pytest
-from rayforge.core.ops import (
-    Ops,
-    MoveToCommand,
-    LineToCommand,
-    JobStartCommand,
-    MovingCommand,
-    ScanLinePowerCommand,
-)
-from rayforge.core.ops.commands import BezierToCommand
-from post_processors.transformers import (
-    Optimize,
-    greedy_order_segments,
-    two_opt,
-    kdtree_order_segments,
-)
+from post_processors.transformers import Optimize
+from raygeo.ops import Ops
+from raygeo.ops.types import CommandCategory, CommandType
+
+
+def _make_seg(start: tuple, end: tuple) -> Ops:
+    """Create a 2-point segment: move_to then line_to."""
+    ops = Ops()
+    ops.move_to(*start)
+    ops.line_to(*end)
+    return ops
+
+
+def _build_ops(segments: list[tuple], power: float = 1.0) -> Ops:
+    """Build an Ops from a list of (start, end) segment tuples."""
+    ops = Ops()
+    ops.set_power(power)
+    for start, end in segments:
+        ops.move_to(*start)
+        ops.line_to(*end)
+    return ops
+
+
+def _travel_distance(ops: Ops) -> float:
+    ops.preload_state()
+    return ops.distance() - ops.cut_distance()
+
+
+def _cut_endpoints(ops: Ops) -> list[tuple[float, float, float]]:
+    """Return endpoints of all cutting commands in order."""
+    return [ops.endpoint(i) for i in range(ops.len()) if ops.is_cutting(i)]
+
+
+def _line_endpoints(ops: Ops) -> list[tuple[float, float, float]]:
+    """Return endpoints of all LINE_TO commands in order."""
+    return [
+        ops.endpoint(i)
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.LINE_TO
+    ]
+
+
+def _count_cuts(ops: Ops) -> int:
+    return sum(1 for i in range(ops.len()) if ops.is_cutting(i))
 
 
 @pytest.fixture
@@ -23,92 +52,124 @@ def ctx(mock_progress_context) -> object:
 
 
 def test_greedy_order_segments(mock_progress_context):
-    """Test the greedy algorithm for initial segment ordering."""
-    # Seg1: (0,0) -> (10,0) - should be chosen first
-    # Seg2: (100,100) -> (110,100)
-    # Seg3: (10,0) -> (10,10) - should be chosen second
-    s1 = [MoveToCommand((0, 0, 0)), LineToCommand((10, 0, 0))]
-    s2 = [MoveToCommand((100, 100, 0)), LineToCommand((110, 100, 0))]
-    s3 = [MoveToCommand((10, 0, 0)), LineToCommand((10, 10, 0))]
-    segments = [s1, s2, s3]
-
-    ordered = greedy_order_segments(mock_progress_context, segments)
-    assert len(ordered) == 3
-    # Expected order: s1, s3, s2
-    assert ordered[0] is s1
-    assert ordered[1] is s3
-    assert ordered[2] is s2
+    """
+    Test the optimizer reorders segments so that close cuts appear together.
+    Segments: s1(0,0->10,0), s2(100,100->110,100), s3(10,0->10,10).
+    Expected: s1, s3 (connects at 10,0), s2 (far away).
+    """
+    ops = _build_ops(
+        [
+            ((0, 0, 0), (10, 0, 0)),
+            ((100, 100, 0), (110, 100, 0)),
+            ((10, 0, 0), (10, 10, 0)),
+        ]
+    )
+    optimizer = Optimize()
+    optimizer.run(ops, context=mock_progress_context)
+    travel_after = _travel_distance(ops)
+    # s1(0->10) then s3(10->10) connect at (10,0) with zero travel.
+    # Only one jump: from (10,10) to (100,100) ≈ 127.
+    assert travel_after < 130
+    # s2 should remain last (three cuts)
+    assert _count_cuts(ops) == 3
+    # Verify cut order: s1→(10,0), s3→(10,10), s2→(110,100)
+    ends = _line_endpoints(ops)
+    assert len(ends) == 3
+    assert ends[0] == pytest.approx((10, 0, 0))
+    assert ends[1] == pytest.approx((10, 10, 0))
+    assert ends[2] == pytest.approx((110, 100, 0))
 
 
 def test_greedy_order_with_flip(mock_progress_context):
-    """Test greedy ordering when flipping a segment is optimal."""
-    # Seg1: (0,0) -> (10,0)
-    # Seg2: (100,100) -> (110,100)
-    # Seg3: (10,10) -> (10,0) <-- start is far, end is near
-    s1 = [MoveToCommand((0, 0, 0)), LineToCommand((10, 0, 0))]
-    s2 = [MoveToCommand((100, 100, 0)), LineToCommand((110, 100, 0))]
-    s3 = [MoveToCommand((10, 10, 0)), LineToCommand((10, 0, 0))]
-    segments = [s1, s2, s3]
-
-    ordered = greedy_order_segments(mock_progress_context, segments)
-
-    # Expected: s1, flipped(s3), s2
-    assert ordered[0] is s1
-    assert ordered[1] is not s3  # Should be a new, flipped list
-    assert ordered[1][0].end == (10, 0, 0)  # Start of flipped s3
-    assert ordered[1][-1].end == (10, 10, 0)  # End of flipped s3
-    assert ordered[2] is s2
+    """
+    Test the optimizer flips s3 so it connects directly to s1.
+    s3 original: (10,10)→(10,0), flipped: (10,0)→(10,10).
+    """
+    ops = _build_ops(
+        [
+            ((0, 0, 0), (10, 0, 0)),
+            ((100, 100, 0), (110, 100, 0)),
+            ((10, 10, 0), (10, 0, 0)),
+        ]
+    )
+    optimizer = Optimize()
+    optimizer.run(ops, context=mock_progress_context)
+    travel_after = _travel_distance(ops)
+    # s1(0→10) then s3_flipped(10→10) connect with zero travel.
+    # One jump: (10,10) → (100,100) ≈ 127.
+    assert travel_after < 130
+    assert _count_cuts(ops) == 3
+    # After flipping: s1→(10,0), s3→(10,10), s2→(110,100)
+    ends = _line_endpoints(ops)
+    assert len(ends) == 3
+    assert ends[0] == pytest.approx((10, 0, 0))
+    assert ends[1] == pytest.approx((10, 10, 0))
+    assert ends[2] == pytest.approx((110, 100, 0))
 
 
 def test_kdtree_order_segments(mock_progress_context):
     """
-    Test the k-d tree algorithm for initial segment ordering and flipping.
+    Test the optimizer orders all four segments by nearest-neighbor.
+    A(0,0→10,0), B(100,0→110,0), C(10,10→10,0 flipped to 10,0→10,10),
+    D(110,0→110,10).
+    Expected: A, flipped(C), B, D — connecting at (10,0), (10,10),
+    (100,0→110,0), (110,0→110,10).
     """
-    # A(0,0 -> 10,0), B(100,0 -> 110,0), C(10,10 -> 10,0), D(110,0 -> 110,10)
-    # Optimal path should be A, C(flipped), B, D
-    sA = [MoveToCommand((0, 0, 0)), LineToCommand((10, 0, 0))]
-    sB = [MoveToCommand((100, 0, 0)), LineToCommand((110, 0, 0))]
-    sC = [MoveToCommand((10, 10, 0)), LineToCommand((10, 0, 0))]  # Reversed
-    sD = [MoveToCommand((110, 0, 0)), LineToCommand((110, 10, 0))]
-    segments = [sA, sB, sC, sD]
-
-    ordered = kdtree_order_segments(mock_progress_context, segments)
-
-    assert len(ordered) == 4
-    # Expected order: A, flipped(C), B, D
-    # 1. Start with A, ends at (10,0).
-    # 2. Closest point is end of C (10,0). C is chosen and flipped.
-    #    Path is now at original start of C (10,10).
-    # 3. From (10,10), closest is start of B (100,0). B is chosen.
-    #    Path is now at end of B (110,0).
-    # 4. From (110,0), closest is start of D (110,0). D is chosen.
-    assert ordered[0] is sA
-    assert ordered[1][0].end == (10, 0, 0)  # start of flipped sC
-    assert ordered[1][-1].end == (10, 10, 0)  # end of flipped sC
-    assert ordered[2] is sB
-    assert ordered[3] is sD
+    ops = _build_ops(
+        [
+            ((0, 0, 0), (10, 0, 0)),
+            ((100, 0, 0), (110, 0, 0)),
+            ((10, 10, 0), (10, 0, 0)),
+            ((110, 0, 0), (110, 10, 0)),
+        ]
+    )
+    travel_before = _travel_distance(ops.copy())
+    optimizer = Optimize()
+    optimizer.run(ops, context=mock_progress_context)
+    travel_after = _travel_distance(ops)
+    # Original: (10,0)→(100,0)=90, (110,0)→(10,10)≈100.5, (110,10)→(110,0)=10
+    # Optimized: no travel between A→C (connect at 10,0),
+    #            C(10,10)→B(100,0)≈90, B(110,0)→D(110,0)=0
+    # Total optimized travel ≈ 90. Original ≈ 200.
+    assert travel_after < travel_before * 0.75
+    assert _count_cuts(ops) == 4
+    ends = _line_endpoints(ops)
+    assert len(ends) == 4
+    assert ends[0] == pytest.approx((10, 0, 0))  # A → (10,0)
+    assert ends[1] == pytest.approx((10, 10, 0))  # flipped(C) → (10,10)
+    assert ends[2] == pytest.approx((110, 0, 0))  # B → (110,0)
+    assert ends[3] == pytest.approx((110, 10, 0))  # D → (110,10)
 
 
 def test_two_opt(mock_progress_context):
-    """Test the 2-opt algorithm for un-crossing paths."""
-    # A(0,0->1,0), B(10,10->11,10), C(2,0->1,0), D(11,10->12,10)
-    # Order A, B, C, D is crossed. Optimal is A, C, B, D.
-    # sC is reversed to make simple greedy fail.
-    sA = [MoveToCommand((0, 0, 0)), LineToCommand((1, 0, 0))]
-    sB = [MoveToCommand((10, 10, 0)), LineToCommand((11, 10, 0))]
-    sC = [MoveToCommand((2, 0, 0)), LineToCommand((1, 0, 0))]
-    sD = [MoveToCommand((11, 10, 0)), LineToCommand((12, 10, 0))]
-
-    ordered = [sA, sB, sC, sD]
-
-    optimized = two_opt(mock_progress_context, ordered, 10)
-
-    # 2-opt should reverse [sB, sC] to [sC, sB] and flip each segment.
-    # Expected final sequence: [sA, flipped(sC), flipped(sB), sD]
-    assert optimized[0] is sA
-    assert optimized[1][0].end == (1, 0, 0)  # start of flipped sC
-    assert optimized[2][0].end == (11, 10, 0)  # start of flipped sB
-    assert optimized[3] is sD
+    """
+    Test 2-opt refinement un-crosses paths.
+    A(0,0→1,0), B(10,10→11,10), C(2,0→1,0 reversed), D(11,10→12,10).
+    KDTree should produce A, flipped(C), B, D.
+    """
+    ops = _build_ops(
+        [
+            ((0, 0, 0), (1, 0, 0)),
+            ((10, 10, 0), (11, 10, 0)),
+            ((2, 0, 0), (1, 0, 0)),
+            ((11, 10, 0), (12, 10, 0)),
+        ]
+    )
+    travel_before = _travel_distance(ops.copy())
+    optimizer = Optimize()
+    optimizer.run(ops, context=mock_progress_context)
+    travel_after = _travel_distance(ops)
+    # Original: (1,0)→(10,10)≈12.8, (11,10)→(2,0)≈10.5, (1,0)→(11,10)≈10.5
+    # Optimized A,C,B,D: (1,0)→(1,0)=0, (2,0)→(10,10)≈12.8, (11,10)→(11,10)=0
+    assert travel_after < travel_before
+    assert _count_cuts(ops) == 4
+    ends = _line_endpoints(ops)
+    assert len(ends) == 4
+    # After optimization: A→(1,0), flipped(C)→(2,0), B→(11,10), D→(12,10)
+    assert ends[0] == pytest.approx((1, 0, 0))
+    assert ends[1] == pytest.approx((2, 0, 0))
+    assert ends[2] == pytest.approx((11, 10, 0))
+    assert ends[3] == pytest.approx((12, 10, 0))
 
 
 def _calculate_travel_distance(ops: Ops) -> float:
@@ -155,7 +216,7 @@ def test_run_optimization(mock_progress_context):
     assert travel_after < 150, "Optimized travel should be just one jump"
 
     # Check that the number of cutting commands is the same
-    cuts_after = sum(1 for c in ops.commands if c.is_cutting_command())
+    cuts_after = sum(1 for i in range(ops.len()) if ops.is_cutting(i))
     assert cuts_after == 4
 
 
@@ -188,28 +249,36 @@ def test_run_with_air_assist_change(mock_progress_context):
 
     # After optimization, find the first command with air assist ON.
     air_on_idx = -1
-    for i, cmd in enumerate(ops.commands):
-        if cmd.state and cmd.state.air_assist:
-            air_on_idx = i
-            break
+    for i in range(ops.len()):
+        if ops.category(i) == CommandCategory.MOVING:
+            state = ops.preloaded_state(i)
+            if state is not None and state.air_assist:
+                air_on_idx = i
+                break
 
     assert air_on_idx != -1, "A segment with air assist ON should exist"
 
     # All points before this index should be from Part 1
     for i in range(air_on_idx):
-        cmd = ops.commands[i]
-        if cmd.end and cmd.state:  # Check only moving commands
-            assert cmd.end[0] < 50, (
+        if ops.category(i) == CommandCategory.MOVING:
+            assert ops.endpoint(i)[0] < 50, (
                 "Points from Part 1 should be in first half"
             )
-            assert not cmd.state.air_assist, "State should be air OFF"
+            state = ops.preloaded_state(i)
+            assert state is None or not state.air_assist, (
+                "State should be air OFF"
+            )
 
     # All points from this index on should be from Part 2
-    for i in range(air_on_idx, len(ops.commands)):
-        cmd = ops.commands[i]
-        if cmd.end and cmd.state:  # Check only moving commands
-            assert cmd.end[0] > 50, "Points from Part 2 should be second half"
-            assert cmd.state.air_assist, "State should be air ON"
+    for i in range(air_on_idx, ops.len()):
+        if ops.category(i) == CommandCategory.MOVING:
+            assert ops.endpoint(i)[0] > 50, (
+                "Points from Part 2 should be second half"
+            )
+            state = ops.preloaded_state(i)
+            assert state is not None and state.air_assist, (
+                "State should be air ON"
+            )
 
 
 def test_run_preserves_markers(mock_progress_context):
@@ -222,7 +291,7 @@ def test_run_preserves_markers(mock_progress_context):
     ops.line_to(10, 0)  # Seg 1
     ops.move_to(100, 100)
     ops.line_to(110, 100)  # Seg 2
-    ops.add(JobStartCommand())  # Marker
+    ops.job_start()  # Marker
     ops.move_to(10, 0)
     ops.line_to(10, 10)  # Seg 3
     ops.move_to(110, 100)
@@ -233,20 +302,22 @@ def test_run_preserves_markers(mock_progress_context):
 
     # Find the marker
     marker_idx = -1
-    for i, cmd in enumerate(ops.commands):
-        if isinstance(cmd, JobStartCommand):
+    for i in range(ops.len()):
+        if ops.command_type(i) == CommandType.JOB_START:
             marker_idx = i
             break
 
     assert marker_idx != -1, "Marker command should be preserved"
 
     # Check that segments before the marker were optimized together
-    moving_cmds_before = [
-        c for c in ops.commands[:marker_idx] if isinstance(c, MovingCommand)
+    moving_before = [
+        ops.endpoint(i)
+        for i in range(marker_idx)
+        if ops.category(i) == CommandCategory.MOVING
     ]
-    assert len(moving_cmds_before) == 4
+    assert len(moving_before) == 4
     starts_before = {
-        c.end for c in moving_cmds_before if c.is_travel_command()
+        ops.endpoint(i) for i in range(marker_idx) if ops.is_travel(i)
     }
     # After optimization, there will be one travel to the start of the first
     # segment, and one travel between segments. The exact points depend on
@@ -254,13 +325,17 @@ def test_run_preserves_markers(mock_progress_context):
     assert (0, 0, 0) in starts_before or (100, 100, 0) in starts_before
 
     # Check that segments after the marker were optimized together
-    moving_cmds_after = [
-        c
-        for c in ops.commands[marker_idx + 1 :]
-        if isinstance(c, MovingCommand)
+    moving_after = [
+        ops.endpoint(i)
+        for i in range(marker_idx + 1, ops.len())
+        if ops.category(i) == CommandCategory.MOVING
     ]
-    assert len(moving_cmds_after) == 4
-    starts_after = {c.end for c in moving_cmds_after if c.is_travel_command()}
+    assert len(moving_after) == 4
+    starts_after = {
+        ops.endpoint(i)
+        for i in range(marker_idx + 1, ops.len())
+        if ops.is_travel(i)
+    }
     assert (10, 0, 0) in starts_after or (110, 100, 0) in starts_after
 
 
@@ -288,24 +363,30 @@ def test_run_optimization_with_unsplit_scanline(mock_progress_context):
     # Travel should be zero after flipping.
     assert travel_after == pytest.approx(0.0)
 
-    moving_cmds = [c for c in ops.commands if isinstance(c, MovingCommand)]
+    moving_indices = [
+        i
+        for i in range(ops.len())
+        if ops.category(i) == CommandCategory.MOVING
+    ]
 
     # Original unoptimized: M, L, M, S (4)
     # Optimized: M, L, M, S_flipped (4)
-    assert len(moving_cmds) == 4
+    assert len(moving_indices) == 4
 
     # Check the final flipped segment
-    flipped_move_cmd = moving_cmds[2]
-    flipped_scan_cmd = moving_cmds[3]
-    assert isinstance(flipped_move_cmd, MoveToCommand)
-    assert isinstance(flipped_scan_cmd, ScanLinePowerCommand)
+    flipped_move_idx = moving_indices[2]
+    flipped_scan_idx = moving_indices[3]
+    assert ops.command_type(flipped_move_idx) == CommandType.MOVE_TO
+    assert ops.command_type(flipped_scan_idx) == CommandType.SCAN_LINE
 
     # The new segment should start where the old one ended
-    assert flipped_move_cmd.end == pytest.approx((10.0, 0.0, 0.0))
+    assert ops.endpoint(flipped_move_idx) == pytest.approx((10.0, 0.0, 0.0))
     # The scan command's geometry should reflect the flipped segment
-    assert flipped_scan_cmd.end == pytest.approx((20.0, 0.0, 0.0))
+    assert ops.endpoint(flipped_scan_idx) == pytest.approx((20.0, 0.0, 0.0))
     # Power values should be reversed
-    assert flipped_scan_cmd.power_values == bytearray([30, 20, 10])
+    assert bytearray(ops.scanline_data(flipped_scan_idx)) == bytearray(
+        [30, 20, 10]
+    )
 
 
 def test_run_optimization_with_split_scanline(mock_progress_context):
@@ -331,13 +412,17 @@ def test_run_optimization_with_split_scanline(mock_progress_context):
     optimizer.run(ops, context=mock_progress_context)
     ops.preload_state()
 
-    moving_cmds = [c for c in ops.commands if isinstance(c, MovingCommand)]
+    moving_indices = [
+        i
+        for i in range(ops.len())
+        if ops.category(i) == CommandCategory.MOVING
+    ]
 
     # Original: M, L, M, S (4 commands total)
     # The ScanLine is split into two segments: [M, S] and [M, S].
     # The original M is removed, so we add 2*2=4 new commands.
     # Total expanded: M, L, M_B, S_B, M_C, S_C -> 6 commands
-    assert len(moving_cmds) == 6
+    assert len(moving_indices) == 6
 
     # The greedy k-d tree algorithm will produce the path [A, C, flipped(B)].
     # 1. Start with A, ending at x=108.
@@ -346,30 +431,39 @@ def test_run_optimization_with_split_scanline(mock_progress_context):
     #    end of B (x=102.857), so B is flipped.
 
     # Check segment C (part 2), which should be next.
-    move_cmd_1 = moving_cmds[2]
-    scan_cmd_1 = moving_cmds[3]
-    assert isinstance(move_cmd_1, MoveToCommand)
-    assert isinstance(scan_cmd_1, ScanLinePowerCommand)
+    move_cmd_1_idx = moving_indices[2]
+    scan_cmd_1_idx = moving_indices[3]
+    assert ops.command_type(move_cmd_1_idx) == CommandType.MOVE_TO
+    assert ops.command_type(scan_cmd_1_idx) == CommandType.SCAN_LINE
 
     # It should connect to the start of C, its original start.
-    assert move_cmd_1.end == pytest.approx((107.142, 5.0, 0.0), abs=1e-3)
+    assert ops.endpoint(move_cmd_1_idx) == pytest.approx(
+        (107.142, 5.0, 0.0), abs=1e-3
+    )
     # The scan should proceed to the original end of C.
-    assert scan_cmd_1.end == pytest.approx((110.0, 5.0, 0.0))
-    assert scan_cmd_1.power_values == bytearray([60, 60])
+    assert ops.endpoint(scan_cmd_1_idx) == pytest.approx((110.0, 5.0, 0.0))
+    assert bytearray(ops.scanline_data(scan_cmd_1_idx)) == bytearray([60, 60])
 
     # Check segment flipped(B) (part 1), which should be last.
-    move_cmd_2 = moving_cmds[4]
-    scan_cmd_2 = moving_cmds[5]
-    assert isinstance(move_cmd_2, MoveToCommand)
-    assert isinstance(scan_cmd_2, ScanLinePowerCommand)
+    move_cmd_2_idx = moving_indices[4]
+    scan_cmd_2_idx = moving_indices[5]
+    assert ops.command_type(move_cmd_2_idx) == CommandType.MOVE_TO
+    assert ops.command_type(scan_cmd_2_idx) == CommandType.SCAN_LINE
     # It should connect to the start of flipped(B), which is B's original end.
-    assert move_cmd_2.end == pytest.approx((102.857, 5.0, 0.0), abs=1e-3)
+    assert ops.endpoint(move_cmd_2_idx) == pytest.approx(
+        (102.857, 5.0, 0.0), abs=1e-3
+    )
     # The scan should proceed to the end of flipped(B), B's original start.
-    assert scan_cmd_2.end == pytest.approx((100.0, 5.0, 0.0))
-    assert scan_cmd_2.power_values == bytearray([50, 50])[::-1]
+    assert ops.endpoint(scan_cmd_2_idx) == pytest.approx((100.0, 5.0, 0.0))
+    assert (
+        bytearray(ops.scanline_data(scan_cmd_2_idx))
+        == bytearray([50, 50])[::-1]
+    )
 
 
-def test_optimizer_does_not_split_overscanned_scanline(mock_progress_context):
+def test_optimizer_does_not_split_overscanned_scanline(
+    mock_progress_context,
+):
     """
     Tests that the optimizer does not split a ScanLinePowerCommand that has
     been padded with zero-power values by the OverscanTransformer.
@@ -398,28 +492,36 @@ def test_optimizer_does_not_split_overscanned_scanline(mock_progress_context):
     optimizer.run(ops, context=mock_progress_context)
 
     # Assert: The optimizer should NOT have split the scanline.
-    scan_cmds = [
-        c for c in ops.commands if isinstance(c, ScanLinePowerCommand)
+    scan_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SCAN_LINE
     ]
-    move_cmds = [c for c in ops.commands if isinstance(c, MoveToCommand)]
+    move_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.MOVE_TO
+    ]
 
     # 1. There should still be exactly one ScanLinePowerCommand
-    assert len(scan_cmds) == 1
-    final_scan_cmd = scan_cmds[0]
+    assert len(scan_indices) == 1
+    final_scan_idx = scan_indices[0]
 
     # 2. The move command preceding it should still start at the overscan point
-    assert len(move_cmds) == 1
-    assert move_cmds[0].end == pytest.approx(start_pt)
+    assert len(move_indices) == 1
+    assert ops.endpoint(move_indices[0]) == pytest.approx(start_pt)
 
     # 3. The scanline's geometry should be unchanged. If it were split, the
     #    endpoint would be shortened to the end of the content area.
-    assert final_scan_cmd.end == pytest.approx(end_pt)
+    assert ops.endpoint(final_scan_idx) == pytest.approx(end_pt)
 
     # 4. The power values should still contain the zero-power padding.
-    assert final_scan_cmd.power_values == power_values
+    assert bytearray(ops.scanline_data(final_scan_idx)) == power_values
 
 
-def test_run_optimization_scanline_flip_preserves_state(mock_progress_context):
+def test_run_optimization_scanline_flip_preserves_state(
+    mock_progress_context,
+):
     """
     Verify that when a ScanLine segment is flipped, the new commands
     (MoveTo, ScanLinePowerCommand) correctly inherit the state.
@@ -441,27 +543,30 @@ def test_run_optimization_scanline_flip_preserves_state(mock_progress_context):
     optimizer.run(ops, context=mock_progress_context)
     ops.preload_state()
 
-    scan_cmds = [
-        c for c in ops.commands if isinstance(c, ScanLinePowerCommand)
+    scan_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SCAN_LINE
     ]
-    assert len(scan_cmds) == 1
-    scan_cmd = scan_cmds[0]
+    assert len(scan_indices) == 1
+    scan_idx = scan_indices[0]
 
-    move_cmd_idx = ops.commands.index(scan_cmd) - 1
-    move_cmd = ops.commands[move_cmd_idx]
-    assert isinstance(move_cmd, MoveToCommand)
+    move_idx = scan_idx - 1
+    assert ops.command_type(move_idx) == CommandType.MOVE_TO
 
     # Check state on the new MoveTo for the flipped segment
-    assert move_cmd.state is not None
-    assert move_cmd.state.power == pytest.approx(0.85)
-    assert move_cmd.state.cut_speed == pytest.approx(1234)
-    assert move_cmd.state.air_assist is True
+    move_state = ops.preloaded_state(move_idx)
+    assert move_state is not None
+    assert move_state.power == pytest.approx(0.85)
+    assert move_state.cut_speed == pytest.approx(1234)
+    assert move_state.air_assist is True
 
     # Check state on the flipped ScanLinePowerCommand
-    assert scan_cmd.state is not None
-    assert scan_cmd.state.power == pytest.approx(0.85)
-    assert scan_cmd.state.cut_speed == pytest.approx(1234)
-    assert scan_cmd.state.air_assist is True
+    scan_state = ops.preloaded_state(scan_idx)
+    assert scan_state is not None
+    assert scan_state.power == pytest.approx(0.85)
+    assert scan_state.cut_speed == pytest.approx(1234)
+    assert scan_state.air_assist is True
 
 
 def test_run_optimization_scanline_split_preserves_state(
@@ -488,27 +593,30 @@ def test_run_optimization_scanline_split_preserves_state(
     ops.preload_state()
 
     # The original ScanLine should be replaced by two new ones
-    scan_cmds = [
-        c for c in ops.commands if isinstance(c, ScanLinePowerCommand)
+    scan_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SCAN_LINE
     ]
-    assert len(scan_cmds) == 2
+    assert len(scan_indices) == 2
 
-    for scan_cmd in scan_cmds:
-        move_cmd_idx = ops.commands.index(scan_cmd) - 1
-        move_cmd = ops.commands[move_cmd_idx]
-        assert isinstance(move_cmd, MoveToCommand)
+    for scan_idx in scan_indices:
+        move_idx = scan_idx - 1
+        assert ops.command_type(move_idx) == CommandType.MOVE_TO
 
         # Verify state on the new MoveTo for the sub-segment
-        assert move_cmd.state is not None
-        assert move_cmd.state.power == pytest.approx(0.77)
-        assert move_cmd.state.travel_speed == pytest.approx(5678)
-        assert move_cmd.state.air_assist is False
+        move_state = ops.preloaded_state(move_idx)
+        assert move_state is not None
+        assert move_state.power == pytest.approx(0.77)
+        assert move_state.travel_speed == pytest.approx(5678)
+        assert move_state.air_assist is False
 
         # Verify state on the new ScanLinePowerCommand for the sub-segment
-        assert scan_cmd.state is not None
-        assert scan_cmd.state.power == pytest.approx(0.77)
-        assert scan_cmd.state.travel_speed == pytest.approx(5678)
-        assert scan_cmd.state.air_assist is False
+        scan_state = ops.preloaded_state(scan_idx)
+        assert scan_state is not None
+        assert scan_state.power == pytest.approx(0.77)
+        assert scan_state.travel_speed == pytest.approx(5678)
+        assert scan_state.air_assist is False
 
 
 def test_run_with_state_change_and_scanlines(mock_progress_context):
@@ -541,36 +649,34 @@ def test_run_with_state_change_and_scanlines(mock_progress_context):
 
     # Find the index where the state changes
     power_change_idx = -1
-    for i, cmd in enumerate(ops.commands):
-        if (
-            isinstance(cmd, MovingCommand)
-            and cmd.state
-            and cmd.state.power == pytest.approx(0.9)
-        ):
-            power_change_idx = i
-            break
+    for i in range(ops.len()):
+        if ops.category(i) == CommandCategory.MOVING:
+            state = ops.preloaded_state(i)
+            if state is not None and state.power == pytest.approx(0.9):
+                power_change_idx = i
+                break
 
     assert power_change_idx != -1, "A segment with power 0.9 should exist"
 
     # Check all moving commands before the state change
     for i in range(power_change_idx):
-        cmd = ops.commands[i]
-        if isinstance(cmd, MovingCommand) and cmd.state:
-            assert cmd.end[0] < 50, (
+        if ops.category(i) == CommandCategory.MOVING:
+            state = ops.preloaded_state(i)
+            assert ops.endpoint(i)[0] < 50, (
                 "Points from Part 1 should be in first half"
             )
-            assert cmd.state.power == pytest.approx(0.4), (
+            assert state is not None and state.power == pytest.approx(0.4), (
                 "State should be power 0.4"
             )
 
     # Check all moving commands at and after the state change
-    for i in range(power_change_idx, len(ops.commands)):
-        cmd = ops.commands[i]
-        if isinstance(cmd, MovingCommand) and cmd.state:
-            assert cmd.end[0] > 50, (
+    for i in range(power_change_idx, ops.len()):
+        if ops.category(i) == CommandCategory.MOVING:
+            state = ops.preloaded_state(i)
+            assert ops.endpoint(i)[0] > 50, (
                 "Points from Part 2 should be in second half"
             )
-            assert cmd.state.power == pytest.approx(0.9), (
+            assert state is not None and state.power == pytest.approx(0.9), (
                 "State should be power 0.9"
             )
 
@@ -581,9 +687,9 @@ def test_run_with_state_change_and_scanlines(mock_progress_context):
     # Travel is from (10,0) to (10,10) = 10.
     # We can verify this by checking the order of the Y coordinates.
     y_coords = [
-        cmd.end[1]
-        for cmd in ops.commands[:power_change_idx]
-        if isinstance(cmd, ScanLinePowerCommand)
+        ops.endpoint(i)[1]
+        for i in range(power_change_idx)
+        if ops.command_type(i) == CommandType.SCAN_LINE
     ]
     assert y_coords == [0, 10] or y_coords == [10, 0], (
         "Optimization should order by y-coord"
@@ -622,31 +728,34 @@ def test_run_optimization_with_overscan_and_flip_preserves_state(
     ops.preload_state()
 
     # Find the scan command after optimization
-    scan_cmds = [
-        c for c in ops.commands if isinstance(c, ScanLinePowerCommand)
+    scan_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SCAN_LINE
     ]
-    assert len(scan_cmds) == 1
-    flipped_scan_cmd = scan_cmds[0]
+    assert len(scan_indices) == 1
+    flipped_scan_idx = scan_indices[0]
 
     # Find its preceding MoveTo command
-    move_cmd_idx = ops.commands.index(flipped_scan_cmd) - 1
-    move_cmd = ops.commands[move_cmd_idx]
-    assert isinstance(move_cmd, MoveToCommand)
+    move_idx = flipped_scan_idx - 1
+    assert ops.command_type(move_idx) == CommandType.MOVE_TO
 
     # Check state on the new MoveTo for the flipped segment
-    assert move_cmd.state is not None
-    assert move_cmd.state.power == pytest.approx(0.66)
-    assert move_cmd.state.cut_speed == pytest.approx(2000)
+    move_state = ops.preloaded_state(move_idx)
+    assert move_state is not None
+    assert move_state.power == pytest.approx(0.66)
+    assert move_state.cut_speed == pytest.approx(2000)
 
     # Check state on the flipped ScanLinePowerCommand
-    assert flipped_scan_cmd.state is not None
-    assert flipped_scan_cmd.state.power == pytest.approx(0.66)
-    assert flipped_scan_cmd.state.cut_speed == pytest.approx(2000)
+    scan_state = ops.preloaded_state(flipped_scan_idx)
+    assert scan_state is not None
+    assert scan_state.power == pytest.approx(0.66)
+    assert scan_state.cut_speed == pytest.approx(2000)
 
     # Verify the geometry and power values were flipped correctly
-    assert move_cmd.end == pytest.approx(end_pt_overscan)
-    assert flipped_scan_cmd.end == pytest.approx(start_pt_overscan)
-    assert flipped_scan_cmd.power_values == power_values[::-1]
+    assert ops.endpoint(move_idx) == pytest.approx(end_pt_overscan)
+    assert ops.endpoint(flipped_scan_idx) == pytest.approx(start_pt_overscan)
+    assert bytearray(ops.scanline_data(flipped_scan_idx)) == power_values[::-1]
 
 
 def test_workpiece_level_optimization(mock_progress_context):
@@ -654,8 +763,6 @@ def test_workpiece_level_optimization(mock_progress_context):
     Test that workpiece-level optimization reorders workpieces to minimize
     travel when run at per-step level (workpiece=None).
     """
-    from rayforge.core.ops import WorkpieceStartCommand
-
     ops = Ops()
     ops.set_power(1.0)
 
@@ -696,9 +803,9 @@ def test_workpiece_level_optimization(mock_progress_context):
 
     # Extract workpiece order after optimization
     wp_order = []
-    for cmd in ops:
-        if isinstance(cmd, WorkpieceStartCommand):
-            wp_order.append(cmd.workpiece_uid)
+    for i in range(ops.len()):
+        if ops.command_type(i) == CommandType.WORKPIECE_START:
+            wp_order.append(ops.workpiece_uid(i))
 
     # Should be reordered: A, B, C (not A, C, B)
     assert wp_order == ["wp-a", "wp-b", "wp-c"], (
@@ -726,18 +833,30 @@ def test_bezier_passes_through_optimizer(mock_progress_context):
     optimizer.run(ops, context=mock_progress_context)
     ops.preload_state()
 
-    bezier_cmds = [c for c in ops.commands if isinstance(c, BezierToCommand)]
-    assert len(bezier_cmds) == 1
-    cmd = bezier_cmds[0]
-    assert cmd.control1 == (110, 10, 0)
-    assert cmd.control2 == (120, 10, 0)
-    assert cmd.end == (130, 0, 0)
+    bezier_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.BEZIER_TO
+    ]
+    assert len(bezier_indices) == 1
+    c1, c2 = ops.bezier_params(bezier_indices[0])
+    assert c1 == (110, 10, 0)
+    assert c2 == (120, 10, 0)
+    assert ops.endpoint(bezier_indices[0]) == (130, 0, 0)
 
-    line_cmds = [c for c in ops.commands if isinstance(c, LineToCommand)]
-    assert len(line_cmds) == 1
+    line_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.LINE_TO
+    ]
+    assert len(line_indices) == 1
 
-    moving_cmds = [c for c in ops.commands if isinstance(c, MovingCommand)]
-    assert len(moving_cmds) == 4
+    moving_count = sum(
+        1
+        for i in range(ops.len())
+        if ops.category(i) == CommandCategory.MOVING
+    )
+    assert moving_count == 4
 
 
 def test_bezier_segment_flip(mock_progress_context):
@@ -761,16 +880,21 @@ def test_bezier_segment_flip(mock_progress_context):
     optimizer.run(ops, context=mock_progress_context)
     ops.preload_state()
 
-    bezier_cmds = [c for c in ops.commands if isinstance(c, BezierToCommand)]
-    assert len(bezier_cmds) == 1
-    cmd = bezier_cmds[0]
+    bezier_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.BEZIER_TO
+    ]
+    assert len(bezier_indices) == 1
+    idx = bezier_indices[0]
 
     # The bezier should be flipped:
     # - end changes from original (10, 0) to (30, 0)
     # - control1/control2 are swapped
-    assert cmd.end == pytest.approx((30, 0, 0))
-    assert cmd.control1 == pytest.approx((15, 5, 0))
-    assert cmd.control2 == pytest.approx((25, 5, 0))
+    assert ops.endpoint(idx) == pytest.approx((30, 0, 0))
+    c1, c2 = ops.bezier_params(idx)
+    assert c1 == pytest.approx((15, 5, 0))
+    assert c2 == pytest.approx((25, 5, 0))
 
 
 def test_mixed_lines_and_bezier(mock_progress_context):
@@ -812,7 +936,15 @@ def test_mixed_lines_and_bezier(mock_progress_context):
 
     assert travel_after < travel_before
 
-    bezier_cmds = [c for c in ops.commands if isinstance(c, BezierToCommand)]
-    assert len(bezier_cmds) == 1
-    line_cmds = [c for c in ops.commands if isinstance(c, LineToCommand)]
-    assert len(line_cmds) == 2
+    bezier_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.BEZIER_TO
+    ]
+    assert len(bezier_indices) == 1
+    line_indices = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.LINE_TO
+    ]
+    assert len(line_indices) == 2

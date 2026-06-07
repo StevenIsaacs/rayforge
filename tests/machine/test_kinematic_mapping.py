@@ -2,19 +2,14 @@ import math
 
 import numpy as np
 import pytest
+from raygeo.ops import Ops
+from raygeo.ops.axis import Axis
+from raygeo.ops.types import CommandType
 
-from rayforge.core.ops.axis import Axis
-from rayforge.core.ops import Ops
-from rayforge.core.ops.commands import (
-    ArcToCommand,
-    BezierToCommand,
-    MovingCommand,
-    QuadraticBezierToCommand,
-)
 from rayforge.machine.kinematic_mapping import KinematicMapping
 from rayforge.machine.models.rotary_module import (
-    RotaryModule,
     RotaryMode,
+    RotaryModule,
     RotaryType,
 )
 
@@ -32,14 +27,19 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmds = [c for c in ops if isinstance(c, MovingCommand)]
-        assert cmds[0].end[1] == pytest.approx(0.0)
-        assert cmds[1].end[1] == pytest.approx(0.0)
+        move_idx = ops.indices_of(CommandType.MOVE_TO)[0]
+        line_idx = ops.indices_of(CommandType.LINE_TO)[0]
+        assert ops.endpoint(move_idx)[1] == pytest.approx(0.0)
+        assert ops.endpoint(line_idx)[1] == pytest.approx(0.0)
 
         expected_deg_0 = (0.0 / (diameter * math.pi)) * 360.0
         expected_deg_50 = (50.0 / (diameter * math.pi)) * 360.0
-        assert cmds[0].extra_axes[Axis.A] == pytest.approx(expected_deg_0)
-        assert cmds[1].extra_axes[Axis.A] == pytest.approx(expected_deg_50)
+        ea0 = ops.extra_axes(move_idx)
+        ea1 = ops.extra_axes(line_idx)
+        assert ea0 is not None
+        assert ea1 is not None
+        assert ea0[Axis.A] == pytest.approx(expected_deg_0)
+        assert ea1[Axis.A] == pytest.approx(expected_deg_50)
 
     def test_z_does_not_affect_degrees(self):
         diameter = 25.0
@@ -53,9 +53,11 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmds = [c for c in ops if isinstance(c, MovingCommand)]
+        line_idx = ops.indices_of(CommandType.LINE_TO)[0]
         expected = (50.0 / (diameter * math.pi)) * 360.0
-        assert cmds[1].extra_axes[Axis.A] == pytest.approx(expected)
+        ea = ops.extra_axes(line_idx)
+        assert ea is not None
+        assert ea[Axis.A] == pytest.approx(expected)
 
     def test_gear_ratio(self):
         diameter = 20.0
@@ -72,10 +74,12 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmds = [c for c in ops if isinstance(c, MovingCommand)]
+        line_idx = ops.indices_of(CommandType.LINE_TO)[0]
         circ = diameter * math.pi
         expected = (50.0 / circ) * 360.0 * gear_ratio
-        assert cmds[1].extra_axes[Axis.A] == pytest.approx(expected)
+        ea = ops.extra_axes(line_idx)
+        assert ea is not None
+        assert ea[Axis.A] == pytest.approx(expected)
 
     def test_reverse_axis(self):
         diameter = 25.0
@@ -90,10 +94,12 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmds = [c for c in ops if isinstance(c, MovingCommand)]
+        line_idx = ops.indices_of(CommandType.LINE_TO)[0]
         circ = diameter * math.pi
         expected = -(50.0 / circ) * 360.0
-        assert cmds[1].extra_axes[Axis.A] == pytest.approx(expected)
+        ea = ops.extra_axes(line_idx)
+        assert ea is not None
+        assert ea[Axis.A] == pytest.approx(expected)
 
     def test_arc_center_offset_converted(self):
         diameter = 25.0
@@ -107,10 +113,10 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        arc = [c for c in ops if isinstance(c, ArcToCommand)][0]
+        arc_idx = ops.indices_of(CommandType.ARC_TO)[0]
         src_offset_y = 0
         expected_deg = (src_offset_y / (diameter * math.pi)) * 360.0
-        assert arc.center_offset[1] == pytest.approx(expected_deg)
+        assert ops.arc_params(arc_idx)[1] == pytest.approx(expected_deg)
 
     def test_bezier_control_points_converted(self):
         diameter = 25.0
@@ -124,17 +130,17 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmd = [c for c in ops if isinstance(c, BezierToCommand)][0]
+        bez_idx = ops.indices_of(CommandType.BEZIER_TO)[0]
         circ = diameter * math.pi
-        assert cmd.control1[1] == pytest.approx((20.0 / circ) * 360.0)
-        assert cmd.control2[1] == pytest.approx((40.0 / circ) * 360.0)
+        c1, c2 = ops.bezier_params(bez_idx)
+        assert c1[1] == pytest.approx((20.0 / circ) * 360.0)
+        assert c2[1] == pytest.approx((40.0 / circ) * 360.0)
 
     def test_quadratic_bezier_control_converted(self):
         diameter = 25.0
         ops = Ops()
         ops.move_to(0, 0, 0)
-        cmd = QuadraticBezierToCommand(end=(20, 50, 0), control=(10, 30, 0))
-        ops.add(cmd)
+        ops.quadratic_bezier_to(control=(10, 30, 0), end=(20, 50, 0))
 
         mapping = KinematicMapping(
             rotary_axis=Axis.A,
@@ -142,9 +148,10 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmd = [c for c in ops if isinstance(c, QuadraticBezierToCommand)][0]
+        qb_idx = ops.indices_of(CommandType.QUADRATIC_BEZIER_TO)[0]
         circ = diameter * math.pi
-        assert cmd.control[1] == pytest.approx((30.0 / circ) * 360.0)
+        ctrl = ops.quadratic_bezier_params(qb_idx)
+        assert ctrl[1] == pytest.approx((30.0 / circ) * 360.0)
 
     def test_non_moving_commands_untouched(self):
         ops = Ops()
@@ -157,7 +164,7 @@ class TestKinematicMappingApply:
             diameter=25.0,
         )
         mapping.apply(ops)
-        assert len(ops._commands) == 3
+        assert ops.len() == 3
 
     def test_axis_position_parks_source_axis(self):
         diameter = 25.0
@@ -172,15 +179,20 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmds = [c for c in ops if isinstance(c, MovingCommand)]
-        assert cmds[0].end[1] == pytest.approx(100.0)
-        assert cmds[1].end[1] == pytest.approx(100.0)
+        move_idx = ops.indices_of(CommandType.MOVE_TO)[0]
+        line_idx = ops.indices_of(CommandType.LINE_TO)[0]
+        assert ops.endpoint(move_idx)[1] == pytest.approx(100.0)
+        assert ops.endpoint(line_idx)[1] == pytest.approx(100.0)
 
         circ = diameter * math.pi
         expected_deg_0 = (100.0 / circ) * 360.0
         expected_deg_50 = (150.0 / circ) * 360.0
-        assert cmds[0].extra_axes[Axis.A] == pytest.approx(expected_deg_0)
-        assert cmds[1].extra_axes[Axis.A] == pytest.approx(expected_deg_50)
+        ea0 = ops.extra_axes(move_idx)
+        ea1 = ops.extra_axes(line_idx)
+        assert ea0 is not None
+        assert ea1 is not None
+        assert ea0[Axis.A] == pytest.approx(expected_deg_0)
+        assert ea1[Axis.A] == pytest.approx(expected_deg_50)
 
     def test_axis_position_bezier_controls(self):
         diameter = 25.0
@@ -195,11 +207,12 @@ class TestKinematicMappingApply:
         )
         mapping.apply(ops)
 
-        cmd = [c for c in ops if isinstance(c, BezierToCommand)][0]
+        bez_idx = ops.indices_of(CommandType.BEZIER_TO)[0]
         circ = diameter * math.pi
-        assert cmd.control1[1] == pytest.approx((120.0 / circ) * 360.0)
-        assert cmd.control2[1] == pytest.approx((140.0 / circ) * 360.0)
-        assert cmd.end[1] == pytest.approx(100.0)
+        c1, c2 = ops.bezier_params(bez_idx)
+        assert c1[1] == pytest.approx((120.0 / circ) * 360.0)
+        assert c2[1] == pytest.approx((140.0 / circ) * 360.0)
+        assert ops.endpoint(bez_idx)[1] == pytest.approx(100.0)
 
 
 class TestKinematicMappingFromModule:
@@ -272,13 +285,14 @@ class TestKinematicMappingFromModule:
             cylinder_dir=cdir,
         )
 
-        cmds = [c for c in ops if isinstance(c, MovingCommand)]
+        move_idx = ops.indices_of(CommandType.MOVE_TO)[0]
+        line_idx = ops.indices_of(CommandType.LINE_TO)[0]
         mapping.apply(ops)
 
         expected_si_0 = 200.0 + 0.0 * cdir[1]
         expected_si_1 = 200.0 + 100.0 * cdir[1]
-        assert cmds[0].end[1] == pytest.approx(expected_si_0)
-        assert cmds[1].end[1] == pytest.approx(expected_si_1)
+        assert ops.endpoint(move_idx)[1] == pytest.approx(expected_si_0)
+        assert ops.endpoint(line_idx)[1] == pytest.approx(expected_si_1)
 
     def test_cylinder_dir_from_rotated_module(self):
         rm = RotaryModule()

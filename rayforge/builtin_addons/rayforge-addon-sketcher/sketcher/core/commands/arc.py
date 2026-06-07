@@ -1,11 +1,13 @@
 from __future__ import annotations
+
 import math
 from gettext import gettext as _
 from typing import TYPE_CHECKING, List, Optional, Set
 
-from rayforge.core.geo import Point as GeoPoint
-from rayforge.core.geo.arc import determine_arc_direction
-from rayforge.core.geo.circle import project_point_onto_circle
+from raygeo.geo.shape.arc import get_arc_direction
+from raygeo.geo.shape.circle import project_point_onto_circle
+from raygeo.geo.types import Point as GeoPoint
+
 from ..constraints import EqualDistanceConstraint, RadiusConstraint
 from ..entities import Arc, Point
 from ..types import EntityID
@@ -328,7 +330,7 @@ class ArcCommand(SketchChangeCommand):
             math.atan2(y - center.y, x - center.x)
         )
 
-        arc_ent.clockwise = determine_arc_direction(
+        arc_ent.clockwise = get_arc_direction(
             (center.x, center.y), (start.x, start.y), (x, y)
         )
         preview_state.clockwise = arc_ent.clockwise

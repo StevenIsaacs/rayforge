@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from ...pipeline.artifact.handle import create_handle_from_dict
+from ...pipeline.artifact.job import JobArtifact
 from ...pipeline.artifact.store import (
     ArtifactStore,
     SharedMemoryNotFoundError,
 )
-from ...pipeline.artifact.job import JobArtifact
 from ...shared.tasker.proxy import ExecutionContextProxy
 from .render_config import RenderConfig3D
 from .scene_compiler import compile_scene
@@ -52,7 +52,7 @@ def compile_scene_in_subprocess(
     elapsed = (time.perf_counter() - t_start) * 1000
     logger.info(
         f"[SCENE_COMPILER] Compilation took {elapsed:.1f}ms "
-        f"(commands={len(ops.commands)})"
+        f"(commands={len(ops)})"
     )
 
     compiled_handle = artifact_store.put(compiled, creator_tag="scene3d")

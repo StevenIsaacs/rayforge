@@ -1,18 +1,20 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, PropertyMock
+
 import pytest
 import pytest_asyncio
-import asyncio
-from unittest.mock import MagicMock, AsyncMock, PropertyMock
+from raygeo.ops import Ops
+
 from rayforge.core.doc import Doc
-from rayforge.core.ops import Ops, MoveToCommand, LineToCommand
-from rayforge.core.varset import VarSet, Var
-from rayforge.machine.driver.grbl.grbl_serial import GrblSerialDriver
-from rayforge.machine.transport.grbl import GrblSerialTransport
-from rayforge.machine.transport import TransportStatus, SerialTransport
+from rayforge.core.varset import Var, VarSet
 from rayforge.machine.driver.driver import (
-    DeviceStatus,
-    DeviceConnectionError,
     Axis,
+    DeviceConnectionError,
+    DeviceStatus,
 )
+from rayforge.machine.driver.grbl.grbl_serial import GrblSerialDriver
+from rayforge.machine.transport import SerialTransport, TransportStatus
+from rayforge.machine.transport.grbl import GrblSerialTransport
 from rayforge.pipeline.encoder.gcode import GcodeEncoder
 
 
@@ -207,15 +209,17 @@ class TestGrblSerialDriver:
         driver._machine.set_active_wcs("G54")
 
         ops = Ops()
-        ops.add(MoveToCommand((10, 10, 0)))
-        ops.add(LineToCommand((20, 20, 0)))
+        ops.move_to(10, 10, 0)
+        ops.line_to(20, 20, 0)
 
         job_finished_mock = MagicMock()
         driver.job_finished.send = job_finished_mock
         callback_mock = MagicMock()
 
         encoded = driver._machine.encode_ops(ops, doc)
-        run_task = asyncio.create_task(driver.run(encoded, doc, callback_mock))
+        run_task = asyncio.create_task(
+            driver.run(encoded, doc, ops, callback_mock)
+        )
 
         gcode_lines = [
             b"G0 X10 Y10\n",
@@ -772,12 +776,14 @@ class TestGrblSerialDriver:
         driver._machine.set_active_wcs("G54")
 
         ops = Ops()
-        ops.add(MoveToCommand((10, 10, 0)))
-        ops.add(LineToCommand((20, 20, 0)))
-        ops.add(LineToCommand((30, 30, 0)))
+        ops.move_to(10, 10, 0)
+        ops.line_to(20, 20, 0)
+        ops.line_to(30, 30, 0)
 
         encoded = driver._machine.encode_ops(ops, doc)
-        run_task = asyncio.create_task(driver.run(encoded, doc, callback_mock))
+        run_task = asyncio.create_task(
+            driver.run(encoded, doc, ops, callback_mock)
+        )
 
         await asyncio.sleep(0.01)
         mock_serial_transport.send.assert_any_call(b"G0 X10 Y10\n")

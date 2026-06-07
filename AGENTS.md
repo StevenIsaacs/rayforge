@@ -143,6 +143,11 @@ Tests live under `tests/` mirroring the `rayforge/` package layout:
 
 CI runs for pushes to `main` + tags, and PRs to any branch. Release tags trigger PyPI and Snap publishing.
 
+## Raygeo (Rust/PyO3 geometry library)
+
+- Location: a separate repository in `external/raygeo/` that you may also edit
+- Has its own AGENTS.md with instructions.
+
 ## Other rules
 
 - Never use "head" to filter CLI commands — this hides useful error messages.

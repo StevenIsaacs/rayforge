@@ -1,12 +1,16 @@
 import math
-from typing import List, Dict, Optional, Any, Sequence, TYPE_CHECKING
-from rayforge.core.geo import Geometry, Point, Polygon, Rect, primitives
-from rayforge.core.geo.arc import (
-    get_arc_bounding_box,
-    arc_intersects_rect,
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
+
+from raygeo import Geometry
+from raygeo.geo.shape.arc import (
+    does_arc_intersect_rect,
+    get_arc_bounds,
     get_arc_midpoint,
     is_angle_between,
 )
+from raygeo.geo.shape.rect import does_rect_contain_rect
+from raygeo.geo.types import Point, Polygon, Rect
+
 from ..types import EntityID
 from .entity import Entity
 
@@ -91,7 +95,7 @@ class Arc(Entity):
         # Note: primitive expects center_offset relative to start, so:
         # center = start + offset. Here center is absolute.
         # offset = center - start.
-        return get_arc_bounding_box(
+        return get_arc_bounds(
             start.pos(),
             end.pos(),
             (center.x - start.x, center.y - start.y),
@@ -106,7 +110,7 @@ class Arc(Entity):
         # For an arc to be strictly inside, its entire bounding box must be
         # inside
         arc_box = self._get_bbox(registry)
-        return primitives.rect_a_contains_rect_b(rect, arc_box)
+        return does_rect_contain_rect(rect, arc_box)
 
     def intersects_rect(
         self,
@@ -116,7 +120,7 @@ class Arc(Entity):
         start = registry.get_point(self.start_idx)
         end = registry.get_point(self.end_idx)
         center = registry.get_point(self.center_idx)
-        return arc_intersects_rect(
+        return does_arc_intersect_rect(
             start.pos(), end.pos(), center.pos(), self.clockwise, rect
         )
 

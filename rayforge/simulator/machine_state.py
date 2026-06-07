@@ -2,24 +2,26 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, Iterable, Optional
 
-from ..core.ops import Axis, State
-from ..core.ops.commands import (
-    Command,
-    LayerStartCommand,
-    MovingCommand,
-    ScanLinePowerCommand,
-)
+from raygeo.ops import Ops
+from raygeo.ops.axis import Axis
+from raygeo.ops.types import CommandCategory, CommandType
 
 if TYPE_CHECKING:
     from ..machine.models.axis import AxisSet
 
 
-class MachineState(State):
+class MachineState:
     def __init__(
         self,
         axis_letters: Optional[Iterable[Axis]] = None,
     ):
-        super().__init__()
+        self.power: float = 0.0
+        self.air_assist: bool = False
+        self.cut_speed: Optional[int] = None
+        self.travel_speed: Optional[int] = None
+        self.active_laser_uid: Optional[str] = None
+        self.frequency: Optional[int] = None
+        self.pulse_width: Optional[float] = None
         if axis_letters is not None:
             self.axes: Dict[Axis, float] = {a: 0.0 for a in axis_letters}
         else:
@@ -37,25 +39,41 @@ class MachineState(State):
         axes = (cfg.letter for cfg in axis_set.configs)
         return cls(axis_letters=axes)
 
-    def apply_command(self, cmd: Command, index: int):
-        if cmd.is_state_command():
-            cmd.apply_to_state(self)
-        elif isinstance(cmd, MovingCommand):
-            if cmd.end is not None:
-                self.axes[Axis.X] = cmd.end[0]
-                self.axes[Axis.Y] = cmd.end[1]
-                self.axes[Axis.Z] = cmd.end[2]
-            for axis, value in cmd.extra_axes.items():
-                self.axes[axis] = value
-            if isinstance(cmd, ScanLinePowerCommand):
-                self.reached_textures.add(index)
-            self.laser_on = cmd.is_cutting_command()
-        elif isinstance(cmd, LayerStartCommand):
-            self.current_layer_uid = cmd.layer_uid
-        elif cmd.is_marker():
-            return
-        else:
-            raise TypeError(f"Unknown command type: {type(cmd).__name__}")
+    def apply_command(self, ops: Ops, idx: int):
+        ct = ops.command_type(idx)
+        cat = ops.category(idx)
+
+        if cat == CommandCategory.STATE:
+            if ct == CommandType.SET_POWER:
+                self.power = ops.power(idx)
+            elif ct == CommandType.SET_CUT_SPEED:
+                self.cut_speed = int(ops.speed(idx))
+            elif ct == CommandType.SET_TRAVEL_SPEED:
+                self.travel_speed = int(ops.speed(idx))
+            elif ct == CommandType.ENABLE_AIR_ASSIST:
+                self.air_assist = True
+            elif ct == CommandType.DISABLE_AIR_ASSIST:
+                self.air_assist = False
+            elif ct == CommandType.SET_LASER:
+                self.active_laser_uid = ops.laser_uid(idx)
+            elif ct == CommandType.SET_FREQUENCY:
+                self.frequency = ops.frequency(idx)
+            elif ct == CommandType.SET_PULSE_WIDTH:
+                self.pulse_width = ops.pulse_width(idx)
+        elif cat == CommandCategory.MOVING:
+            end = ops.endpoint(idx)
+            self.axes[Axis.X] = end[0]
+            self.axes[Axis.Y] = end[1]
+            self.axes[Axis.Z] = end[2]
+            ea = ops.extra_axes(idx)
+            if ea:
+                for axis, value in ea.items():
+                    self.axes[axis] = value
+            if ct == CommandType.SCAN_LINE:
+                self.reached_textures.add(idx)
+            self.laser_on = ct != CommandType.MOVE_TO
+        elif ct == CommandType.LAYER_START:
+            self.current_layer_uid = ops.layer_uid(idx)
 
     def copy(self) -> MachineState:
         new = MachineState.__new__(MachineState)

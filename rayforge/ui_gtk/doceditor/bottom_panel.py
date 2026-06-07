@@ -1,14 +1,15 @@
-from typing import Optional, Callable, Tuple, TYPE_CHECKING
 import logging
 from gettext import gettext as _
-from gi.repository import Gtk, Adw
+from typing import TYPE_CHECKING, Callable, Optional, Tuple
+
 from blinker import Signal
-from ...core.ops.axis import Axis
+from gi.repository import Adw, Gtk
+from raygeo.ops.axis import Axis
+
 from ...logging_setup import ui_log_event_received
-from ...machine.models.machine import Machine
-from ...machine.driver.dummy import NoDeviceDriver
 from ...machine.cmd import MachineCmd
-from ..shared.adwfix import get_spinrow_float
+from ...machine.driver.dummy import NoDeviceDriver
+from ...machine.models.machine import Machine
 from ...shared.gcodeedit.viewer import GcodeViewer
 from ...shared.tasker import task_mgr
 from ..doceditor.layers_tab import LayersTab
@@ -17,6 +18,7 @@ from ..machine.console import Console
 from ..machine.jog_widget import JogWidget
 from ..machine.laser_control_widget import LaserControlWidget
 from ..machine.wcs_dialog import WcsDialog
+from ..shared.adwfix import get_spinrow_float
 from ..shared.dock_item import DockItem
 from ..shared.dock_layout import DockLayout
 from ..shared.gtk import apply_css
@@ -554,7 +556,14 @@ class BottomPanel(Gtk.Box):
 
         space = self.machine.get_coordinate_space()
         machine_x, machine_y = space.world_point_to_machine(world_x, world_y)
-        self.machine_cmd.move_to(self.machine, machine_x, machine_y)
+        wcs_offset = self.machine.get_active_wcs_offset()
+        x_off, y_off, _ = space.get_command_offset(
+            wcs_offset=wcs_offset,
+            wcs_is_workarea_origin=self.machine.wcs_origin_is_workarea_origin,
+        )
+        self.machine_cmd.move_to(
+            self.machine, machine_x - x_off, machine_y - y_off
+        )
 
     def _on_click_to_zero_toggled(self, button):
         self.set_click_to_zero_mode(not self._click_to_zero_mode)

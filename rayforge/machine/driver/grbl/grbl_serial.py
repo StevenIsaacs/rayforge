@@ -1,69 +1,74 @@
-import logging
 import asyncio
 import inspect
-import serial.serialutil
+import logging
 from gettext import gettext as _
 from typing import (
-    Optional,
-    Any,
-    List,
-    Dict,
-    Tuple,
-    cast,
     TYPE_CHECKING,
-    Callable,
-    Union,
+    Any,
     Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    cast,
 )
+
+import serial.serialutil
+
 from ....context import RayforgeContext
 from ....core.varset import (
-    Var,
-    VarSet,
+    BaudrateVar,
     IntVar,
     SerialPortVar,
-    BaudrateVar,
+    Var,
+    VarSet,
 )
-from ....pipeline.encoder.base import OpsEncoder, EncodedOutput
+from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
 from ....pipeline.encoder.gcode import GcodeEncoder
-from ...transport import TransportStatus, SerialTransport
+from ...transport import SerialTransport, TransportStatus
 from ...transport.grbl import (
-    GrblSerialTransport,
-    GrblResponseType,
     DEFAULT_GRBL_RX_BUFFER_SIZE,
+    BufferStallError,
+    GrblResponseType,
+    GrblSerialTransport,
 )
 from ...transport.serial import SerialPortPermissionError
 from ..driver import (
-    Driver,
-    DriverSetupError,
-    DeviceStatus,
-    DriverPrecheckError,
-    DeviceConnectionError,
     Axis,
-    Pos,
+    DeviceConnectionError,
     DeviceError,
+    DeviceStatus,
+    Driver,
+    DriverPrecheckError,
+    DriverSetupError,
+    Pos,
 )
 from .grbl_probe import probe_grbl_device
 from .grbl_util import (
-    parse_state,
+    CommandRequest,
+    alarm_code_to_device_error,
+    error_code_to_device_error,
+    gcode_to_p_number,
     get_grbl_setting_varsets,
     grbl_setting_re,
-    wcs_re,
-    prb_re,
-    gcode_to_p_number,
-    error_code_to_device_error,
-    alarm_code_to_device_error,
-    CommandRequest,
     parse_grbl_parser_state,
     parse_opt_info,
+    parse_state,
     parse_version,
+    prb_re,
     strip_gcode_comments,
+    wcs_re,
 )
 
 if TYPE_CHECKING:
+    from raygeo.ops import Ops
+
     from ....core.doc import Doc
     from ...device.profile import DeviceProfile
-    from ...models.machine import Machine
     from ...models.laser import Laser
+    from ...models.machine import Machine
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +104,7 @@ class GrblSerialDriver(Driver):
         self._last_reported_op_index = -1
         self._job_exception: Optional[Exception] = None
         self._poll_status_while_running: bool = False
+        self._deadlock_detection: bool = False
         self._rx_buffer_size_override: int = 0
         self._handshake_received = asyncio.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -151,6 +157,18 @@ class GrblSerialDriver(Driver):
                     var_type=bool,
                     default=False,
                 ),
+                Var(
+                    key="deadlock_detection",
+                    label=_("Deadlock detection"),
+                    description=_(
+                        "Detect and recover from serial communication "
+                        "deadlocks during jobs. If disabled, the driver "
+                        "will simply wait for the machine to respond. "
+                        "Disable if you experience false ALARM:3 errors."
+                    ),
+                    var_type=bool,
+                    default=False,
+                ),
                 IntVar(
                     key="rx_buffer_size_override",
                     label=_("RX Buffer Size Override"),
@@ -182,6 +200,9 @@ class GrblSerialDriver(Driver):
         baudrate = kwargs.get("baudrate", 115200)
         self._poll_status_while_running = bool(
             kwargs.get("poll_status_while_running", False)
+        )
+        self._deadlock_detection = bool(
+            kwargs.get("deadlock_detection", False)
         )
         self._rx_buffer_size_override = int(
             kwargs.get("rx_buffer_size_override", 0) or 0
@@ -286,14 +307,6 @@ class GrblSerialDriver(Driver):
         if not self.grbl_transport or not self.grbl_transport.is_connected:
             raise ConnectionError("Serial transport not initialized")
         payload = (command + ("\n" if add_newline else "")).encode("utf-8")
-        logger.debug(
-            f"TX: {payload!r}",
-            extra={
-                "log_category": "RAW_IO",
-                "direction": "TX",
-                "data": payload,
-            },
-        )
         await self.grbl_transport.send_control(payload)
 
     async def _connect_implementation(self):
@@ -410,18 +423,7 @@ class GrblSerialDriver(Driver):
                     async with self._cmd_lock:
                         try:
                             payload = b"?"
-                            count = await transport.send_poll(payload)
-                            buf_info = (
-                                f"buf: {count}/{transport._rx_buffer_size}"
-                            )
-                            logger.debug(
-                                f"TX: {payload!r} ({buf_info})",
-                                extra={
-                                    "log_category": "RAW_IO",
-                                    "direction": "TX",
-                                    "data": payload,
-                                },
-                            )
+                            await transport.send_poll(payload)
                         except ConnectionError as e:
                             logger.warning(
                                 "Connection lost while sending poll"
@@ -487,14 +489,6 @@ class GrblSerialDriver(Driver):
                             cmd_text,
                             extra=self._log_extra("USER_COMMAND"),
                         )
-                    logger.debug(
-                        f"TX: {request.payload!r}",
-                        extra={
-                            "log_category": "RAW_IO",
-                            "direction": "TX",
-                            "data": request.payload,
-                        },
-                    )
 
                     async with self._cmd_lock:
                         if (
@@ -551,27 +545,37 @@ class GrblSerialDriver(Driver):
         if self.grbl_transport:
             self.grbl_transport.reset_flow_control()
 
-    async def _recover_from_deadlock(self, transport) -> None:
+    async def _recover_from_deadlock(
+        self, transport, hold_lock: bool = True
+    ) -> None:
         """
         Recover from a detected deadlock by sending a G4 P0.01 dwell.
         When its 'ok' arrives, the planner buffer is guaranteed empty.
         Then reset host-side buffer accounting.
+
+        When *hold_lock* is False the caller already holds
+        ``_cmd_lock`` (e.g. the stall callback inside ``send_gcode``).
         """
         if not transport or not transport.is_connected:
             logger.warning("Cannot recover: transport disconnected.")
             return
         logger.info("Deadlock recovery: sending G4 P0.01 to drain planner.")
         try:
-            async with self._cmd_lock:
+
+            async def _do_recovery():
                 if (
                     not self.grbl_transport
                     or not self.grbl_transport.is_connected
                 ):
                     return
                 transport.reset_flow_control()
-                dwell = b"G4 P0.01\n"
-                await transport.send_gcode(dwell)
-                logger.debug(f"TX: {dwell!r} (deadlock recovery)")
+                await transport.send_gcode(b"G4 P0.01\n")
+
+            if hold_lock:
+                async with self._cmd_lock:
+                    await _do_recovery()
+            else:
+                await _do_recovery()
             try:
                 await asyncio.wait_for(
                     transport.pending_queue.join(), timeout=30.0
@@ -612,7 +616,9 @@ class GrblSerialDriver(Driver):
                 return True
         return False
 
-    async def _poll_and_check_idle(self, transport) -> bool:
+    async def _poll_and_check_idle(
+        self, transport, hold_lock: bool = True
+    ) -> bool:
         """
         Send a realtime status poll and check if GRBL is idle.
 
@@ -621,18 +627,25 @@ class GrblSerialDriver(Driver):
         fresh status report.  Returns True only if the fresh
         response confirms GRBL is idle or buffer-desynchronized.
 
-        This avoids false deadlock detection when status polling is
-        disabled during jobs and ``_raw_grbl_status`` is stale.
+        When *hold_lock* is False the caller already holds
+        ``_cmd_lock`` (e.g. the stall callback inside ``send_gcode``).
         """
         self._raw_grbl_status = DeviceStatus.UNKNOWN
         try:
-            async with self._cmd_lock:
+
+            async def _do_poll():
                 if (
                     not self.grbl_transport
                     or not self.grbl_transport.is_connected
                 ):
-                    return False
+                    return
                 await transport.send_poll(b"?")
+
+            if hold_lock:
+                async with self._cmd_lock:
+                    await _do_poll()
+            else:
+                await _do_poll()
         except (ConnectionError, OSError):
             return False
         for _attempt in range(10):
@@ -641,51 +654,47 @@ class GrblSerialDriver(Driver):
                 break
         return self._is_grbl_idle_or_desynced(transport)
 
-    async def _wait_for_buffer_space(
-        self, transport, command_len: int, timeout: float
-    ) -> None:
-        """Wait for buffer space, recovering from deadlocks if needed."""
-        while transport.needs_space(command_len):
-            if self.state.status == DeviceStatus.ALARM:
-                if not self._job_exception:
-                    self._job_exception = DeviceConnectionError(
-                        "Machine entered ALARM state during job."
-                    )
-                return
+    async def _on_buffer_stall(
+        self, transport: GrblSerialTransport, command_len: int
+    ) -> bool:
+        """
+        Callback for ``transport.send_gcode()`` when the buffer-space
+        wait times out.
 
-            try:
-                await asyncio.wait_for(
-                    transport.wait_for_space(), timeout=timeout
+        Called from within ``send_gcode`` which is inside the
+        driver's ``_cmd_lock``, so poll and recovery must skip the
+        lock.  pyserial serializes concurrent writes, making this
+        safe.
+
+        Returns True to retry the wait, False to abort the job.
+        """
+        if not self._deadlock_detection:
+            logger.debug(
+                "Buffer stall timed out (deadlock detection disabled). "
+                "Retrying."
+            )
+            return True
+
+        if await self._poll_and_check_idle(transport, hold_lock=False):
+            if not transport.needs_space(command_len):
+                logger.info(
+                    "Buffer freed during status poll. Continuing streaming."
                 )
-            except asyncio.TimeoutError:
-                if await self._poll_and_check_idle(transport):
-                    if not transport.needs_space(command_len):
-                        logger.info(
-                            "Buffer freed during status poll. "
-                            "Continuing streaming."
-                        )
-                        continue
-                    logger.warning(
-                        "Deadlock detected during streaming. "
-                        "Attempting G4 P0.01 recovery."
-                    )
-                    await self._recover_from_deadlock(transport)
-                    if transport.needs_space(command_len):
-                        logger.error("Recovery failed: buffer still full.")
-                        self._job_exception = DeviceConnectionError(
-                            "Deadlock recovery failed."
-                        )
-                        return
-                else:
-                    logger.warning(
-                        "Timeout waiting for buffer space "
-                        "(machine not IDLE). Retrying."
-                    )
-
-            if self._job_exception:
-                return
-            if self._is_cancelled:
-                raise asyncio.CancelledError("Job cancelled")
+                return True
+            logger.warning(
+                "Deadlock detected during streaming. "
+                "Attempting G4 P0.01 recovery."
+            )
+            await self._recover_from_deadlock(transport, hold_lock=False)
+            if not transport.needs_space(command_len):
+                return True
+            logger.error("Recovery failed: buffer still full.")
+            return False
+        logger.info(
+            "Timeout waiting for buffer space (machine not IDLE). "
+            "This is normal during slow moves. Retrying."
+        )
+        return True
 
     async def _send_gcode_line(
         self,
@@ -693,6 +702,7 @@ class GrblSerialDriver(Driver):
         line: str,
         command_bytes: bytes,
         op_index: Optional[int],
+        timeout: float,
     ) -> None:
         """Send a single gcode line with buffer accounting."""
         async with self._cmd_lock:
@@ -703,20 +713,11 @@ class GrblSerialDriver(Driver):
 
             logger.info(line, extra=self._log_extra("USER_COMMAND"))
 
-            # Add to queue BEFORE sending.
-            # Fast machines can reply with 'ok' before await
-            # send() returns. If we queue after sending, the RX
-            # handler finds an empty queue and drops the 'ok',
-            # causing a deadlock.
-            count = await transport.send_gcode(command_bytes, op_index)
-            buf_info = f"buf: {count}/{transport._rx_buffer_size}"
-            logger.debug(
-                f"TX: {command_bytes!r} ({buf_info})",
-                extra={
-                    "log_category": "RAW_IO",
-                    "direction": "TX",
-                    "data": command_bytes,
-                },
+            await transport.send_gcode(
+                command_bytes,
+                op_index,
+                timeout=timeout,
+                on_stall=self._on_buffer_stall,
             )
 
     async def _drain_pending_acks(self, transport, timeout: float) -> None:
@@ -755,19 +756,23 @@ class GrblSerialDriver(Driver):
         self,
         gcode_lines: List[str],
         machine_code_to_op_map: Optional[Dict[int, int]] = None,
+        command_times: Optional[List[float]] = None,
     ):
         """
         The core G-code streaming logic using character-counting protocol.
         Assumes _start_job() has been called.
         """
-        logger.debug(
-            f"Starting GRBL streaming job with {len(gcode_lines)} lines."
-        )
+        total = len(gcode_lines)
+        logger.debug(f"Starting GRBL streaming job with {total} lines.")
         transport = self.grbl_transport
         if not transport:
             raise ConnectionError("Transport not initialized")
         job_completed_successfully = False
-        deadlock_timeout = 10.0 if not self._poll_status_while_running else 2.0
+        min_timeout = 5.0
+        max_timeout = 120.0
+        safety_factor = 3.0
+        default_timeout = 30.0
+        sent_count = 0
         try:
             for line_idx, line in enumerate(gcode_lines):
                 if (
@@ -797,25 +802,50 @@ class GrblSerialDriver(Driver):
                 )
                 command_bytes = (line + "\n").encode("utf-8")
 
-                await self._wait_for_buffer_space(
-                    transport, len(command_bytes), deadlock_timeout
-                )
+                if (
+                    command_times is not None
+                    and op_index is not None
+                    and op_index < len(command_times)
+                ):
+                    estimated = command_times[op_index]
+                    timeout = min(
+                        max_timeout,
+                        max(min_timeout, estimated * safety_factor),
+                    )
+                else:
+                    timeout = default_timeout
+
+                try:
+                    await self._send_gcode_line(
+                        transport,
+                        line,
+                        command_bytes,
+                        op_index,
+                        timeout,
+                    )
+                except BufferStallError:
+                    if not self._job_exception:
+                        self._job_exception = DeviceConnectionError(
+                            "Deadlock recovery failed."
+                        )
                 if (
                     self._job_exception
                     or self.state.status == DeviceStatus.ALARM
                 ):
                     break
 
-                await self._send_gcode_line(
-                    transport, line, command_bytes, op_index
-                )
+                sent_count += 1
+                if sent_count % 500 == 0:
+                    logger.debug(
+                        f"Streaming progress: {sent_count}/{total} lines sent"
+                    )
                 await asyncio.sleep(0)
 
             if not self._is_cancelled and not self._job_exception:
                 logger.debug(
                     "All G-code sent. Waiting for all 'ok' responses."
                 )
-                await self._drain_pending_acks(transport, deadlock_timeout)
+                await self._drain_pending_acks(transport, default_timeout)
 
             if self._job_exception:
                 raise self._job_exception
@@ -845,15 +875,33 @@ class GrblSerialDriver(Driver):
             self._on_command_done = None
             if job_completed_successfully:
                 self.job_finished.send(self)
-            # Signal job termination for UI cleanup, even on failure.
-            elif not self._is_cancelled:
+                logger.debug(
+                    f"G-code streaming finished successfully "
+                    f"({sent_count}/{total} lines)."
+                )
+            elif self._is_cancelled:
+                logger.debug(
+                    f"G-code streaming cancelled at line {sent_count}/{total}."
+                )
+            elif self._job_exception:
+                logger.debug(
+                    f"G-code streaming aborted by exception at "
+                    f"line {sent_count}/{total}: "
+                    f"{self._job_exception}"
+                )
                 self.job_finished.send(self)
-            logger.debug("G-code streaming finished.")
+            else:
+                logger.warning(
+                    f"G-code streaming ended unexpectedly at "
+                    f"line {sent_count}/{total}."
+                )
+                self.job_finished.send(self)
 
     async def run(
         self,
         encoded: EncodedOutput,
         doc: "Doc",
+        ops: "Ops",
         on_command_done: Optional[
             Callable[[int], Union[None, Awaitable[None]]]
         ] = None,
@@ -863,8 +911,14 @@ class GrblSerialDriver(Driver):
         mapping = encoded.op_map.machine_code_to_op if encoded.op_map else None
         gcode_lines = encoded.text.splitlines()
 
+        command_times = ops.estimate_command_times(
+            default_cut_speed=self._machine.max_cut_speed,
+            default_travel_speed=self._machine.max_travel_speed,
+            acceleration=self._machine.acceleration,
+        )
+
         try:
-            await self._stream_gcode(gcode_lines, mapping)
+            await self._stream_gcode(gcode_lines, mapping, command_times)
         except DeviceConnectionError as e:
             # Catch the device error here to prevent it from propagating
             # up and tearing down the connection task. The error has
@@ -872,6 +926,11 @@ class GrblSerialDriver(Driver):
             logger.warning(
                 f"Job terminated due to device error: {e}. "
                 "Connection remains active."
+            )
+        except Exception as e:
+            logger.error(
+                f"Job terminated with unexpected error: {e!r}",
+                exc_info=True,
             )
 
     async def run_raw(self, machine_code: str) -> None:
@@ -892,6 +951,11 @@ class GrblSerialDriver(Driver):
                 f"Raw G-code terminated due to device error: {e}. "
                 "Connection remains active."
             )
+        except Exception as e:
+            logger.error(
+                f"Raw G-code terminated with unexpected error: {e!r}",
+                exc_info=True,
+            )
 
     async def cancel(self) -> None:
         logger.debug("Cancel command initiated.")
@@ -906,14 +970,6 @@ class GrblSerialDriver(Driver):
 
             logger.info("Sending Soft Reset (Ctrl-X) to device.")
             payload = b"\x18"
-            logger.debug(
-                f"TX: {payload!r}",
-                extra={
-                    "log_category": "RAW_IO",
-                    "direction": "TX",
-                    "data": payload,
-                },
-            )
             await self.grbl_transport.send_control(payload)
             while not self._command_queue.empty():
                 try:
@@ -993,14 +1049,6 @@ class GrblSerialDriver(Driver):
                     command.strip(),
                     extra=self._log_extra("USER_COMMAND"),
                 )
-                logger.debug(
-                    f"TX: {request.payload!r}",
-                    extra={
-                        "log_category": "RAW_IO",
-                        "direction": "TX",
-                        "data": request.payload,
-                    },
-                )
                 await transport.send_command(request.payload)
                 await asyncio.wait_for(request.finished.wait(), timeout=10.0)
             except asyncio.TimeoutError:
@@ -1037,12 +1085,9 @@ class GrblSerialDriver(Driver):
         if axes is None:
             await self._execute_command(dialect.home_all)
         else:
-            for axis in Axis:
-                if axes & axis:
-                    assert axis.name
-                    axis_letter: str = axis.name.upper()
-                    cmd = dialect.home_axis.format(axis_letter=axis_letter)
-                    await self._execute_command(cmd)
+            for axis in axes:
+                cmd = dialect.home_axis.format(axis_letter=axis.name)
+                await self._execute_command(cmd)
 
         # The following works around a quirk in some Grbl versions:
         # After homing, the machine is still in G54, but forgets its
@@ -1303,24 +1348,6 @@ class GrblSerialDriver(Driver):
         Primary handler for incoming serial data. Delegates parsing
         to the transport layer and processes structured responses.
         """
-        buf_count = (
-            self.grbl_transport.buffer_count if self.grbl_transport else 0
-        )
-        buf_size = (
-            self.grbl_transport._rx_buffer_size
-            if self.grbl_transport
-            else DEFAULT_GRBL_RX_BUFFER_SIZE
-        )
-        buf_info = f"buf: {buf_count}/{buf_size}"
-        logger.debug(
-            f"RX: {data!r} ({buf_info})",
-            extra={
-                "log_category": "RAW_IO",
-                "direction": "RX",
-                "data": data,
-            },
-        )
-
         if not self.grbl_transport:
             return
 

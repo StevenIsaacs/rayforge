@@ -1,9 +1,11 @@
 import logging
-from typing import Tuple, TYPE_CHECKING
-from gi.repository import Graphene, Gdk, Gtk
+from typing import TYPE_CHECKING, Tuple
+
+from gi.repository import Gdk, Graphene, Gtk
+
 from ...core.matrix import Matrix
-from .canvas import Canvas
 from .axis import AxisRenderer
+from .canvas import Canvas
 
 if TYPE_CHECKING:
     from ...pipeline.coordspace import CoordinateSpace
@@ -87,6 +89,9 @@ class WorldSurface(Canvas):
         self._pan_gesture.connect("drag-end", self.on_pan_end)
         self.add_controller(self._pan_gesture)
         self._pan_start = (0.0, 0.0)
+
+        # Track Space key for Space+drag panning
+        self._space_pressed = False
 
         # Add right-click gesture for context menu
         self._context_menu_gesture = Gtk.GestureClick.new()
@@ -365,6 +370,9 @@ class WorldSurface(Canvas):
         """Handles key press events for the work surface."""
         key_name = Gdk.keyval_name(keyval)
         logger.debug(f"Key pressed: key='{key_name}', state={state}")
+        if keyval in (Gdk.KEY_space, Gdk.KEY_KP_Space):
+            self._space_pressed = True
+            return True
         if keyval == Gdk.KEY_1:
             # Reset pan and zoom with '1'
             self.reset_view()
@@ -373,6 +381,79 @@ class WorldSurface(Canvas):
         # Propagate to parent Canvas for its default behavior. The base Canvas
         # handles leaving edit mode on Escape.
         return super().on_key_pressed(controller, keyval, keycode, state)
+
+    def on_key_released(
+        self,
+        controller: Gtk.EventControllerKey,
+        keyval: int,
+        keycode: int,
+        state: Gdk.ModifierType,
+    ) -> None:
+        """Handles key release events for the work surface."""
+        if keyval in (Gdk.KEY_space, Gdk.KEY_KP_Space):
+            self._space_pressed = False
+            return
+        super().on_key_released(controller, keyval, keycode, state)
+
+    def on_button_press(
+        self, gesture: Gtk.GestureClick, n_press: int, x: float, y: float
+    ) -> None:
+        """Override to suppress element selection when Space is held."""
+        if self._space_pressed:
+            self.grab_focus()
+            self._pan_start = (self.pan_x_mm, self.pan_y_mm)
+            return
+        super().on_button_press(gesture, n_press, x, y)
+
+    def on_click_released(
+        self, gesture: Gtk.GestureClick, n_press: int, x: float, y: float
+    ) -> None:
+        """Override to suppress click actions when Space is held."""
+        if self._space_pressed:
+            return
+        super().on_click_released(gesture, n_press, x, y)
+
+    def on_mouse_drag(
+        self, gesture: Gtk.GestureDrag, offset_x: float, offset_y: float
+    ) -> None:
+        """Override to pan instead of selecting when Space is held."""
+        if self._space_pressed:
+            ok, drag_offset_x, drag_offset_y = gesture.get_offset()
+            if not ok:
+                return
+
+            widget_w, widget_h = self.get_width(), self.get_height()
+            if widget_w <= 0 or widget_h <= 0:
+                return
+
+            _, _, content_w, content_h = (
+                self._axis_renderer.get_content_layout(widget_w, widget_h)
+            )
+
+            base_scale_x = (
+                content_w / self.width_mm if self.width_mm > 0 else 1
+            )
+            base_scale_y = (
+                content_h / self.height_mm if self.height_mm > 0 else 1
+            )
+
+            delta_x_mm = drag_offset_x / (base_scale_x * self.zoom_level)
+            delta_y_mm = drag_offset_y / (base_scale_y * self.zoom_level)
+
+            new_pan_x = self._pan_start[0] - delta_x_mm
+            new_pan_y = self._pan_start[1] + delta_y_mm
+
+            self.set_pan(new_pan_x, new_pan_y)
+            return
+        super().on_mouse_drag(gesture, offset_x, offset_y)
+
+    def on_drag_end(
+        self, gesture: Gtk.GestureDrag, offset_x: float, offset_y: float
+    ) -> None:
+        """Override to suppress drag end when Space was held."""
+        if self._space_pressed:
+            return
+        super().on_drag_end(gesture, offset_x, offset_y)
 
     def on_pan_begin(
         self, gesture: Gtk.GestureDrag, x: float, y: float

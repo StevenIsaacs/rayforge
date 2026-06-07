@@ -1,10 +1,11 @@
 import asyncio
 import logging
-import websockets
 from typing import Optional
-from websockets.exceptions import ConnectionClosed
-from .transport import Transport, TransportStatus
 
+import websockets
+from websockets.exceptions import ConnectionClosed
+
+from .transport import Transport, TransportStatus
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class WebSocketTransport(Transport):
                 self._websocket = await websockets.connect(
                     self.uri,
                     origin=self._origin,
+                    ping_interval=None,
                     additional_headers=(
                         ("Connection", "Upgrade"),
                         ("Upgrade", "websocket"),

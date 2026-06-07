@@ -1,26 +1,30 @@
 from __future__ import annotations
+
 import logging
 import math
 from gettext import gettext as _
 from typing import (
-    Union,
-    Tuple,
-    Dict,
+    TYPE_CHECKING,
     Any,
+    Callable,
+    Dict,
     List,
     Optional,
-    Callable,
-    TYPE_CHECKING,
+    Tuple,
+    Union,
 )
-from rayforge.core.geo import Point
-from rayforge.core.geo.arc import normalize_angle
-from rayforge.core.geo.primitives import line_intersection
+
+from raygeo.geo.shape.arc import normalize_angle
+from raygeo.geo.shape.line import get_line_line_intersection
+from raygeo.geo.types import Point
+
 from ..entities import Line
 from ..types import EntityID
 from .base import Constraint, ConstraintStatus
 
 if TYPE_CHECKING:
     import cairo
+
     from ..params import ParameterContext
     from ..registry import EntityRegistry
     from ..selection import SketchSelection
@@ -180,7 +184,7 @@ class AngleConstraint(Constraint):
 
         e1, e2, p1, p2, p3, p4 = result
 
-        intersection = line_intersection(
+        intersection = get_line_line_intersection(
             (p1.x, p1.y), (p2.x, p2.y), (p3.x, p3.y), (p4.x, p4.y)
         )
 
@@ -230,7 +234,7 @@ class AngleConstraint(Constraint):
 
         e1, e2, p1, p2, p3, p4 = result
 
-        intersection = line_intersection(
+        intersection = get_line_line_intersection(
             (p1.x, p1.y), (p2.x, p2.y), (p3.x, p3.y), (p4.x, p4.y)
         )
 
@@ -336,7 +340,7 @@ class AngleConstraint(Constraint):
 
         e1, e2, p1, p2, p3, p4 = result
 
-        intersection = line_intersection(
+        intersection = get_line_line_intersection(
             (p1.x, p1.y), (p2.x, p2.y), (p3.x, p3.y), (p4.x, p4.y)
         )
 

@@ -3,29 +3,33 @@ Implements a pixel-based layout strategy for dense packing of workpieces.
 """
 
 from __future__ import annotations
-import math
+
 import logging
-from typing import (
-    List,
-    Sequence,
-    Dict,
-    Optional,
-    Tuple,
-    TYPE_CHECKING,
-)
+import math
 from dataclasses import dataclass
 from gettext import gettext as _
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+)
+
 import cairo
 import numpy as np
+from raygeo.geo.types import Point, Rect
 from scipy.ndimage import binary_dilation
 from scipy.signal import fftconvolve
+
 from ...context import get_context
-from ...core.geo import Point, Rect
 from ...core.group import Group
-from ...core.matrix import Matrix
 from ...core.item import DocItem
+from ...core.matrix import Matrix
 from ...core.stock import StockItem
 from ...core.workpiece import WorkPiece
+from ...image.geo_renderer import geometry_to_cairo
 from .base import LayoutStrategy
 
 if TYPE_CHECKING:
@@ -322,7 +326,7 @@ class PixelPerfectLayoutStrategy(LayoutStrategy):
         ctx.scale(self.resolution, self.resolution)  # Scale context to mm
 
         # Draw path from geometry data.
-        geometry_for_render.to_cairo(ctx)
+        geometry_to_cairo(geometry_for_render, ctx)
         ctx.fill()
 
         # 4. Extract the pixel data into a NumPy array.

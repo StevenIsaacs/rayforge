@@ -1,15 +1,16 @@
+import asyncio
 import os
 import re
 import threading
 import time
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
-import asyncio
-from unittest.mock import MagicMock
+from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
-from rayforge.core.ops import Ops, MoveToCommand, LineToCommand
+from rayforge.core.varset import VarSet
 from rayforge.machine.driver.driver import (
     Axis,
     DeviceStatus,
@@ -21,7 +22,6 @@ from rayforge.machine.driver.marlin.marlin_serial import MarlinSerialDriver
 from rayforge.machine.transport import TransportStatus
 from rayforge.machine.transport.serial import SerialPortPermissionError
 from rayforge.pipeline.encoder.gcode import GcodeEncoder
-from rayforge.core.varset import VarSet
 
 HAS_PTY = hasattr(os, "openpty")
 
@@ -406,11 +406,11 @@ class TestMarlinSerialDriverRealSerial:
         driver.job_finished.connect(lambda sender: job_finished(), weak=False)
         machine.set_active_wcs("G54")
         ops = Ops()
-        ops.add(MoveToCommand((10, 10, 0)))
-        ops.add(LineToCommand((20, 20, 0)))
+        ops.move_to(10, 10, 0)
+        ops.line_to(20, 20, 0)
         doc = Doc()
         encoded = machine.encode_ops(ops, doc)
-        await asyncio.wait_for(driver.run(encoded, doc), timeout=5.0)
+        await asyncio.wait_for(driver.run(encoded, doc, ops), timeout=5.0)
         job_finished.assert_called_once()
 
     @pytest.mark.asyncio

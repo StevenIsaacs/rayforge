@@ -1,13 +1,18 @@
-import cairo
 import logging
 import math
 from collections import defaultdict
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional, Set
 
-from rayforge.core.geo import Geometry, Point as GeoPoint
+import cairo
+from raygeo import Geometry
+from raygeo.geo.types import Point as GeoPoint
+
+from rayforge.core.geo_helpers import geometry_from_text
 from rayforge.core.matrix import Matrix
+from rayforge.image.geo_renderer import geometry_to_cairo
 from rayforge.ui_gtk.canvas import WorldSurface
+
 from ..core.commands import BezierPreviewState
 from ..core.commands.dimension import DimensionData
 from ..core.constraints import (
@@ -24,8 +29,8 @@ from ..core.entities import (
     Point,
     TextBoxEntity,
 )
-from ..core.types import EntityID
 from ..core.sketch import FillStyle
+from ..core.types import EntityID
 from .tools import PathTool, TextBoxTool
 
 if TYPE_CHECKING:
@@ -176,7 +181,7 @@ class SketchRenderer:
                 continue
 
             ctx.new_path()
-            geo.to_cairo(ctx)
+            geometry_to_cairo(geo, ctx)
             ctx.close_path()
 
             ctx.save()
@@ -210,8 +215,6 @@ class SketchRenderer:
             p_ids = first_ent.get_endpoint_ids()
             start_pid = p_ids[0] if first_fwd else p_ids[1]
             start_pt = self.element.sketch.registry.get_point(start_pid)
-
-            from rayforge.core.geo import Geometry
 
             geo = Geometry()
             geo.move_to(start_pt.x, start_pt.y)
@@ -306,7 +309,7 @@ class SketchRenderer:
                 )
                 if text_geo:
                     ctx.new_path()
-                    text_geo.to_cairo(ctx)
+                    geometry_to_cairo(text_geo, ctx)
                     ctx.close_path()
                     ctx.save()
                     ctx.set_source_rgba(*entity.fill_color)
@@ -554,7 +557,7 @@ class SketchRenderer:
         if not (p_origin and p_width and p_height):
             return False
 
-        natural_geo = Geometry.from_text(entity.content, entity.font_config)
+        natural_geo = geometry_from_text(entity.content, entity.font_config)
         natural_geo.flip_y()
 
         advance_width = entity.font_config.get_text_width(entity.content)
@@ -570,7 +573,7 @@ class SketchRenderer:
             stable_src_height=geo_max_y - geo_min_y,
         )
 
-        transformed_geo.to_cairo(ctx)
+        geometry_to_cairo(transformed_geo, ctx)
         return True
 
     # --- Overlays (Constraints & Junctions) ---

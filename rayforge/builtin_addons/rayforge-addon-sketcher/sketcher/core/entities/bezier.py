@@ -1,14 +1,13 @@
-from typing import Dict, Any, List, Sequence, TYPE_CHECKING, Optional, Tuple
-from rayforge.core.geo import (
-    Geometry,
-    Point as GeoPoint,
-    Polygon,
-    Rect,
-    primitives,
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+
+from raygeo import Geometry
+from raygeo.geo.shape.line import (
+    does_line_segment_intersect_rect,
+    get_line_segment_closest_point,
 )
-from rayforge.core.geo.primitives import (
-    find_closest_point_on_line_segment,
-)
+from raygeo.geo.shape.rect import does_rect_contain_rect
+from raygeo.geo.types import Point as GeoPoint, Polygon, Rect
+
 from ..types import EntityID
 from .entity import Entity
 
@@ -93,7 +92,7 @@ class Bezier(Entity):
             return False
 
         if self.is_line(registry):
-            _, _, dist_sq = find_closest_point_on_line_segment(
+            _, _, dist_sq = get_line_segment_closest_point(
                 (start.x, start.y), (end.x, end.y), mx, my
             )
             return dist_sq < threshold**2
@@ -107,7 +106,7 @@ class Bezier(Entity):
 
         min_dist_sq = float("inf")
         for i in range(len(points) - 1):
-            _, _, dist_sq = find_closest_point_on_line_segment(
+            _, _, dist_sq = get_line_segment_closest_point(
                 points[i], points[i + 1], mx, my
             )
             if dist_sq < min_dist_sq:
@@ -182,7 +181,7 @@ class Bezier(Entity):
         registry: "EntityRegistry",
     ) -> bool:
         bezier_box = self._get_bbox(registry)
-        return primitives.rect_a_contains_rect_b(rect, bezier_box)
+        return does_rect_contain_rect(rect, bezier_box)
 
     def intersects_rect(
         self,
@@ -195,7 +194,7 @@ class Bezier(Entity):
             return False
 
         if self.is_line(registry):
-            return primitives.line_segment_intersects_rect(
+            return does_line_segment_intersect_rect(
                 start.pos(), end.pos(), rect
             )
 
@@ -207,7 +206,7 @@ class Bezier(Entity):
         )
 
         for i in range(len(points) - 1):
-            if primitives.line_segment_intersects_rect(
+            if does_line_segment_intersect_rect(
                 points[i], points[i + 1], rect
             ):
                 return True

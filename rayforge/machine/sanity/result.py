@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from gettext import gettext as _
-from typing import Optional, List
+from typing import List, Optional
 
-from ...core.geo.types import Point
+from raygeo.geo.types import Point
 
 
 class CheckMode(Enum):

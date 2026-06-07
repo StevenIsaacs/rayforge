@@ -2,14 +2,17 @@
 PyVips image manipulation utilities.
 """
 
-from typing import Optional, Tuple, Dict, Any
 import logging
+from typing import Any, Dict, Optional, Tuple
+
 import cairo
 import numpy
 import pyvips
+from raygeo import Geometry
+from raygeo.geo.types import Rect
 
-from ...core.geo import Geometry, Rect
 from ...core.matrix import Matrix
+from ..geo_renderer import geometry_to_cairo
 from .cairo_util import rgba_to_cairo_surface
 
 logger = logging.getLogger(__name__)
@@ -223,7 +226,7 @@ def _render_geometry_to_vips_mask(
     ctx.paint()
 
     ctx.set_source_rgba(1, 1, 1, 1)
-    geometry.to_cairo(ctx)
+    geometry_to_cairo(geometry, ctx)
     ctx.fill()
 
     stride = surface.get_stride()

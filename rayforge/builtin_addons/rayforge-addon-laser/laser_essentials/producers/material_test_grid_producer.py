@@ -1,18 +1,19 @@
 import logging
 import math
-import cairo
 import re
 from enum import Enum
-from typing import Tuple, Dict, Any, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
-from rayforge.core.ops import Ops, SectionType
-from rayforge.core.geo.geometry import Geometry
+import cairo
+from raygeo.ops import Ops
+from raygeo.ops.types import SectionType
+
+from rayforge.core.geo_helpers import geometry_from_cairo_path
 from rayforge.core.matrix import Matrix
-from rayforge.shared.tasker.progress import ProgressContext
 from rayforge.pipeline.artifact import WorkPieceArtifact
 from rayforge.pipeline.coord import CoordinateSystem
 from rayforge.pipeline.producer.base import OpsProducer
-
+from rayforge.shared.tasker.progress import ProgressContext
 
 if TYPE_CHECKING:
     from rayforge.core.workpiece import WorkPiece
@@ -478,7 +479,7 @@ class MaterialTestGridProducer(OpsProducer):
         if not path_data:
             return Ops()
 
-        geo = Geometry.from_cairo_path(path_data)
+        geo = geometry_from_cairo_path(path_data)
         if geo.is_empty():
             return Ops()
 

@@ -1,13 +1,13 @@
 import logging
-from typing import Any, Optional, cast
 from gettext import gettext as _
-from ....core.varset import Var, VarSet, HostnameVar, PortVar
+from typing import Any, Optional, cast
+
+from ....core.varset import HostnameVar, PortVar, Var, VarSet
 from ....core.varset.hostnamevar import is_valid_hostname_or_ip
 from ...transport import TelnetTransport
 from ...transport.grbl import GrblSerialTransport
 from ..driver import DriverPrecheckError, DriverSetupError
 from .grbl_serial import GrblSerialDriver
-
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,18 @@ class GrblTelnetDriver(GrblSerialDriver):
                     var_type=bool,
                     default=False,
                 ),
+                Var(
+                    key="deadlock_detection",
+                    label=_("Deadlock detection"),
+                    description=_(
+                        "Detect and recover from serial communication "
+                        "deadlocks during jobs. If disabled, the driver "
+                        "will simply wait for the machine to respond. "
+                        "Disable if you experience false ALARM:3 errors."
+                    ),
+                    var_type=bool,
+                    default=False,
+                ),
             ]
         )
 
@@ -79,6 +91,9 @@ class GrblTelnetDriver(GrblSerialDriver):
         port = cast(int, kwargs.get("port", 23))
         self._poll_status_while_running = bool(
             kwargs.get("poll_status_while_running", False)
+        )
+        self._deadlock_detection = bool(
+            kwargs.get("deadlock_detection", False)
         )
 
         if not host:

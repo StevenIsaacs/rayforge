@@ -1,14 +1,14 @@
+import asyncio
 from functools import partial
 from unittest.mock import MagicMock, PropertyMock
 
 import numpy as np
 import pytest
 import pytest_asyncio
-import asyncio
+from raygeo.ops import Ops
+from raygeo.ops.axis import Axis
 
 from rayforge.core.config import ConfigManager
-from rayforge.core.ops import Ops, MoveToCommand, LineToCommand
-from rayforge.core.ops.axis import Axis
 from rayforge.machine.cmd import MachineCmd
 from rayforge.machine.models.machine import Machine
 from rayforge.pipeline.artifact import JobArtifact
@@ -66,9 +66,9 @@ def machine_cmd(doc_editor):
 def simple_ops():
     """Creates a simple Ops object with a few commands."""
     ops = Ops()
-    ops.add(MoveToCommand((10, 10, 0)))
-    ops.add(LineToCommand((20, 10, 0)))
-    ops.add(LineToCommand((20, 20, 0)))
+    ops.move_to(10, 10, 0)
+    ops.line_to(20, 10, 0)
+    ops.line_to(20, 20, 0)
     return ops
 
 
@@ -258,3 +258,37 @@ class TestMachineCmdJog:
         # --- Assert ---
         # Verify call arguments to Machine.jog
         jog_mock.assert_called_once_with(deltas, 1500)
+
+
+class TestMachineCmdLaserPower:
+    """Test suite for manual laser power commands."""
+
+    @pytest.mark.asyncio
+    async def test_set_focus_power_uses_explicit_machine(
+        self, machine_cmd, machine, mocker, task_mgr
+    ):
+        head = machine.get_default_head()
+        set_focus_power_mock = mocker.patch.object(
+            machine, "set_focus_power", new_callable=mocker.AsyncMock
+        )
+
+        machine_cmd.set_focus_power(head, 0.25, machine)
+
+        await wait_for_tasks_to_finish(task_mgr)
+
+        set_focus_power_mock.assert_called_once_with(head, 0.25)
+
+    @pytest.mark.asyncio
+    async def test_set_power_uses_explicit_machine(
+        self, machine_cmd, machine, mocker, task_mgr
+    ):
+        head = machine.get_default_head()
+        set_power_mock = mocker.patch.object(
+            machine, "set_power", new_callable=mocker.AsyncMock
+        )
+
+        machine_cmd.set_power(head, 0.5, machine)
+
+        await wait_for_tasks_to_finish(task_mgr)
+
+        set_power_mock.assert_called_once_with(head, 0.5)

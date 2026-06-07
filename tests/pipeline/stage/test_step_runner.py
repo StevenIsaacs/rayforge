@@ -1,14 +1,16 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
+from raygeo.ops import Ops
+from raygeo.ops.types import CommandType
 
 from rayforge.context import get_context
 from rayforge.core.doc import Doc
-from rayforge.core.ops import Ops, LineToCommand
 from rayforge.core.workpiece import WorkPiece
-from rayforge.machine.models.machine import Machine, Laser
+from rayforge.machine.models.machine import Laser, Machine
 from rayforge.pipeline.artifact import (
-    WorkPieceArtifact,
     StepOpsArtifact,
+    WorkPieceArtifact,
     create_handle_from_dict,
 )
 from rayforge.pipeline.coord import CoordinateSystem
@@ -100,10 +102,12 @@ def test_step_runner_correctly_scales_and_places_ops(
     #    The line endpoint (20,0) rotates 90 degrees around the origin to
     #    (0,20), then is translated to (65,75) in world mm.
     expected_end = (65.0, 75.0, 0.0)
-    line_cmd = next(
-        c for c in ops_artifact.ops if isinstance(c, LineToCommand)
+    line_idx = next(
+        i
+        for i in range(ops_artifact.ops.len())
+        if ops_artifact.ops.command_type(i) == CommandType.LINE_TO
     )
-    assert line_cmd.end == pytest.approx(expected_end)
+    assert ops_artifact.ops.endpoint(line_idx) == pytest.approx(expected_end)
 
     get_context().artifact_store.release(base_handle)
     get_context().artifact_store.release(ops_handle)

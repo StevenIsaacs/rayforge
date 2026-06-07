@@ -5,6 +5,67 @@ All notable changes to Rayforge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.7.10
+
+### Fixed
+
+- Fixed contour offset producing hundreds of garbage micro-contours on shapes
+  with multiple holes (raygeo v0.2.0)
+
+## 1.7.9
+
+### Added
+
+- Raygeo version info in about dialog
+
+### Fixed
+
+- Fixed mirrored bezier control points and arc parameters in raygeo
+- Fixed raster and frame icons not showing on some GTK versions
+
+## 1.7.8
+
+### Added
+
+- Distance preset buttons in Print and Cut wizard for quick selection
+- Updated addon API version to 13
+
+### Changed
+
+- Migrated geometry processing from Python to Rust (raygeo) for improved performance
+
+### Fixed
+
+- Fixed WCS offset applied twice in Move to Selection buttons (#245)
+
+## 1.7.7
+
+### Fixed
+
+- Fixed shallow copy of extra_axes in Command causing rotary 3D preview
+  distortion (#243)
+- Fixed mirrored arcs rendered as full circles in G-code and 3D preview
+
+## 1.7.6
+
+### Added
+
+- Space+drag pan gesture for canvas navigation (#241)
+- Custom resolution option for camera image settings
+
+### Fixed
+
+- Fixed capability defaults being overwritten by duplicate step keys (#239)
+- Fixed RX buffer override not applied in Creality Falcon device profiles
+
+### Performance
+
+- Numerous performance improvements for raster engraving operations
+
+### Changed
+
+- 2D canvas laser path alpha normalization for improved visibility at low power
+
 ## 1.7.5
 
 ### Added

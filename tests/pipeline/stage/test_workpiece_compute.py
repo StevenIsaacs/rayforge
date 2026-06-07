@@ -1,32 +1,34 @@
-import cairo
-import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from rayforge.core.geo import Geometry
+import cairo
+import pytest
+from raygeo import Geometry
+from raygeo.ops import Ops
+from raygeo.ops.types import CommandType
+
 from rayforge.core.matrix import Matrix
-from rayforge.core.workpiece import WorkPiece
 from rayforge.core.source_asset import SourceAsset
 from rayforge.core.source_asset_segment import SourceAssetSegment
 from rayforge.core.vectorization_spec import PassthroughSpec
-from rayforge.core.ops import Ops
+from rayforge.core.workpiece import WorkPiece
 from rayforge.machine.models.machine import Laser
 from rayforge.pipeline.artifact import WorkPieceArtifact
 from rayforge.pipeline.coord import CoordinateSystem
-from rayforge.pipeline.transformer.base import OpsTransformer
 from rayforge.pipeline.stage.workpiece_compute import (
-    _create_initial_ops,
-    _validate_workpiece_size,
-    _calculate_vector_render_size,
-    _execute_vector,
-    _execute_raster,
-    _apply_transformers,
-    _merge_artifact_ops,
-    compute_workpiece_artifact_vector,
-    compute_workpiece_artifact_raster,
-    compute_workpiece_artifact,
     MAX_VECTOR_TRACE_PIXELS,
+    _apply_transformers,
+    _calculate_vector_render_size,
+    _create_initial_ops,
+    _execute_raster,
+    _execute_vector,
+    _merge_artifact_ops,
+    _validate_workpiece_size,
+    compute_workpiece_artifact,
+    compute_workpiece_artifact_raster,
+    compute_workpiece_artifact_vector,
 )
+from rayforge.pipeline.transformer.base import OpsTransformer
 from rayforge.shared.tasker.progress import set_progress
 
 
@@ -200,11 +202,6 @@ def test_create_initial_ops():
 
 def test_create_initial_ops_with_frequency_and_pulse_width():
     """Test _create_initial_ops injects frequency/pulse_width commands."""
-    from rayforge.core.ops.commands import (
-        SetFrequencyCommand,
-        SetPulseWidthCommand,
-    )
-
     settings = {
         "power": 0.8,
         "cut_speed": 15,
@@ -216,20 +213,24 @@ def test_create_initial_ops_with_frequency_and_pulse_width():
 
     ops = _create_initial_ops(settings)
 
-    freq_cmds = [
-        c for c in ops._commands if isinstance(c, SetFrequencyCommand)
+    freq_idxs = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SET_FREQUENCY
     ]
-    pw_cmds = [c for c in ops._commands if isinstance(c, SetPulseWidthCommand)]
-    assert len(freq_cmds) == 1
-    assert freq_cmds[0].frequency == 1000
-    assert len(pw_cmds) == 1
-    assert pw_cmds[0].pulse_width == 50
+    pw_idxs = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SET_PULSE_WIDTH
+    ]
+    assert len(freq_idxs) == 1
+    assert ops.frequency(freq_idxs[0]) == 1000
+    assert len(pw_idxs) == 1
+    assert ops.pulse_width(pw_idxs[0]) == 50
 
 
 def test_create_initial_ops_zero_frequency_no_command():
     """Test _create_initial_ops skips frequency when value is 0."""
-    from rayforge.core.ops.commands import SetFrequencyCommand
-
     settings = {
         "power": 0.8,
         "cut_speed": 15,
@@ -240,16 +241,16 @@ def test_create_initial_ops_zero_frequency_no_command():
 
     ops = _create_initial_ops(settings)
 
-    freq_cmds = [
-        c for c in ops._commands if isinstance(c, SetFrequencyCommand)
+    freq_idxs = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SET_FREQUENCY
     ]
-    assert len(freq_cmds) == 0
+    assert len(freq_idxs) == 0
 
 
 def test_create_initial_ops_missing_frequency_no_error():
     """Test _create_initial_ops handles missing frequency key."""
-    from rayforge.core.ops.commands import SetFrequencyCommand
-
     settings = {
         "power": 0.8,
         "cut_speed": 15,
@@ -259,10 +260,12 @@ def test_create_initial_ops_missing_frequency_no_error():
 
     ops = _create_initial_ops(settings)
 
-    freq_cmds = [
-        c for c in ops._commands if isinstance(c, SetFrequencyCommand)
+    freq_idxs = [
+        i
+        for i in range(ops.len())
+        if ops.command_type(i) == CommandType.SET_FREQUENCY
     ]
-    assert len(freq_cmds) == 0
+    assert len(freq_idxs) == 0
 
 
 def test_validate_workpiece_size_valid():
