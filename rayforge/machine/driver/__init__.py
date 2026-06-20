@@ -7,6 +7,7 @@ from .grbl import GrblNetworkDriver, GrblSerialDriver, GrblTelnetDriver
 from .marlin import MarlinSerialDriver
 from .octoprint import OctoPrintDriver
 from .ruida import RuidaDriver
+from .ruidarpa import RuidaRPAAdapter
 from .smoothie import SmoothieDriver
 
 
@@ -43,5 +44,6 @@ __all__ = [
     "MarlinSerialDriver",
     "OctoPrintDriver",
     "RuidaDriver",
+    "RuidaRPAAdapter",
     "SmoothieDriver",
 ]
