@@ -1,7 +1,7 @@
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from raygeo import Geometry
+from raygeo.geo import Geometry
 from raygeo.ops import Ops
 from raygeo.ops.types import SectionType
 
@@ -98,7 +98,7 @@ class FrameProducer(OpsProducer):
                 f"Rect: {frame_ops.rect()}"
             )
             # Build the final Ops object
-            final_ops.set_laser(laser.uid)
+            final_ops.set_head(laser.uid)
             final_ops.ops_section_start(
                 SectionType.VECTOR_OUTLINE, workpiece.uid
             )

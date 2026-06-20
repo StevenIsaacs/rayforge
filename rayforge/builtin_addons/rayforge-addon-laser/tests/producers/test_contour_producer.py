@@ -3,7 +3,7 @@ from typing import List
 import cairo
 import pytest
 from laser_essentials.producers import ContourProducer, CutOrder
-from raygeo import Geometry
+from raygeo.geo import Geometry
 
 from rayforge.core.source_asset_segment import SourceAssetSegment
 from rayforge.core.vectorization_spec import PassthroughSpec
@@ -412,8 +412,8 @@ def test_overcut_extends_closed_contour(laser, dummy_surface):
 
     data = geoms[0].data
     assert data is not None
-    last_x = data[-1, 1]
-    last_y = data[-1, 2]
+    last_x = data[-1].end[0]
+    last_y = data[-1].end[1]
     # First side goes (0,0)→(20,0), 20mm.  Overcut 5mm → (5,0).
     assert last_x == pytest.approx(5.0, abs=0.01)
     assert last_y == pytest.approx(0.0, abs=0.01)
@@ -477,8 +477,8 @@ def test_overcut_with_remove_inner_paths(
 
     data = geoms[0].data
     assert data is not None
-    last_x = data[-1, 1]
-    last_y = data[-1, 2]
+    last_x = data[-1].end[0]
+    last_y = data[-1].end[1]
     assert last_x == pytest.approx(5.0, abs=0.01)
     assert last_y == pytest.approx(0.0, abs=0.01)
 
@@ -504,8 +504,8 @@ def test_overcut_applies_to_both_inner_and_outer(
     for geo in geoms:
         data = geo.data
         assert data is not None
-        start_x, start_y = data[0, 1], data[0, 2]
-        end_x, end_y = data[-1, 1], data[-1, 2]
+        start_x, start_y = data[0].end[0], data[0].end[1]
+        end_x, end_y = data[-1].end[0], data[-1].end[1]
         # With overcut the path no longer ends at the start point
         assert not (
             abs(end_x - start_x) < 0.01 and abs(end_y - start_y) < 0.01
@@ -536,12 +536,94 @@ def test_overcut_larger_than_one_side(laser, dummy_surface):
 
     data = geoms[0].data
     assert data is not None
-    last_x = data[-1, 1]
-    last_y = data[-1, 2]
+    last_x = data[-1].end[0]
+    last_y = data[-1].end[1]
     # 25mm: first side (20mm) fully traced, then 5mm into second side
     # Second side: (20,0)→(20,20).  5mm/20mm → t=0.25 → (20, 5)
     assert last_x == pytest.approx(20.0, abs=0.01)
     assert last_y == pytest.approx(5.0, abs=0.01)
+
+
+def test_open_paths_preserved_with_closed_contours(
+    laser, dummy_surface, vector_workpiece
+):
+    """
+    Open paths (e.g. crosshair lines from SVG H/V commands) must not
+    be dropped when mixed with closed contours.
+
+    split_inner_and_outer_contours() only handles closed paths, so
+    open ones must be separated beforehand and re-added afterwards.
+    """
+    # Add two open line paths to the vector workpiece boundaries
+    extra = Geometry()
+    extra.move_to(0.3, 0.0)
+    extra.line_to(0.3, 1.0)
+    extra.move_to(0.0, 0.7)
+    extra.line_to(1.0, 0.7)
+
+    combined = Geometry()
+    combined.extend(vector_workpiece.boundaries)
+    combined.extend(extra)
+    vector_workpiece._boundaries_cache = combined
+
+    tracer = ContourProducer(cut_side=CutSide.CENTERLINE)
+    artifact = tracer.run(
+        laser,
+        dummy_surface,
+        (10, 10),
+        workpiece=vector_workpiece,
+        generation_id=1,
+    )
+
+    geoms = get_geo_from_artifact(artifact)
+
+    # 2 closed contours (outer + hole) + 2 open lines = 4 total
+    assert len(geoms) == 4
+
+    closed = [g for g in geoms if g.is_closed()]
+    open_ = [g for g in geoms if not g.is_closed()]
+    assert len(closed) == 2
+    assert len(open_) == 2
+
+    # Verify the open lines survived and have the expected coordinates
+    # after scaling by 20 (workpiece size).
+    # Sort: vertical lines first (zero width), then horizontal.
+    open_rects = sorted(
+        [g.rect() for g in open_], key=lambda r: abs(r[2] - r[0])
+    )
+    # Vertical line: x=6, y=0..20
+    assert open_rects[0] == pytest.approx((6.0, 0.0, 6.0, 20.0), abs=0.05)
+    # Horizontal line: x=0..20, y=14
+    assert open_rects[1] == pytest.approx((0.0, 14.0, 20.0, 14.0), abs=0.05)
+
+
+def test_open_paths_only(laser, dummy_surface):
+    """
+    When the geometry contains only open paths and no closed contours,
+    all open paths must still be emitted.
+    """
+    geo = Geometry()
+    geo.move_to(0, 0)
+    geo.line_to(1, 0)
+    geo.move_to(0.5, 0)
+    geo.line_to(0.5, 1)
+
+    wp = WorkPiece(name="lines_only")
+    wp._boundaries_cache = geo
+    wp.set_size(10, 10)
+
+    tracer = ContourProducer(cut_side=CutSide.CENTERLINE)
+    artifact = tracer.run(
+        laser,
+        dummy_surface,
+        (10, 10),
+        workpiece=wp,
+        generation_id=1,
+    )
+
+    geoms = get_geo_from_artifact(artifact)
+    assert len(geoms) == 2
+    assert all(not g.is_closed() for g in geoms)
 
 
 def test_overcut_on_full_circle(laser, dummy_surface):
@@ -574,7 +656,7 @@ def test_overcut_on_full_circle(laser, dummy_surface):
     # After scaling: circle radius 60, center (60,60), start (120,60)
     # Overcut 3mm → angle = 3/60 = 0.05 rad CCW from angle 0.
     # x = 60 + 60·cos(0.05) ≈ 119.93, y = 60 + 60·sin(0.05) ≈ 63.0
-    last_x = data[-1, 1]
-    last_y = data[-1, 2]
+    last_x = data[-1].end[0]
+    last_y = data[-1].end[1]
     assert last_x == pytest.approx(119.93, abs=0.05)
     assert last_y == pytest.approx(63.0, abs=0.05)

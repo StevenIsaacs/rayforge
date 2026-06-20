@@ -3,7 +3,7 @@ from enum import Enum, auto
 from gettext import gettext as _
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from raygeo import Geometry
+from raygeo.geo import Geometry
 from raygeo.geo.algo.overcut import apply_overcut
 from raygeo.ops import Ops
 from raygeo.ops.types import SectionType
@@ -169,7 +169,8 @@ class ContourProducer(OpsProducer):
             merged = Geometry()
             for g in base_contours:
                 merged.extend(g)
-            target_contours = merged.normalize_winding_orders()
+            merged.normalize_winding_orders()
+            target_contours = merged.split_into_contours()
 
         # 4. Apply offsets.
         composite_geo = Geometry()
@@ -177,23 +178,19 @@ class ContourProducer(OpsProducer):
             composite_geo.extend(geo)
 
         if abs(total_offset) > 1e-6:
-            # Attempt to apply the offset (grow/shrink).
-            grown_geometry = composite_geo.grow(total_offset)
+            original_geo = composite_geo.copy()
+            composite_geo.grow(total_offset)
 
-            # Check if the grow operation failed (returned empty geometry).
-            # This can happen with complex or malformed input shapes.
-            if grown_geometry.is_empty() and not composite_geo.is_empty():
+            if composite_geo.is_empty() and not original_geo.is_empty():
                 logger.warning(
                     f"ContourProducer for '{workpiece.name}' failed to apply "
                     f"an offset of {total_offset:.3f} mm. This can be "
                     "caused by micro-gaps or self-intersections in the "
                     "source geometry. Falling back to the un-offset path."
                 )
-                # Fall back to the original, un-offset geometry.
-                final_geometry = composite_geo
+                final_geometry = original_geo
             else:
-                # The grow operation was successful or input was empty.
-                final_geometry = grown_geometry
+                final_geometry = composite_geo
         else:
             # No offset was requested, so use the composite geometry.
             final_geometry = composite_geo
@@ -217,7 +214,11 @@ class ContourProducer(OpsProducer):
                     beziers=supports_curves,
                     arcs=allow_arcs,
                     on_progress=(
-                        lambda p: context.set_progress(p) if context else None
+                        lambda current, total: (
+                            context.set_progress(current / total)
+                            if context
+                            else None
+                        )
                     ),
                 )
             else:
@@ -226,7 +227,7 @@ class ContourProducer(OpsProducer):
         # 6. Create Ops by splitting into optimizable groups
         final_ops = Ops()
         if not final_geometry.is_empty():
-            final_ops.set_laser(laser.uid)
+            final_ops.set_head(laser.uid)
 
             if self.remove_inner_paths:
                 # Simple case: remove inner paths and create one optimizable
@@ -246,9 +247,25 @@ class ContourProducer(OpsProducer):
                 final_ops.extend(Ops.from_geometry(final_geometry))
                 final_ops.ops_section_end(SectionType.VECTOR_OUTLINE)
             else:
-                # Complex case: separate inner and outer paths into two groups
-                split_func = final_geometry.split_inner_and_outer_contours
-                inner_contours, outer_contours = split_func()
+                # Complex case: separate inner and outer paths into two
+                # groups. Open contours (e.g. straight lines) are not
+                # handled by split_inner_and_outer_contours(), so we
+                # must separate them first and add them back afterwards.
+                all_contours = final_geometry.split_into_contours()
+                open_contours = [c for c in all_contours if not c.is_closed()]
+                closed_geo = Geometry()
+                for c in all_contours:
+                    if c.is_closed():
+                        closed_geo.extend(c)
+
+                inner_contours = []
+                outer_contours = []
+                if not closed_geo.is_empty():
+                    inner_contours, outer_contours = (
+                        closed_geo.split_inner_and_outer_contours()
+                    )
+
+                outer_contours.extend(open_contours)
 
                 if self.overcut > 0:
                     inner_contours = [

@@ -145,8 +145,10 @@ CI runs for pushes to `main` + tags, and PRs to any branch. Release tags trigger
 
 ## Raygeo (Rust/PyO3 geometry library)
 
-- Location: a separate repository in `external/raygeo/` that you may also edit
-- Has its own AGENTS.md with instructions.
+Even though Raygeo is installed as a regular pip dependency, we own it. If the root
+cause of an issue is in Raygeo, you should fix it there instead of building a
+workaround.
+Source repository: https://github.com/barebaric/raygeo
 
 ## Other rules
 

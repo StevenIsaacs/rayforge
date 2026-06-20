@@ -107,11 +107,9 @@ class ShrinkWrapProducer(OpsProducer):
 
             # 4. Normalize winding order BEFORE offsetting (grow). This ensures
             #    that a positive offset correctly expands the shape.
-            normalized_geos = hull_geometry.normalize_winding_orders()
-            if not normalized_geos:
+            hull_geometry.normalize_winding_orders()
+            if hull_geometry.is_empty():
                 hull_geometry = None
-            else:
-                hull_geometry = normalized_geos[0]
 
         if hull_geometry and not hull_geometry.is_empty():
             # 5. Apply offset in millimeter space
@@ -135,12 +133,16 @@ class ShrinkWrapProducer(OpsProducer):
                     beziers=supports_curves,
                     arcs=allow_arcs,
                     on_progress=(
-                        lambda p: context.set_progress(p) if context else None
+                        lambda current, total: (
+                            context.set_progress(current / total)
+                            if context
+                            else None
+                        )
                     ),
                 )
 
             # 7. Convert to Ops
-            final_ops.set_laser(laser.uid)
+            final_ops.set_head(laser.uid)
             final_ops.ops_section_start(
                 SectionType.VECTOR_OUTLINE, workpiece.uid
             )
