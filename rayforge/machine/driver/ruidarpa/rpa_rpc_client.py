@@ -42,6 +42,9 @@ class RpaRpcClient:
         self._port = port
         self._conn: Any = None
         self._bg_thread: Any = None
+        self._status_listener: Optional[Callable] = None
+        self._error_listener: Optional[Callable] = None
+        self._reply_listener: Optional[Callable] = None
 
     # --- Lifecycle ---
 
@@ -141,65 +144,99 @@ class RpaRpcClient:
         return self._conn.root.exposed_machine_status()
 
     def register_status_listener(self, callback: Callable) -> None:
-        """Register a status listener (local).
+        """Register a status listener.
 
-        Note: For RPC, the callback fires locally from a polling
-        mechanism; actual status events are received by polling.
+        The callback reference is stored internally so that the same
+        Python object (same ``id()``) is used for later unregistration.
+        This is required because RPyC identifies remote callable
+        references by ``id()``, and bound methods create a new object
+        on each access.
 
         Args:
             callback: Callable accepting a status string.
         """
         self._require_connected()
+        self._status_listener = callback
         self._conn.root.exposed_register_status_listener(callback)
 
     def register_error_listener(self, callback: Callable) -> None:
-        """Register an error listener."""
+        """Register an error listener.
+
+        The callback reference is stored internally for reliable
+        unregistration (see :meth:`register_status_listener`).
+        """
         self._require_connected()
+        self._error_listener = callback
         self._conn.root.exposed_register_error_listener(callback)
 
     def register_reply_listener(self, callback: Callable) -> None:
-        """Register a reply listener."""
+        """Register a reply listener.
+
+        The callback reference is stored internally for reliable
+        unregistration (see :meth:`register_status_listener`).
+        """
         self._require_connected()
+        self._reply_listener = callback
         self._conn.root.exposed_register_reply_listener(callback)
 
     def unregister_status_listener(self, callback: Callable) -> None:
         """Unregister a status listener.
 
+        Uses the internally stored callback reference (set by
+        :meth:`register_status_listener`) to ensure the same Python
+        object is passed — required for RPyC callable identity matching.
+
         Args:
-            callback: The same callable passed to
-                ``register_status_listener``.
+            callback: Ignored; the stored reference is used instead.
+                Included for API consistency.
         """
         self._require_connected()
-        try:
-            self._conn.root.exposed_unregister_status_listener(callback)
-        except AttributeError:
-            pass  # Server may not support unregister (pre-v0.8.0)
+        if self._status_listener is not None:
+            try:
+                self._conn.root.exposed_unregister_status_listener(
+                    self._status_listener,
+                )
+            except AttributeError:
+                pass  # Server may not support unregister (pre-v0.8.0)
+            self._status_listener = None
 
     def unregister_error_listener(self, callback: Callable) -> None:
         """Unregister an error listener.
 
+        Uses the internally stored callback reference (set by
+        :meth:`register_error_listener`) for reliable RPyC unregister.
+
         Args:
-            callback: The same callable passed to
-                ``register_error_listener``.
+            callback: Ignored; the stored reference is used instead.
         """
         self._require_connected()
-        try:
-            self._conn.root.exposed_unregister_error_listener(callback)
-        except AttributeError:
-            pass  # Server may not support unregister (pre-v0.8.0)
+        if self._error_listener is not None:
+            try:
+                self._conn.root.exposed_unregister_error_listener(
+                    self._error_listener,
+                )
+            except AttributeError:
+                pass  # Server may not support unregister (pre-v0.8.0)
+            self._error_listener = None
 
     def unregister_reply_listener(self, callback: Callable) -> None:
         """Unregister a reply listener.
 
+        Uses the internally stored callback reference (set by
+        :meth:`register_reply_listener`) for reliable RPyC unregister.
+
         Args:
-            callback: The same callable passed to
-                ``register_reply_listener``.
+            callback: Ignored; the stored reference is used instead.
         """
         self._require_connected()
-        try:
-            self._conn.root.exposed_unregister_reply_listener(callback)
-        except AttributeError:
-            pass  # Server may not support unregister (pre-v0.8.0)
+        if self._reply_listener is not None:
+            try:
+                self._conn.root.exposed_unregister_reply_listener(
+                    self._reply_listener,
+                )
+            except AttributeError:
+                pass  # Server may not support unregister (pre-v0.8.0)
+            self._reply_listener = None
 
     # --- Internal helpers ---
 

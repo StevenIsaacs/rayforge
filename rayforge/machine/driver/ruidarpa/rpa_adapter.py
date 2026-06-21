@@ -89,6 +89,7 @@ class RuidaRPAAdapter(Driver):
         self._connection_task: Optional[asyncio.Task] = None
         self._keep_running: bool = False
         self._is_connected: bool = False
+        self._shutting_down: bool = False
 
     # --- Properties ---
 
@@ -345,6 +346,8 @@ class RuidaRPAAdapter(Driver):
             event: A status string (e.g. 'CONNECTED', 'DISCONNECTED') or a
                 StatusDict dict for machine status updates.
         """
+        if self._shutting_down:
+            return
         if isinstance(event, str):
             if event == "CONNECTED":
                 self._is_connected = True
@@ -377,12 +380,16 @@ class RuidaRPAAdapter(Driver):
 
     def _on_rpc_error(self, msg: str) -> None:
         """Handle error events from the Ruida controller."""
+        if self._shutting_down:
+            return
         logger.warning("RPA error: %s", msg,
                        extra=self._log_extra(
                            "TUI_RPC" if self._tui_mode else "RPA"))
 
     def _on_rpc_reply(self, replies: tuple[str, ...]) -> None:
         """Handle reply data from the Ruida controller."""
+        if self._shutting_down:
+            return
         logger.debug("RPA reply: %d lines", len(replies),
                      extra=self._log_extra(
                          "TUI_RPC" if self._tui_mode else "RPA"))
@@ -619,6 +626,7 @@ class RuidaRPAAdapter(Driver):
     # --- Cleanup ---
 
     async def cleanup(self):
+        self._shutting_down = True
         self._keep_running = False
         self._is_connected = False
 
