@@ -274,9 +274,6 @@ class RuidaRPAAdapter(Driver):
                 # --- Connected successfully ---
                 delay = self.RECONNECT_BASE_DELAY
                 self._is_connected = True
-                self.connection_status_changed.send(
-                    self, status=TransportStatus.CONNECTED, message=""
-                )
                 self.state.status = DeviceStatus.IDLE
                 self.state_changed.send(self, state=self.state)
 
@@ -353,6 +350,9 @@ class RuidaRPAAdapter(Driver):
                 self._is_connected = True
                 self.state.status = DeviceStatus.IDLE
                 self.state_changed.send(self, state=self.state)
+                self.connection_status_changed.send(
+                    self, status=TransportStatus.CONNECTED, message=""
+                )
                 logger.info("RPA connected via %s",
                             "RPC" if self._tui_mode else "direct",
                             extra=self._log_extra(
@@ -361,6 +361,9 @@ class RuidaRPAAdapter(Driver):
                 self._is_connected = False
                 self.state.status = DeviceStatus.UNKNOWN
                 self.state_changed.send(self, state=self.state)
+                self.connection_status_changed.send(
+                    self, status=TransportStatus.DISCONNECTED, message=""
+                )
                 logger.warning("RPA disconnected",
                                extra=self._log_extra(
                                    "TUI_RPC" if self._tui_mode else "RPA"))
@@ -368,6 +371,9 @@ class RuidaRPAAdapter(Driver):
                 self._is_connected = False
                 self.state.status = DeviceStatus.UNKNOWN
                 self.state_changed.send(self, state=self.state)
+                self.connection_status_changed.send(
+                    self, status=TransportStatus.DISCONNECTED, message=""
+                )
         elif isinstance(event, dict):
             # StatusDict with machine status data — log at debug level
             status_value = event.get("status") or event.get(
