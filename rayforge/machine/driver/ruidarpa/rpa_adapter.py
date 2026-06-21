@@ -236,6 +236,16 @@ class RuidaRPAAdapter(Driver):
                         None, client.start, udp_host, usb_device
                     )
                     connected = started
+                    if connected:
+                        # Register RPC callbacks for status/error/reply
+                        await loop.run_in_executor(
+                            None, client.register_status_listener,
+                            self._on_rpc_status,
+                        )
+                        await loop.run_in_executor(
+                            None, client.register_error_listener,
+                            self._on_rpc_error,
+                        )
                 else:
                     driver: RpaDirectDriver = backend  # type: ignore
                     udp_host = self._config.get("udp_host")
@@ -243,6 +253,17 @@ class RuidaRPAAdapter(Driver):
                     connected = await loop.run_in_executor(
                         None, driver.start, udp_host, usb_device
                     )
+                    if connected:
+                        # Register direct driver callbacks
+                        driver.register_status_listener(
+                            self._on_rpc_status
+                        )
+                        driver.register_error_listener(
+                            self._on_rpc_error
+                        )
+                        driver.register_reply_listener(
+                            self._on_rpc_reply
+                        )
 
                 if not connected:
                     raise ConnectionError(
@@ -312,6 +333,60 @@ class RuidaRPAAdapter(Driver):
 
         logger.debug("Exiting RPA connection loop", extra=log_extra)
 
+    # --- RPC / Direct driver callbacks ---
+
+    def _on_rpc_status(self, event: Any) -> None:
+        """Handle status events from the Ruida controller via RPC/direct mode.
+
+        Called from the backend's background thread. Bridges to the adapter's
+        state tracking.
+
+        Args:
+            event: A status string (e.g. 'CONNECTED', 'DISCONNECTED') or a
+                StatusDict dict for machine status updates.
+        """
+        if isinstance(event, str):
+            if event == "CONNECTED":
+                self._is_connected = True
+                self.state.status = DeviceStatus.IDLE
+                self.state_changed.send(self, state=self.state)
+                logger.info("RPA connected via %s",
+                            "RPC" if self._tui_mode else "direct",
+                            extra=self._log_extra(
+                                "TUI_RPC" if self._tui_mode else "RPA"))
+            elif event == "DISCONNECTED":
+                self._is_connected = False
+                self.state.status = DeviceStatus.UNKNOWN
+                self.state_changed.send(self, state=self.state)
+                logger.warning("RPA disconnected",
+                               extra=self._log_extra(
+                                   "TUI_RPC" if self._tui_mode else "RPA"))
+            elif event == "TERMINATED":
+                self._is_connected = False
+                self.state.status = DeviceStatus.UNKNOWN
+                self.state_changed.send(self, state=self.state)
+        elif isinstance(event, dict):
+            # StatusDict with machine status data — log at debug level
+            status_value = event.get("status") or event.get(
+                "MEM_MACHINE_STATUS"
+            )
+            if status_value is not None:
+                logger.debug("RPA status update: %s", status_value,
+                             extra=self._log_extra(
+                                 "TUI_RPC" if self._tui_mode else "RPA"))
+
+    def _on_rpc_error(self, msg: str) -> None:
+        """Handle error events from the Ruida controller."""
+        logger.warning("RPA error: %s", msg,
+                       extra=self._log_extra(
+                           "TUI_RPC" if self._tui_mode else "RPA"))
+
+    def _on_rpc_reply(self, replies: tuple[str, ...]) -> None:
+        """Handle reply data from the Ruida controller."""
+        logger.debug("RPA reply: %d lines", len(replies),
+                     extra=self._log_extra(
+                         "TUI_RPC" if self._tui_mode else "RPA"))
+
     async def _stop_backend(self) -> None:
         """Stop and release the current backend driver."""
         if self._backend is None:
@@ -322,13 +397,22 @@ class RuidaRPAAdapter(Driver):
             if self._tui_mode:
                 client: RpaRpcClient = self._backend  # type: ignore
                 if client.is_connected:
+                    # Unregister listeners before stopping to prevent
+                    # stale-callback warnings on the server.
+                    await loop.run_in_executor(
+                        None, client.unregister_status_listener,
+                        self._on_rpc_status,
+                    )
+                    await loop.run_in_executor(
+                        None, client.unregister_error_listener,
+                        self._on_rpc_error,
+                    )
                     await loop.run_in_executor(None, client.stop)
                     await loop.run_in_executor(None, client.disconnect)
             else:
                 await loop.run_in_executor(None, self._backend.stop)
         except Exception:
             logger.exception("Error stopping RPA backend")
-        self._backend = None
 
     # --- Script execution ---
 
@@ -547,6 +631,7 @@ class RuidaRPAAdapter(Driver):
             self._connection_task = None
 
         await self._stop_backend()
+        self._backend = None
 
         self.connection_status_changed.send(
             self, status=TransportStatus.DISCONNECTED, message=""

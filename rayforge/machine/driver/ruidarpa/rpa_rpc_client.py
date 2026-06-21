@@ -7,14 +7,20 @@ to communicate with a Ruida controller on another machine.
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 _logger = logging.getLogger(__name__)
 
-try:
+if TYPE_CHECKING:
     import rpyc
-except ImportError:
-    rpyc = None  # type: ignore
+    from rpyc.utils.helpers import BgServingThread
+else:
+    try:
+        import rpyc
+        from rpyc.utils.helpers import BgServingThread
+    except ImportError:
+        rpyc = None  # type: ignore
+        BgServingThread = None  # type: ignore
 
 
 class RpaRpcClient:
@@ -22,6 +28,9 @@ class RpaRpcClient:
 
     Connects to an RPyC service exposing the RPA TUI adapter on
     127.0.0.1:18812 by default.
+
+    Uses a ``BgServingThread`` to ensure server-initiated callbacks
+    (status, error, reply) are processed reliably on a daemon thread.
     """
 
     DEFAULT_HOST = "127.0.0.1"
@@ -32,11 +41,15 @@ class RpaRpcClient:
         self._host = host
         self._port = port
         self._conn: Any = None
+        self._bg_thread: Any = None
 
     # --- Lifecycle ---
 
     def connect(self) -> bool:
         """Connect to the RPyC service.
+
+        Starts a background serving thread to ensure server-initiated
+        callbacks (status, error, reply) are processed reliably.
 
         Returns:
             True if connection succeeded.
@@ -44,6 +57,7 @@ class RpaRpcClient:
         self._ensure_imported()
         try:
             self._conn = rpyc.connect(self._host, self._port)
+            self._bg_thread = BgServingThread(self._conn)
             _logger.info("RPA RPC client connected to %s:%d",
                          self._host, self._port)
             return True
@@ -57,6 +71,7 @@ class RpaRpcClient:
 
     def disconnect(self) -> None:
         """Disconnect from the RPyC service."""
+        # Close connection FIRST to unblock serve() in the bg thread
         if self._conn is not None:
             try:
                 self._conn.close()
@@ -64,10 +79,25 @@ class RpaRpcClient:
                 _logger.exception("Error disconnecting RPA RPC")
             self._conn = None
 
+        if self._bg_thread is not None:
+            try:
+                self._bg_thread.stop()
+            except AssertionError:
+                # BgServingThread already shut down due to connection
+                # close — expected.
+                pass
+            except Exception:
+                _logger.exception("Error stopping BgServingThread")
+            self._bg_thread = None
+
     @property
     def is_connected(self) -> bool:
         """Whether the RPyC connection is active."""
-        return self._conn is not None
+        return (
+            self._conn is not None
+            and self._bg_thread is not None
+            and self._bg_thread._thread.is_alive()
+        )
 
     # --- Delegated RPC calls ---
 
@@ -132,6 +162,45 @@ class RpaRpcClient:
         self._require_connected()
         self._conn.root.exposed_register_reply_listener(callback)
 
+    def unregister_status_listener(self, callback: Callable) -> None:
+        """Unregister a status listener.
+
+        Args:
+            callback: The same callable passed to
+                ``register_status_listener``.
+        """
+        self._require_connected()
+        try:
+            self._conn.root.exposed_unregister_status_listener(callback)
+        except AttributeError:
+            pass  # Server may not support unregister (pre-v0.8.0)
+
+    def unregister_error_listener(self, callback: Callable) -> None:
+        """Unregister an error listener.
+
+        Args:
+            callback: The same callable passed to
+                ``register_error_listener``.
+        """
+        self._require_connected()
+        try:
+            self._conn.root.exposed_unregister_error_listener(callback)
+        except AttributeError:
+            pass  # Server may not support unregister (pre-v0.8.0)
+
+    def unregister_reply_listener(self, callback: Callable) -> None:
+        """Unregister a reply listener.
+
+        Args:
+            callback: The same callable passed to
+                ``register_reply_listener``.
+        """
+        self._require_connected()
+        try:
+            self._conn.root.exposed_unregister_reply_listener(callback)
+        except AttributeError:
+            pass  # Server may not support unregister (pre-v0.8.0)
+
     # --- Internal helpers ---
 
     def _call(self, method: str, *args, **kwargs) -> Any:
@@ -150,8 +219,8 @@ class RpaRpcClient:
         return exposed(*args, **kwargs)
 
     def _ensure_imported(self) -> None:
-        """Raise ImportError if rpyc is not available."""
-        if rpyc is None:
+        """Raise ImportError if rpyc or BgServingThread is not available."""
+        if rpyc is None or BgServingThread is None:
             raise ImportError(
                 "rpyc is not installed. "
                 "Run: pixi run -e ruidarpa ..."
