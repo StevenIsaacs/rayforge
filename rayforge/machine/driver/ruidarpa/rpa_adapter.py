@@ -554,6 +554,9 @@ class RuidaRPAAdapter(Driver):
         pass
 
     async def jog(self, speed: int, **deltas: float) -> None:
+        # TODO: Jog deltas are inverted for Ruida for some reason;
+        # need to investigate if this is a quirk of the machine.
+        # For now, invert the deltas here to match user expectations.
         cmds: List[str] = []
         _move_x = False
         _move_y = False
@@ -567,14 +570,14 @@ class RuidaRPAAdapter(Driver):
             _delta_x = deltas.get("x", 0.0)
             _delta_y = deltas.get("y", 0.0)
             cmds.append(
-                f"REL_MOVE_XY Option=2 X={_delta_x:.3f}mm Y={_delta_y:.3f}mm")
+                f"REL_MOVE_XY Option=2 X={-_delta_x:.3f}mm Y={-_delta_y:.3f}mm")
         else:
             if _move_x:
                 _delta_x = deltas.get("x", 0.0)
-                cmds.append(f"REL_MOVE_X Option=2 X={_delta_x:.3f}mm")
+                cmds.append(f"REL_MOVE_X Option=2 X={-_delta_x:.3f}mm")
             if _move_y:
                 _delta_y = deltas.get("y", 0.0)
-                cmds.append(f"REL_MOVE_Y Option=2 Y={_delta_y:.3f}mm")
+                cmds.append(f"REL_MOVE_Y Option=2 Y={-_delta_y:.3f}mm")
         if cmds:
             logger.debug(
                 "Jogging axes: %s",
