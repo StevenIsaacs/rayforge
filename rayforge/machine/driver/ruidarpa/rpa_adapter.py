@@ -56,6 +56,17 @@ logger = logging.getLogger(__name__)
 _RpaBackend = Union[RpaDirectDriver, RpaRpcClient]
 
 
+def _unwrap_um(value: object) -> Optional[int]:
+    """Extract integer µm from a MEM_CURRENT_POSITION_* field.
+
+    The RPA TUI service sends these as ``(int_um, str_description)``
+    tuples. Accept both forms for forward compatibility.
+    """
+    if isinstance(value, (list, tuple)):
+        return value[0]
+    return value  # type: ignore[return-value]
+
+
 class RuidaRPAAdapter(Driver):
     """
     Main driver class for connecting to Ruida laser controllers via the
@@ -376,7 +387,9 @@ class RuidaRPAAdapter(Driver):
                     self, status=TransportStatus.DISCONNECTED, message=""
                 )
         elif isinstance(event, dict):
-            # StatusDict with machine status data
+            # StatusDict or RPyC netref — convert to local dict for reliable
+            # type handling
+            event = {k: event[k] for k in event}  # type: ignore
             status_value = event.get("status") or event.get(
                 "MEM_MACHINE_STATUS"
             )
@@ -386,15 +399,28 @@ class RuidaRPAAdapter(Driver):
                                  "TUI_RPC" if self._tui_mode else "RPA"))
 
             # Extract current position (values in µm → convert to mm)
-            pos_x_um = event.get("MEM_CURRENT_POSITION_X")
-            pos_y_um = event.get("MEM_CURRENT_POSITION_Y")
-            pos_z_um = event.get("MEM_CURRENT_POSITION_Z")
+            # MEM_CURRENT_POSITION_* values are (int_um, str_description)
+            pos_x_um = _unwrap_um(event.get("MEM_CURRENT_POSITION_X"))
+            pos_y_um = _unwrap_um(event.get("MEM_CURRENT_POSITION_Y"))
+            pos_z_um = _unwrap_um(event.get("MEM_CURRENT_POSITION_Z"))
 
             if any(v is not None for v in (pos_x_um, pos_y_um, pos_z_um)):
                 current = self.state.machine_pos
-                new_x = current[0] if pos_x_um is None else pos_x_um / 1000.0
-                new_y = current[1] if pos_y_um is None else pos_y_um / 1000.0
-                new_z = current[2] if pos_z_um is None else pos_z_um / 1000.0
+                new_x = (
+                    (current[0] or 0.0)
+                    if pos_x_um is None
+                    else -pos_x_um / 1000.0
+                )
+                new_y = (
+                    (current[1] or 0.0)
+                    if pos_y_um is None
+                    else -pos_y_um / 1000.0
+                )
+                new_z = (
+                    (current[2] or 0.0)
+                    if pos_z_um is None
+                    else -pos_z_um / 1000.0
+                )
                 new_pos = (new_x, new_y, new_z)
 
                 if new_pos != current:
@@ -558,6 +584,7 @@ class RuidaRPAAdapter(Driver):
         # need to investigate if this is a quirk of the machine.
         # For now, invert the deltas here to match user expectations.
         cmds: List[str] = []
+        cmds.append("SPEED_LASER_1 Speed:600")
         _move_x = False
         _move_y = False
         for axis_name, delta in deltas.items():
@@ -570,7 +597,8 @@ class RuidaRPAAdapter(Driver):
             _delta_x = deltas.get("x", 0.0)
             _delta_y = deltas.get("y", 0.0)
             cmds.append(
-                f"REL_MOVE_XY Option=2 X={-_delta_x:.3f}mm Y={-_delta_y:.3f}mm")
+                f"REL_MOVE_XY Option=2 X={-_delta_x:.3f}mm "
+                f"Y={-_delta_y:.3f}mm")
         else:
             if _move_x:
                 _delta_x = deltas.get("x", 0.0)
