@@ -559,8 +559,13 @@ class RuidaRPAAdapter(Driver):
             await self._run_script(["HOME_XY", "HOME_Z"])
         else:
             cmds: List[str] = []
-            if axes & (Axis.X | Axis.Y):
+            cmds.append("SPEED_LASER_1 Speed:600")
+            if axes & (Axis.X & Axis.Y):
                 cmds.append("HOME_XY")
+            elif axes & Axis.X:
+                cmds.append("REL_MOVE_X Option=0 X=0.0mm")
+            elif axes & Axis.Y:
+                cmds.append("REL_MOVE_Y Option=0 Y=0.0mm")
             if axes & Axis.Z:
                 cmds.append("HOME_Z")
             if cmds:
