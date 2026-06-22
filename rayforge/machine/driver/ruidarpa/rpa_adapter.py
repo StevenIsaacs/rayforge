@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import logging
 import random
+from dataclasses import replace
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
@@ -375,7 +376,7 @@ class RuidaRPAAdapter(Driver):
                     self, status=TransportStatus.DISCONNECTED, message=""
                 )
         elif isinstance(event, dict):
-            # StatusDict with machine status data — log at debug level
+            # StatusDict with machine status data
             status_value = event.get("status") or event.get(
                 "MEM_MACHINE_STATUS"
             )
@@ -383,6 +384,28 @@ class RuidaRPAAdapter(Driver):
                 logger.debug("RPA status update: %s", status_value,
                              extra=self._log_extra(
                                  "TUI_RPC" if self._tui_mode else "RPA"))
+
+            # Extract current position (values in µm → convert to mm)
+            pos_x_um = event.get("MEM_CURRENT_POSITION_X")
+            pos_y_um = event.get("MEM_CURRENT_POSITION_Y")
+            pos_z_um = event.get("MEM_CURRENT_POSITION_Z")
+
+            if any(v is not None for v in (pos_x_um, pos_y_um, pos_z_um)):
+                current = self.state.machine_pos
+                new_x = current[0] if pos_x_um is None else pos_x_um / 1000.0
+                new_y = current[1] if pos_y_um is None else pos_y_um / 1000.0
+                new_z = current[2] if pos_z_um is None else pos_z_um / 1000.0
+                new_pos = (new_x, new_y, new_z)
+
+                if new_pos != current:
+                    self.state = replace(self.state, machine_pos=new_pos)
+                    logger.debug(
+                        "RPA position update: x=%.3f y=%.3f z=%.3f",
+                        new_x, new_y, new_z,
+                        extra=self._log_extra(
+                            "TUI_RPC" if self._tui_mode else "RPA"),
+                    )
+                    self.state_changed.send(self, state=self.state)
 
     def _on_rpc_error(self, msg: str) -> None:
         """Handle error events from the Ruida controller."""
@@ -522,20 +545,36 @@ class RuidaRPAAdapter(Driver):
             "move_to x=%.3f y=%.3f", pos_x, pos_y,
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
         )
-        cmd = f"MOVE_ABS_XY X={pos_x:.3f}mm Y={pos_y:.3f}mm"
-        await self._run_script([cmd])
+        cmds: List[str] = []
+        cmds.append("SPEED_LASER_1 Speed:600")
+        cmds.append(f"REL_MOVE_XY Option=0 X={pos_x:.3f}mm Y={pos_y:.3f}mm")
+        await self._run_script(cmds)
 
     async def select_tool(self, tool_number: int) -> None:
         pass
 
     async def jog(self, speed: int, **deltas: float) -> None:
         cmds: List[str] = []
+        _move_x = False
+        _move_y = False
         for axis_name, delta in deltas.items():
             axis_lower = axis_name.lower()
             if axis_lower == "x":
-                cmds.append(f"AXIS_X_MOVE X={delta:.3f}mm")
+                _move_x = True
             elif axis_lower == "y":
-                cmds.append(f"AXIS_Y_MOVE Y={delta:.3f}mm")
+                _move_y = True
+        if _move_x and _move_y:
+            _delta_x = deltas.get("x", 0.0)
+            _delta_y = deltas.get("y", 0.0)
+            cmds.append(
+                f"REL_MOVE_XY Option=2 X={_delta_x:.3f}mm Y={_delta_y:.3f}mm")
+        else:
+            if _move_x:
+                _delta_x = deltas.get("x", 0.0)
+                cmds.append(f"REL_MOVE_X Option=2 X={_delta_x:.3f}mm")
+            if _move_y:
+                _delta_y = deltas.get("y", 0.0)
+                cmds.append(f"REL_MOVE_Y Option=2 Y={_delta_y:.3f}mm")
         if cmds:
             logger.debug(
                 "Jogging axes: %s",
@@ -615,6 +654,9 @@ class RuidaRPAAdapter(Driver):
         return None
 
     # --- Capabilities ---
+
+    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+        return True
 
     def get_laser_capabilities(self, laser: Laser):
         if laser.laser_type.supports_pwm:
