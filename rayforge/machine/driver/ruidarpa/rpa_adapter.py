@@ -409,17 +409,17 @@ class RuidaRPAAdapter(Driver):
                 new_x = (
                     (current[0] or 0.0)
                     if pos_x_um is None
-                    else -pos_x_um / 1000.0
+                    else pos_x_um / 1000.0
                 )
                 new_y = (
                     (current[1] or 0.0)
                     if pos_y_um is None
-                    else -pos_y_um / 1000.0
+                    else pos_y_um / 1000.0
                 )
                 new_z = (
                     (current[2] or 0.0)
                     if pos_z_um is None
-                    else -pos_z_um / 1000.0
+                    else pos_z_um / 1000.0
                 )
                 new_pos = (new_x, new_y, new_z)
 
@@ -572,6 +572,10 @@ class RuidaRPAAdapter(Driver):
                 await self._run_script(cmds)
 
     async def move_to(self, pos_x: float, pos_y: float) -> None:
+        # TODO: The coordinates coming from the UI are inverted. Why?
+        # For now, invert them here to match user expectations.
+        pos_x = -pos_x
+        pos_y = -pos_y
         logger.info(
             "move_to x=%.3f y=%.3f", pos_x, pos_y,
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
@@ -585,11 +589,11 @@ class RuidaRPAAdapter(Driver):
         pass
 
     async def jog(self, speed: int, **deltas: float) -> None:
-        # TODO: Jog deltas are inverted for Ruida for some reason;
-        # need to investigate if this is a quirk of the machine.
-        # For now, invert the deltas here to match user expectations.
+        # TODO: Jog speed is in mm/min, but the RPA TUI service expects mm/s.
+        # Convert for now.
+        speed_mm_per_s = speed / 60.0
         cmds: List[str] = []
-        cmds.append("SPEED_LASER_1 Speed:600")
+        cmds.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
         _move_x = False
         _move_y = False
         for axis_name, delta in deltas.items():
@@ -602,15 +606,15 @@ class RuidaRPAAdapter(Driver):
             _delta_x = deltas.get("x", 0.0)
             _delta_y = deltas.get("y", 0.0)
             cmds.append(
-                f"REL_MOVE_XY Option=2 X={-_delta_x:.3f}mm "
-                f"Y={-_delta_y:.3f}mm")
+                f"REL_MOVE_XY Option=2 X={_delta_x:.3f}mm "
+                f"Y={_delta_y:.3f}mm")
         else:
             if _move_x:
                 _delta_x = deltas.get("x", 0.0)
-                cmds.append(f"REL_MOVE_X Option=2 X={-_delta_x:.3f}mm")
+                cmds.append(f"REL_MOVE_X Option=2 X={_delta_x:.3f}mm")
             if _move_y:
                 _delta_y = deltas.get("y", 0.0)
-                cmds.append(f"REL_MOVE_Y Option=2 Y={-_delta_y:.3f}mm")
+                cmds.append(f"REL_MOVE_Y Option=2 Y={_delta_y:.3f}mm")
         if cmds:
             logger.debug(
                 "Jogging axes: %s",
