@@ -253,11 +253,11 @@ class RuidaRPAAdapter(Driver):
                         # Register RPC callbacks for status/error/reply
                         await loop.run_in_executor(
                             None, client.register_status_listener,
-                            self._on_rpc_status,
+                            self._on_rpa_status,
                         )
                         await loop.run_in_executor(
                             None, client.register_error_listener,
-                            self._on_rpc_error,
+                            self._on_rpa_error,
                         )
                 else:
                     driver: RpaDirectDriver = backend  # type: ignore
@@ -269,13 +269,13 @@ class RuidaRPAAdapter(Driver):
                     if connected:
                         # Register direct driver callbacks
                         driver.register_status_listener(
-                            self._on_rpc_status
+                            self._on_rpa_status
                         )
                         driver.register_error_listener(
-                            self._on_rpc_error
+                            self._on_rpa_error
                         )
                         driver.register_reply_listener(
-                            self._on_rpc_reply
+                            self._on_rpa_reply
                         )
 
                 if not connected:
@@ -345,7 +345,7 @@ class RuidaRPAAdapter(Driver):
 
     # --- RPC / Direct driver callbacks ---
 
-    def _on_rpc_status(self, event: Any) -> None:
+    def _on_rpa_status(self, event: Any) -> None:
         """Handle status events from the Ruida controller via RPC/direct mode.
 
         Called from the backend's background thread. Bridges to the adapter's
@@ -433,7 +433,7 @@ class RuidaRPAAdapter(Driver):
                     )
                     self.state_changed.send(self, state=self.state)
 
-    def _on_rpc_error(self, msg: str) -> None:
+    def _on_rpa_error(self, msg: str) -> None:
         """Handle error events from the Ruida controller."""
         if self._shutting_down:
             return
@@ -441,7 +441,7 @@ class RuidaRPAAdapter(Driver):
                        extra=self._log_extra(
                            "TUI_RPC" if self._tui_mode else "RPA"))
 
-    def _on_rpc_reply(self, replies: tuple[str, ...]) -> None:
+    def _on_rpa_reply(self, replies: tuple[str, ...]) -> None:
         """Handle reply data from the Ruida controller."""
         if self._shutting_down:
             return
@@ -463,11 +463,11 @@ class RuidaRPAAdapter(Driver):
                     # stale-callback warnings on the server.
                     await loop.run_in_executor(
                         None, client.unregister_status_listener,
-                        self._on_rpc_status,
+                        self._on_rpa_status,
                     )
                     await loop.run_in_executor(
                         None, client.unregister_error_listener,
-                        self._on_rpc_error,
+                        self._on_rpa_error,
                     )
                     await loop.run_in_executor(None, client.stop)
                     await loop.run_in_executor(None, client.disconnect)
