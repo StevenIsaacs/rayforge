@@ -111,7 +111,7 @@ class RuidaRPAAdapter(Driver):
 
     @property
     def machine_space_wcs_display_name(self) -> str:
-        return _("Machine Coordinates")
+        return _("Ruida Coordinates")
 
     @property
     def supported_wcs(self) -> List[str]:
