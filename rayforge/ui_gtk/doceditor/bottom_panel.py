@@ -9,7 +9,7 @@ from raygeo.ops.axis import Axis
 from ...logging_setup import ui_log_event_received
 from ...machine.cmd import MachineCmd
 from ...machine.driver.dummy import NoDeviceDriver
-from ...machine.models.machine import Machine
+from ...machine.models.machine import Machine, Origin
 from ...shared.gcodeedit.viewer import GcodeViewer
 from ...shared.tasker import task_mgr
 from ..doceditor.layers_tab import LayersTab
@@ -546,11 +546,37 @@ class BottomPanel(Gtk.Box):
         min_x, min_y, max_x, max_y = bounds
 
         if position == "ll":
-            world_x, world_y = min_x, min_y
+            # Machine's lower-left corner depends on origin:
+            # - Right-side origins invert X (ll → max_x)
+            # - Top-side origins invert Y (ll → max_y)
+            world_x = (
+                max_x
+                if self.machine.origin
+                in (Origin.BOTTOM_RIGHT, Origin.TOP_RIGHT)
+                else min_x
+            )
+            world_y = (
+                max_y
+                if self.machine.origin
+                in (Origin.TOP_LEFT, Origin.TOP_RIGHT)
+                else min_y
+            )
         elif position == "center":
             world_x, world_y = (min_x + max_x) / 2, (min_y + max_y) / 2
         elif position == "ur":
-            world_x, world_y = max_x, max_y
+            # Upper-right is the inverse of lower-left
+            world_x = (
+                min_x
+                if self.machine.origin
+                in (Origin.BOTTOM_RIGHT, Origin.TOP_RIGHT)
+                else max_x
+            )
+            world_y = (
+                min_y
+                if self.machine.origin
+                in (Origin.TOP_LEFT, Origin.TOP_RIGHT)
+                else max_y
+            )
         else:
             return
 
