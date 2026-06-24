@@ -311,10 +311,17 @@ class RuidaRPAEncoder(OpsEncoder):
         """Select laser device by resolving laser_uid to a tool number.
 
         Attempts to find the laser head in machine.heads. Falls back to
-        laser_uid % 2 if the head is not found or heads are unavailable.
+        extracting the trailing numeric suffix from laser_uid and modding
+        by 2 if the head is not found or heads are unavailable.
         """
         laser_uid = ops.laser_uid(idx)
-        device = laser_uid % 2
+        # laser_uid is a string like "laser_42" or a UUID — extract a
+        # deterministic device number (0 or 1) for dual-laser setups
+        try:
+            device = int(laser_uid.split("_")[-1]) % 2
+        except (ValueError, IndexError):
+            # Non-numeric UID (e.g., UUID) — use simple hash
+            device = sum(ord(c) for c in laser_uid) % 2
 
         try:
             laser_head = next(
@@ -330,7 +337,8 @@ class RuidaRPAEncoder(OpsEncoder):
         except (AttributeError, TypeError):
             logger.debug(
                 "machine.heads not available, falling back to "
-                "laser_uid %% 2 for laser device selection"
+                "parsed laser_uid %% 2 for "
+                "laser device selection"
             )
 
         if device == self.active_laser:
@@ -359,22 +367,22 @@ class RuidaRPAEncoder(OpsEncoder):
         self._emit("SET_FILE_SUM")
 
     def _handle_layer_start(self, ops, idx: int) -> None:
-        """Optionally emit a layer start comment."""
+        """Emit a layer start marker."""
         layer_uid = ops.layer_uid(idx)
-        self._emit(f"; LAYER_START uid={layer_uid}")
+        self._emit(f"LAYER_START uid={layer_uid}")
 
     def _handle_layer_end(self) -> None:
-        """Optionally emit a layer end comment."""
-        self._emit("; LAYER_END")
+        """Emit a layer end marker."""
+        self._emit("LAYER_END")
 
     def _handle_workpiece_start(self, ops, idx: int) -> None:
-        """Optionally emit a workpiece start comment."""
+        """Emit a workpiece start marker."""
         wp_uid = ops.workpiece_uid(idx)
-        self._emit(f"; WORKPIECE_START uid={wp_uid}")
+        self._emit(f"WORKPIECE_START uid={wp_uid}")
 
     def _handle_workpiece_end(self) -> None:
-        """Optionally emit a workpiece end comment."""
-        self._emit("; WORKPIECE_END")
+        """Emit a workpiece end marker."""
+        self._emit("WORKPIECE_END")
 
     def _handle_ops_section_start(self) -> None:
         """Emit nothing for ops section start.

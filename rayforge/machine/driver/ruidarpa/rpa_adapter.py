@@ -555,21 +555,23 @@ class RuidaRPAAdapter(Driver):
     # --- Movement ---
 
     async def home(self, axes: Optional[Axis] = None) -> None:
+        # TODO: The Speed:600 needs to be configurable.
+        # The RPA TUI service defaults to 600 mm/s.
+        cmds: List[str] = []
         if axes is None:
-            await self._run_script(["HOME_XY", "HOME_Z"])
+            cmds.append("REL_MOVE_XY Option=0 X=-5 Y=-5")
         else:
-            cmds: List[str] = []
-            cmds.append("SPEED_LASER_1 Speed:600")
             if axes & (Axis.X & Axis.Y):
-                cmds.append("HOME_XY")
+                cmds.append("REL_MOVE_XY Option=0 X=-5 Y=-5")
             elif axes & Axis.X:
                 cmds.append("REL_MOVE_X Option=0 X=0.0mm")
             elif axes & Axis.Y:
                 cmds.append("REL_MOVE_Y Option=0 Y=0.0mm")
             if axes & Axis.Z:
                 cmds.append("HOME_Z")
-            if cmds:
-                await self._run_script(cmds)
+        if cmds:
+            cmds.insert(0, "SPEED_LASER_1 Speed:600")
+            await self._run_script(cmds)
 
     async def move_to(self, pos_x: float, pos_y: float) -> None:
         # TODO: The coordinates coming from the UI are inverted. Why?
