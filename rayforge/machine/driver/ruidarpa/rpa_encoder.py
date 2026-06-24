@@ -143,9 +143,9 @@ class RuidaRPAEncoder(OpsEncoder):
 
     # -- Helpers ------------------------------------------------------------
 
-    def _emit(self, line: str) -> None:
-        """Append a line to the output."""
-        self.lines.append(line)
+    def _emit(self, lines: List[str]) -> None:
+        """Append one or more lines to the output."""
+        self.lines.extend(lines)
 
     # -- Movement handlers --------------------------------------------------
 
@@ -153,13 +153,13 @@ class RuidaRPAEncoder(OpsEncoder):
         """Rapid move (laser off) to an absolute position."""
         x, y, z = ops.endpoint(idx)
         self.current_pos = (x, y, z)
-        self._emit(f"MOVE_ABS_XY X={x:.3f}mm Y={y:.3f}mm")
+        self._emit([f"MOVE_ABS_XY X={x:.3f}mm Y={y:.3f}mm"])
 
     def _handle_line_to(self, ops, idx: int) -> None:
         """Cutting move (laser on) to an absolute position."""
         x, y, z = ops.endpoint(idx)
         self.current_pos = (x, y, z)
-        self._emit(f"CUT_ABS_XY X={x:.3f}mm Y={y:.3f}mm")
+        self._emit([f"CUT_ABS_XY X={x:.3f}mm Y={y:.3f}mm"])
 
     def _handle_arc_to(self, ops, idx: int) -> None:
         """Linearize arc to cut segments.
@@ -175,7 +175,7 @@ class RuidaRPAEncoder(OpsEncoder):
             sub_ct = sub_ops.command_type(j)
             if sub_ct == CommandType.LINE_TO:
                 sx, sy, sz = sub_ops.endpoint(j)
-                self._emit(f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm")
+                self._emit([f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm"])
             elif sub_ct == CommandType.SET_POWER:
                 power_norm = sub_ops.power(j)
                 self._emit_set_power_line(power_norm)
@@ -192,7 +192,7 @@ class RuidaRPAEncoder(OpsEncoder):
             sub_ct = sub_ops.command_type(j)
             if sub_ct == CommandType.LINE_TO:
                 sx, sy, sz = sub_ops.endpoint(j)
-                self._emit(f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm")
+                self._emit([f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm"])
             elif sub_ct == CommandType.SET_POWER:
                 power_norm = sub_ops.power(j)
                 self._emit_set_power_line(power_norm)
@@ -205,7 +205,7 @@ class RuidaRPAEncoder(OpsEncoder):
         Rpascript DELAY accepts time in seconds or milliseconds.
         """
         duration_ms = ops.dwell_duration(idx)
-        self._emit(f"DELAY {duration_ms:.3f}ms")
+        self._emit([f"DELAY {duration_ms:.3f}ms"])
 
     def _handle_bezier_to(self, ops, idx: int) -> None:
         """Linearize cubic bezier curve to cut segments."""
@@ -217,7 +217,7 @@ class RuidaRPAEncoder(OpsEncoder):
             sub_ct = sub_ops.command_type(j)
             if sub_ct == CommandType.LINE_TO:
                 sx, sy, sz = sub_ops.endpoint(j)
-                self._emit(f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm")
+                self._emit([f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm"])
             elif sub_ct == CommandType.SET_POWER:
                 power_norm = sub_ops.power(j)
                 self._emit_set_power_line(power_norm)
@@ -234,7 +234,7 @@ class RuidaRPAEncoder(OpsEncoder):
             sub_ct = sub_ops.command_type(j)
             if sub_ct == CommandType.LINE_TO:
                 sx, sy, sz = sub_ops.endpoint(j)
-                self._emit(f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm")
+                self._emit([f"CUT_ABS_XY X={sx:.3f}mm Y={sy:.3f}mm"])
             elif sub_ct == CommandType.SET_POWER:
                 power_norm = sub_ops.power(j)
                 self._emit_set_power_line(power_norm)
@@ -247,7 +247,7 @@ class RuidaRPAEncoder(OpsEncoder):
         """Emit a power command line and update tracked state."""
         power_pct = power_norm * 100.0
         self.power = power_pct
-        self._emit(f"IMD_POWER_1 Power={power_pct:.1f}%")
+        self._emit([f"IMD_POWER_1 Power={power_pct:.1f}%"])
 
     def _handle_set_power(self, ops, idx: int) -> None:
         """Set laser power, skipping redundant values."""
@@ -263,7 +263,7 @@ class RuidaRPAEncoder(OpsEncoder):
         if self.cut_speed is not None and abs(speed - self.cut_speed) < 0.001:
             return
         self.cut_speed = speed
-        self._emit(f"SPEED_LASER_1 Speed={speed:.3f}mm/S")
+        self._emit([f"SPEED_LASER_1 Speed={speed:.3f}mm/S"])
 
     def _handle_set_travel_speed(self, ops, idx: int) -> None:
         """Set travel (rapid move) speed, skipping redundant values."""
@@ -274,36 +274,36 @@ class RuidaRPAEncoder(OpsEncoder):
         ):
             return
         self.travel_speed = speed
-        self._emit(f"SPEED_AXIS Speed={speed:.3f}mm/S")
+        self._emit([f"SPEED_AXIS Speed={speed:.3f}mm/S"])
 
     def _handle_set_frequency(self, ops, idx: int) -> None:
         """Set laser frequency (Hz → KHz)."""
         freq_hz = ops.frequency(idx)
         freq_khz = freq_hz / 1000.0
-        self._emit(
+        self._emit([
             f"FREQUENCY_PART Laser={self.active_laser}"
             f" Part=1 Freq={freq_khz:.3f}KHz"
-        )
+        ])
 
     def _handle_set_pulse_width(self, ops, idx: int) -> None:
         """Set laser pulse width (µs → mS)."""
         pw_us = ops.pulse_width(idx)
         pw_ms = pw_us / 1000.0
-        self._emit(f"LASER_INTERVAL {pw_ms:.3f}mS")
+        self._emit([f"LASER_INTERVAL {pw_ms:.3f}mS"])
 
     def _handle_enable_air_assist(self) -> None:
         """Enable air assist, skipping if already on."""
         if self.air_assist:
             return
         self.air_assist = True
-        self._emit("AIR_ASSIST_ON")
+        self._emit(["AIR_ASSIST_ON"])
 
     def _handle_disable_air_assist(self) -> None:
         """Disable air assist, skipping if already off."""
         if not self.air_assist:
             return
         self.air_assist = False
-        self._emit("AIR_ASSIST_OFF")
+        self._emit(["AIR_ASSIST_OFF"])
 
     def _handle_set_laser(
         self, ops, idx: int, machine: "Machine"
@@ -344,7 +344,7 @@ class RuidaRPAEncoder(OpsEncoder):
         if device == self.active_laser:
             return
         self.active_laser = device
-        self._emit(f"LASER_DEVICE_{device}")
+        self._emit([f"LASER_DEVICE_{device}"])
 
     # -- Structural handlers ------------------------------------------------
 
@@ -354,8 +354,7 @@ class RuidaRPAEncoder(OpsEncoder):
         SET_ABSOLUTE establishes absolute coordinate mode.
         START_PROCESS begins the processing block.
         """
-        self._emit("SET_ABSOLUTE")
-        self._emit("START_PROCESS")
+        self._emit(["SET_ABSOLUTE", "START_PROCESS"])
 
     def _handle_job_end(self) -> None:
         """Emit job end framing.
@@ -363,26 +362,25 @@ class RuidaRPAEncoder(OpsEncoder):
         BLOCK_END closes the processing block.
         SET_FILE_SUM marks the file for checksum calculation by the runner.
         """
-        self._emit("BLOCK_END")
-        self._emit("SET_FILE_SUM")
+        self._emit(["BLOCK_END", "SET_FILE_SUM"])
 
     def _handle_layer_start(self, ops, idx: int) -> None:
         """Emit a layer start marker."""
         layer_uid = ops.layer_uid(idx)
-        self._emit(f"LAYER_START uid={layer_uid}")
+        self._emit([f"LAYER_START uid={layer_uid}"])
 
     def _handle_layer_end(self) -> None:
         """Emit a layer end marker."""
-        self._emit("LAYER_END")
+        self._emit(["LAYER_END"])
 
     def _handle_workpiece_start(self, ops, idx: int) -> None:
         """Emit a workpiece start marker."""
         wp_uid = ops.workpiece_uid(idx)
-        self._emit(f"WORKPIECE_START uid={wp_uid}")
+        self._emit([f"WORKPIECE_START uid={wp_uid}"])
 
     def _handle_workpiece_end(self) -> None:
         """Emit a workpiece end marker."""
-        self._emit("WORKPIECE_END")
+        self._emit(["WORKPIECE_END"])
 
     def _handle_ops_section_start(self) -> None:
         """Emit nothing for ops section start.
