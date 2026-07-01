@@ -45,6 +45,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self.air_assist: bool = False
         self.lines: List[str] = []
         self.op_map: Optional[MachineCodeOpMap] = None
+        self.part: int = 0 # For Ruida a part is a layer.
 
     def encode(
         self, ops, machine: "Machine", doc: "Doc"
@@ -282,7 +283,7 @@ class RuidaRPAEncoder(OpsEncoder):
         freq_khz = freq_hz / 1000.0
         self._emit([
             f"FREQUENCY_PART Laser={self.active_laser}"
-            f" Part=1 Freq={freq_khz:.3f}KHz"
+            f" Part={self.part} Freq={freq_khz:.3f}KHz"
         ])
 
     def _handle_set_pulse_width(self, ops, idx: int) -> None:
@@ -354,7 +355,17 @@ class RuidaRPAEncoder(OpsEncoder):
         SET_ABSOLUTE establishes absolute coordinate mode.
         START_PROCESS begins the processing block.
         """
-        self._emit(["SET_ABSOLUTE", "START_PROCESS"])
+        self.part = 0
+        self._emit([
+            "# JOB_START",
+            "REF_POINT_2",
+            "SET_ABSOLUTE",
+            "REF_POINT_SET",
+            "ENABLE_BLOCK_CUTTING State:OFF",
+            "START_PROCESS",
+            "FEED_REPEAT 0 0",
+            "SET_FEED_AUTO_PAUSE State:OFF",
+            ])
 
     def _handle_job_end(self) -> None:
         """Emit job end framing.
@@ -362,36 +373,43 @@ class RuidaRPAEncoder(OpsEncoder):
         BLOCK_END closes the processing block.
         SET_FILE_SUM marks the file for checksum calculation by the runner.
         """
-        self._emit(["BLOCK_END", "SET_FILE_SUM"])
+        self._emit([
+            "# JOB_END",
+            "BLOCK_END",
+            "LAYER_END",
+            "SET_FILE_SUM",
+            "EOF",
+            ])
 
     def _handle_layer_start(self, ops, idx: int) -> None:
         """Emit a layer start marker."""
         layer_uid = ops.layer_uid(idx)
-        self._emit([f"LAYER_START uid={layer_uid}"])
+        self._emit([f"# LAYER_START uid={layer_uid} part={self.part}"])
 
     def _handle_layer_end(self) -> None:
         """Emit a layer end marker."""
-        self._emit(["LAYER_END"])
+        self._emit(["# LAYER_END"])
+        self.part += 1  # Increment part for next layer
 
     def _handle_workpiece_start(self, ops, idx: int) -> None:
         """Emit a workpiece start marker."""
         wp_uid = ops.workpiece_uid(idx)
-        self._emit([f"WORKPIECE_START uid={wp_uid}"])
+        self._emit([f"# WORKPIECE_START uid={wp_uid}"])
 
     def _handle_workpiece_end(self) -> None:
         """Emit a workpiece end marker."""
-        self._emit(["WORKPIECE_END"])
+        self._emit(["# WORKPIECE_END"])
 
     def _handle_ops_section_start(self) -> None:
         """Emit nothing for ops section start.
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        pass
+        self._emit([f"# OPS_SECTION_START"])
 
     def _handle_ops_section_end(self) -> None:
         """Emit nothing for ops section end.
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        pass
+        self._emit([f"# OPS_SECTION_END"])
