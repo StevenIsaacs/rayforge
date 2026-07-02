@@ -1,7 +1,7 @@
 from gettext import gettext as _
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
-from raygeo.geo.algo.smooth import compute_gaussian_kernel, smooth_polyline
+from raygeo.geo.algo.smooth import compute_gaussian_kernel, smooth_polyline_3d
 from raygeo.ops import Ops
 from raygeo.ops.types import CommandType
 
@@ -10,7 +10,7 @@ from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
 from rayforge.shared.tasker.progress import ProgressContext
 
 if TYPE_CHECKING:
-    from raygeo import Geometry
+    from raygeo.geo import Geometry
 
 
 class Smooth(OpsTransformer):
@@ -121,7 +121,7 @@ class Smooth(OpsTransformer):
             if self._is_line_only_segment(source, indices):
                 # Extract points. The `end` property may be typed as Optional.
                 points_to_smooth = [source.endpoint(idx) for idx in indices]
-                smoothed = smooth_polyline(
+                smoothed = smooth_polyline_3d(
                     points_to_smooth,
                     self.amount,
                     self.corner_angle_threshold,

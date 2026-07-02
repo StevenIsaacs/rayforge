@@ -66,6 +66,139 @@
   </screenshots>
 
   <releases>
+    <release version="1.8.1" date="2026-06-28">
+      <description>
+        <p>Wavefront adaptive clearing, raygeo PyPI migration, and bug fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Wavefront (adaptive clearing) toolpath operation for efficient
+          area clearing with helical entry and concentric passes</li>
+          <li>Migrate raygeo from local source to PyPI package</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Upgrade raygeo to releases 0.8.0 through 0.13.2 with numerous
+          API improvements and renames</li>
+          <li>Update dependencies (aiohttp, pypdf) to fix security
+          vulnerabilities</li>
+          <li>Updated translations</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Multi-step composite blit positioning for correct step content
+          placement</li>
+          <li>GRBL error state recovery when machine enters HOLD</li>
+          <li>Backward compatibility for legacy bezier curve formats in
+          raygeo</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.8.0" date="2026-06-16">
+      <description>
+        <p>LightBurn device profile import and bug fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>LightBurn device profile (.lbdev) import with camera
+          calibration and device configuration</li>
+          <li>Import LightBurn layer settings as Rayforge step
+          parameters</li>
+        </ul>
+        <p>Updated translations</p>
+      </description>
+    </release>
+    <release version="1.8.0~beta3" date="2026-06-14">
+      <description>
+        <p>LightBurn import, raygeo API update, and bug fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>LightBurn (.lbrn / .lbrn2) file format import support</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Updated to latest raygeo 0.6 API (Geometry API, bezier_to,
+          fit_curves, optimizer, canonical imports)</li>
+          <li>Updated translations</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Optimizer no longer splits continuous scanlines</li>
+          <li>Fixed tab clip points not scaled by workpiece size, matching
+          producer transformation</li>
+          <li>Fixed multiprocessing warnings on Python 3.12</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.8.0~beta2" date="2026-06-11">
+      <description>
+        <p>Acmer P3 profile, lens calibration dialog, and bug fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Device profile for the Acmer P3 laser engraver</li>
+          <li>Lens calibration dialog with status icons and tooltips,
+          split from the image settings dialog</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Rotary module selection is now disabled when the machine
+          has no rotary modules</li>
+          <li>macOS app icons updated to Tahoe (Liquid Glass-style)
+          design</li>
+          <li>Updated translations</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Fixed slider power value clamped to 1% after dialog
+          re-population</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.8.0~beta1" date="2026-06-09">
+      <description>
+        <p>Rust-powered pipeline, faster rasterizing, new GRBL driver</p>
+        <p>Major Changes:</p>
+        <ul>
+          <li>Core Ops container rewritten with Struct-of-Arrays layout for
+          better performance and Rust compatibility</li>
+          <li>Five pipeline stages migrated to Rust via raygeo 0.6: tabs,
+          merge lines, overscan, lead-in/out, and hull computation</li>
+          <li>Raster scan loops replaced with Rust-accelerated raygeo
+          functions for faster engraving operations</li>
+          <li>Image processing (sRGB conversion, dithering, grayscale)
+          delegated to raygeo.image Rust backend</li>
+          <li>3D canvas slider now uses binary search with pre-computed
+          snapshots, eliminating freezes on large jobs</li>
+        </ul>
+        <p>New Features:</p>
+        <ul>
+          <li>Simple GRBL serial driver with ping-pong protocol for devices
+          with buffer-counting issues</li>
+          <li>"Go to WCS Zero" button in the Current Position section</li>
+          <li>Device profiles for Creality Falcon 10W and Sculpfun C1</li>
+          <li>Minimum raster line spacing lowered to 0.001 mm for
+          microfabrication</li>
+          <li>Deadlock detection toggle in GRBL driver settings</li>
+          <li>Machine settings now apply immediately without restart</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Adaptive deadlock timeouts based on per-command time
+          estimates</li>
+          <li>Worker pool detects crashed workers and spawns replacements
+          automatically</li>
+          <li>File dialogs prefer Rayforge MIME types over ZIP</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Fixed GRBL network disconnect with MKS DLC32 boards</li>
+          <li>Fixed buffer stall recovery aborting jobs during slow
+          moves</li>
+          <li>Fixed ValueError when removing the active machine</li>
+          <li>Fixed manual laser control routing</li>
+          <li>Fixed WCS dropdown coordinates not updating on sync</li>
+          <li>Fixed pipeline stress test race conditions on Windows</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.7.10" date="2026-05-18">
       <description>
         <p>Bug fix release</p>

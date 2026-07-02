@@ -646,7 +646,9 @@ class TestRotaryAxisGcodeOutput:
         machine = Machine(lite_context)
         ops = Ops()
         ops.move_to(0, 0)
-        ops.bezier_to(c1=(10, 0, 0), c2=(10, 10, 0), end=(0, 10, 0))
+        ops.bezier_to(
+            control1=(10, 0, 0), control2=(10, 10, 0), end=(0, 10, 0)
+        )
         prepared = machine._prepare_ops_for_encoding(ops)
         assert not any(
             prepared.command_type(i) == CommandType.BEZIER_TO
@@ -662,7 +664,9 @@ class TestRotaryAxisGcodeOutput:
         machine.set_supports_curves(True)
         ops = Ops()
         ops.move_to(0, 0)
-        ops.bezier_to(c1=(10, 0, 0), c2=(10, 10, 0), end=(0, 10, 0))
+        ops.bezier_to(
+            control1=(10, 0, 0), control2=(10, 10, 0), end=(0, 10, 0)
+        )
         prepared = machine._prepare_ops_for_encoding(ops)
         assert any(
             prepared.command_type(i) == CommandType.BEZIER_TO
@@ -975,9 +979,7 @@ class TestSetterEqualityGuards:
         machine.set_origin(Origin.TOP_LEFT)
         assert len(signals) == 1
 
-    def test_set_soft_limits_enabled_no_signal_on_same(
-        self, lite_context
-    ):
+    def test_set_soft_limits_enabled_no_signal_on_same(self, lite_context):
         machine = Machine(lite_context)
         machine.soft_limits_enabled = False
         signals = []
@@ -989,9 +991,7 @@ class TestSetterEqualityGuards:
         machine.set_soft_limits_enabled(False)
         assert len(signals) == 0
 
-    def test_set_soft_limits_enabled_signal_on_change(
-        self, lite_context
-    ):
+    def test_set_soft_limits_enabled_signal_on_change(self, lite_context):
         machine = Machine(lite_context)
         machine.soft_limits_enabled = False
         signals = []
@@ -1056,9 +1056,7 @@ class TestSetDriverEmitsChanged:
         machine.set_driver(TestDriver, {"port": "/dev/null"})
         assert len(signals) >= 1
 
-    def test_set_driver_args_emits_changed_signal(
-        self, lite_context
-    ):
+    def test_set_driver_args_emits_changed_signal(self, lite_context):
         machine = Machine(lite_context)
         lite_context.machine_mgr.add_machine(machine)
         from rayforge.machine.driver.dummy import NoDeviceDriver

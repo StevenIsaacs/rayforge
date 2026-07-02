@@ -5,7 +5,7 @@ import math
 from gettext import gettext as _
 from typing import Any, Dict, Optional
 
-from raygeo import Geometry
+from raygeo.geo import Geometry
 from raygeo.geo.types import Rect
 
 from ...core.matrix import Matrix
@@ -54,7 +54,6 @@ class SvgTraceImporter(SvgImporterBase):
 
         # Unpack
         (
-            _,
             document_bounds,
             unit_to_mm,
             untrimmed_document_bounds,

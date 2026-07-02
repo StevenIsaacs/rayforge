@@ -40,9 +40,9 @@ rust = "*"
 patchelf = "*"
 
 [feature.app.pypi-dependencies]
-raygeo = { path = "external/raygeo", editable = true }
+raygeo = "==0.13.2"
 rayforge = { editable = true, path = "." }
-aiohttp = "==3.13.5"
+aiohttp = "==3.14.1"
 asyncudp = "==0.11.0"
 blinker = "==1.9.0"
 build = "*"
@@ -51,8 +51,7 @@ ezdxf = "==1.4.4b3"
 GitPython = "==3.1.50"
 platformdirs = "==4.3.6"
 pluggy = "==1.6.0"
-pyclipper = "==1.3.0.post6"
-pypdf = "~=6.10.0"
+pypdf = "==6.12.1"
 pymupdf = "==1.27.2.2"
 pyserial = "~=3.5"
 pyvips = "==3.0.0"
@@ -151,9 +150,6 @@ cmd = "scripts/with_gdk.sh scripts/screenshot/cli.py"
 cmd = "python3 -m build"
 depends-on = ["compile-translations"]
 
-[tasks.reinstall-raygeo]
-cmd = "rm -Rf .pixi/envs/default/lib/python3.12/site-packages/raygeo* && pixi clean cache -y && pixi install"
-
 [tasks.build-deb]
 # Builds a binary .deb package for local installation and testing.
 cmd = "bash scripts/build-deb.sh"
@@ -167,7 +163,6 @@ depends-on = ["compile-translations"]
 [dependencies]
 libglvnd = ">=1.7.0,<2"
 libadwaita = ">=1.8.4,<2"
-pyright = ">=1.1.409,<2"
 
 # Tasks for developing and generating the website
 [feature.website.tasks]
