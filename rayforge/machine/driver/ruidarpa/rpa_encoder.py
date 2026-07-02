@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, List, Optional
 
+from raygeo.geo.types import Point3D
+from raygeo.ops import Ops
 from raygeo.ops.types import CommandType
 
 from rayforge.pipeline.encoder.base import (
@@ -40,15 +42,15 @@ class RuidaRPAEncoder(OpsEncoder):
         self.power: Optional[float] = None
         self.cut_speed: Optional[float] = None
         self.travel_speed: Optional[float] = None
-        self.current_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self.current_pos: Point3D = (0.0, 0.0, 0.0)
         self.active_laser: int = 1
         self.air_assist: bool = False
         self.lines: List[str] = []
         self.op_map: Optional[MachineCodeOpMap] = None
-        self.part: int = 0 # For Ruida a part is a layer.
+        self.layer: int = 0
 
     def encode(
-        self, ops, machine: "Machine", doc: "Doc"
+        self, ops: Ops, machine: "Machine", doc: "Doc"
     ) -> EncodedOutput:
         """Encode Ops commands into rpascript format.
 
@@ -82,7 +84,7 @@ class RuidaRPAEncoder(OpsEncoder):
     # -- Command dispatch ---------------------------------------------------
 
     def _handle_command(
-        self, ops, idx: int, machine: "Machine"
+        self, ops: Ops, idx: int, machine: "Machine"
     ) -> None:
         """Dispatch a single Ops command to the appropriate handler.
 
@@ -95,19 +97,19 @@ class RuidaRPAEncoder(OpsEncoder):
 
         if ct == CommandType.SET_POWER:
             self._handle_set_power(ops, idx)
-        elif ct == CommandType.SET_CUT_SPEED:
+        elif ct == CommandType.SET_FEED_RATE:
             self._handle_set_cut_speed(ops, idx)
-        elif ct == CommandType.SET_TRAVEL_SPEED:
+        elif ct == CommandType.SET_RAPID_RATE:
             self._handle_set_travel_speed(ops, idx)
         elif ct == CommandType.SET_FREQUENCY:
             self._handle_set_frequency(ops, idx)
         elif ct == CommandType.SET_PULSE_WIDTH:
             self._handle_set_pulse_width(ops, idx)
-        elif ct == CommandType.ENABLE_AIR_ASSIST:
-            self._handle_enable_air_assist()
-        elif ct == CommandType.DISABLE_AIR_ASSIST:
-            self._handle_disable_air_assist()
-        elif ct == CommandType.SET_LASER:
+        elif ct == CommandType.SET_COOLANT:
+            # TODO: This may be renamed to SET_AIR_ASSIST in the future, but for
+            # now we handle it as coolant.
+            self._handle_air_assist(ops, idx)
+        elif ct == CommandType.SET_HEAD:
             self._handle_set_laser(ops, idx, machine)
         elif ct == CommandType.MOVE_TO:
             self._handle_move_to(ops, idx)
@@ -150,19 +152,19 @@ class RuidaRPAEncoder(OpsEncoder):
 
     # -- Movement handlers --------------------------------------------------
 
-    def _handle_move_to(self, ops, idx: int) -> None:
+    def _handle_move_to(self, ops: Ops, idx: int) -> None:
         """Rapid move (laser off) to an absolute position."""
         x, y, z = ops.endpoint(idx)
         self.current_pos = (x, y, z)
         self._emit([f"MOVE_ABS_XY X={x:.3f}mm Y={y:.3f}mm"])
 
-    def _handle_line_to(self, ops, idx: int) -> None:
+    def _handle_line_to(self, ops: Ops, idx: int) -> None:
         """Cutting move (laser on) to an absolute position."""
         x, y, z = ops.endpoint(idx)
         self.current_pos = (x, y, z)
         self._emit([f"CUT_ABS_XY X={x:.3f}mm Y={y:.3f}mm"])
 
-    def _handle_arc_to(self, ops, idx: int) -> None:
+    def _handle_arc_to(self, ops: Ops, idx: int) -> None:
         """Linearize arc to cut segments.
 
         Rpascript does not have a native arc command, so arcs are
@@ -183,7 +185,7 @@ class RuidaRPAEncoder(OpsEncoder):
 
         self.current_pos = end
 
-    def _handle_scan_line(self, ops, idx: int) -> None:
+    def _handle_scan_line(self, ops: Ops, idx: int) -> None:
         """Linearize scan line to power and cut segments."""
         start_pos = self.current_pos
         end = ops.endpoint(idx)
@@ -200,7 +202,7 @@ class RuidaRPAEncoder(OpsEncoder):
 
         self.current_pos = end
 
-    def _handle_dwell(self, ops, idx: int) -> None:
+    def _handle_dwell(self, ops: Ops, idx: int) -> None:
         """Emit a dwell (pause) command.
 
         Rpascript DELAY accepts time in seconds or milliseconds.
@@ -208,7 +210,7 @@ class RuidaRPAEncoder(OpsEncoder):
         duration_ms = ops.dwell_duration(idx)
         self._emit([f"DELAY {duration_ms:.3f}ms"])
 
-    def _handle_bezier_to(self, ops, idx: int) -> None:
+    def _handle_bezier_to(self, ops: Ops, idx: int) -> None:
         """Linearize cubic bezier curve to cut segments."""
         start_pos = self.current_pos
         end = ops.endpoint(idx)
@@ -225,7 +227,7 @@ class RuidaRPAEncoder(OpsEncoder):
 
         self.current_pos = end
 
-    def _handle_quadratic_bezier_to(self, ops, idx: int) -> None:
+    def _handle_quadratic_bezier_to(self, ops: Ops, idx: int) -> None:
         """Linearize quadratic bezier curve to cut segments."""
         start_pos = self.current_pos
         end = ops.endpoint(idx)
@@ -250,7 +252,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self.power = power_pct
         self._emit([f"IMD_POWER_1 Power={power_pct:.1f}%"])
 
-    def _handle_set_power(self, ops, idx: int) -> None:
+    def _handle_set_power(self, ops: Ops, idx: int) -> None:
         """Set laser power, skipping redundant values."""
         power_norm = ops.power(idx)
         power_pct = power_norm * 100.0
@@ -258,17 +260,17 @@ class RuidaRPAEncoder(OpsEncoder):
             return
         self._emit_set_power_line(power_norm)
 
-    def _handle_set_cut_speed(self, ops, idx: int) -> None:
+    def _handle_set_cut_speed(self, ops: Ops, idx: int) -> None:
         """Set cutting speed, skipping redundant values."""
-        speed = float(ops.speed(idx))
+        speed = float(ops.rate(idx))
         if self.cut_speed is not None and abs(speed - self.cut_speed) < 0.001:
             return
         self.cut_speed = speed
         self._emit([f"SPEED_LASER_1 Speed={speed:.3f}mm/S"])
 
-    def _handle_set_travel_speed(self, ops, idx: int) -> None:
+    def _handle_set_travel_speed(self, ops: Ops, idx: int) -> None:
         """Set travel (rapid move) speed, skipping redundant values."""
-        speed = float(ops.speed(idx))
+        speed = float(ops.rate(idx))
         if (
             self.travel_speed is not None
             and abs(speed - self.travel_speed) < 0.001
@@ -277,37 +279,42 @@ class RuidaRPAEncoder(OpsEncoder):
         self.travel_speed = speed
         self._emit([f"SPEED_AXIS Speed={speed:.3f}mm/S"])
 
-    def _handle_set_frequency(self, ops, idx: int) -> None:
+    def _handle_set_frequency(self, ops: Ops, idx: int) -> None:
         """Set laser frequency (Hz → KHz)."""
         freq_hz = ops.frequency(idx)
         freq_khz = freq_hz / 1000.0
         self._emit([
             f"FREQUENCY_PART Laser={self.active_laser}"
-            f" Part={self.part} Freq={freq_khz:.3f}KHz"
+            f" Part={self.layer} Freq={freq_khz:.3f}KHz"
         ])
 
-    def _handle_set_pulse_width(self, ops, idx: int) -> None:
+    def _handle_set_pulse_width(
+        self,
+        ops: Ops,
+        idx: int,
+    ) -> None:
         """Set laser pulse width (µs → mS)."""
         pw_us = ops.pulse_width(idx)
         pw_ms = pw_us / 1000.0
         self._emit([f"LASER_INTERVAL {pw_ms:.3f}mS"])
 
-    def _handle_enable_air_assist(self) -> None:
-        """Enable air assist, skipping if already on."""
-        if self.air_assist:
-            return
-        self.air_assist = True
-        self._emit(["AIR_ASSIST_ON"])
-
-    def _handle_disable_air_assist(self) -> None:
-        """Disable air assist, skipping if already off."""
-        if not self.air_assist:
-            return
-        self.air_assist = False
-        self._emit(["AIR_ASSIST_OFF"])
+    def _handle_air_assist(self, ops: Ops, idx: int) -> None:
+        """Handle SetCoolantCommand - update coolant state."""
+        mode = ops.coolant(idx)
+        if mode == "Air":
+            if not self.air_assist:
+                self.air_assist = True
+                self._emit(["AIR_ASSIST_ON"])
+        else:
+            if self.air_assist:
+                self.air_assist = False
+                self._emit(["AIR_ASSIST_OFF"])
 
     def _handle_set_laser(
-        self, ops, idx: int, machine: "Machine"
+        self,
+        ops: Ops,
+        idx: int,
+        machine: "Machine",
     ) -> None:
         """Select laser device by resolving laser_uid to a tool number.
 
@@ -315,7 +322,7 @@ class RuidaRPAEncoder(OpsEncoder):
         extracting the trailing numeric suffix from laser_uid and modding
         by 2 if the head is not found or heads are unavailable.
         """
-        laser_uid = ops.laser_uid(idx)
+        laser_uid = ops.head_uid(idx)
         # laser_uid is a string like "laser_42" or a UUID — extract a
         # deterministic device number (0 or 1) for dual-laser setups
         try:
@@ -355,7 +362,7 @@ class RuidaRPAEncoder(OpsEncoder):
         SET_ABSOLUTE establishes absolute coordinate mode.
         START_PROCESS begins the processing block.
         """
-        self.part = 0
+        self.layer = 0
         self._emit([
             "# JOB_START",
             "REF_POINT_2",
@@ -381,17 +388,17 @@ class RuidaRPAEncoder(OpsEncoder):
             "EOF",
             ])
 
-    def _handle_layer_start(self, ops, idx: int) -> None:
+    def _handle_layer_start(self, ops: Ops, idx: int) -> None:
         """Emit a layer start marker."""
         layer_uid = ops.layer_uid(idx)
-        self._emit([f"# LAYER_START uid={layer_uid} part={self.part}"])
+        self._emit([f"# LAYER_START uid={layer_uid} part={self.layer}"])
 
     def _handle_layer_end(self) -> None:
         """Emit a layer end marker."""
         self._emit(["# LAYER_END"])
-        self.part += 1  # Increment part for next layer
+        self.layer += 1  # Increment part for next layer
 
-    def _handle_workpiece_start(self, ops, idx: int) -> None:
+    def _handle_workpiece_start(self, ops: Ops, idx: int) -> None:
         """Emit a workpiece start marker."""
         wp_uid = ops.workpiece_uid(idx)
         self._emit([f"# WORKPIECE_START uid={wp_uid}"])
