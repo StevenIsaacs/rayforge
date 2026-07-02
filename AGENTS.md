@@ -158,3 +158,8 @@ Source repository: https://github.com/barebaric/raygeo
 - Do not make changes unrelated to the current task.
 - Never remove logging or debugging unless explicitly asked by the user.
 - Do not repeat files in responses unless they have changes.
+
+## Ruida Driver (ruidarpa) Development
+- The Ruida driver (ruidarpa) in development is in rayforge/machine/driver/ruidarpa
+- The Ruida driver in rayforge/machine/driver/ruida is a prototype and is for reference only. Never modify files in the rayforge/machine/driver/ruida directory tree.
+- The ruidarpa driver depends upon external/ruida-protocol-analyzer which is maintained elsewhere. Do not modify files in the external/ruida-protocol-analyzer directory tree.
