@@ -42,6 +42,11 @@ from rayforge.machine.driver.ruidarpa.rpa_direct_driver import RpaDirectDriver
 from rayforge.machine.driver.ruidarpa.rpa_rpc_client import RpaRpcClient
 from rayforge.machine.transport import TransportStatus
 
+try:
+    from ruidadriver.rd_status import RdStatusEvent
+except ImportError:
+    RdStatusEvent = None  # type: ignore[assignment,misc]
+
 if TYPE_CHECKING:
     from raygeo.ops import Ops
 
@@ -84,8 +89,9 @@ class RuidaRPAAdapter(Driver):
     supports_settings = False
     reports_granular_progress = False
     uses_gcode = False
-    maturity = DriverMaturity.EXPERIMENTAL
+    maturity = DriverMaturity.KNOWN_BUGGY
     supports_probing = False
+    native_overscan = True
 
     # --- Reconnect constants ---
     CONNECTION_POLL_INTERVAL = 0.5
@@ -352,11 +358,15 @@ class RuidaRPAAdapter(Driver):
         state tracking.
 
         Args:
-            event: A status string (e.g. 'CONNECTED', 'DISCONNECTED') or a
-                StatusDict dict for machine status updates.
+            event: A status string (e.g. 'CONNECTED', 'DISCONNECTED'), an
+                RdStatusEvent enum member (direct mode), or a StatusDict dict
+                for machine status updates.
         """
         if self._shutting_down:
             return
+        # RdStatusEvent enum → string value (direct mode)
+        if RdStatusEvent is not None and isinstance(event, RdStatusEvent):
+            event = event.value
         if isinstance(event, str):
             if event == "CONNECTED":
                 self._is_connected = True

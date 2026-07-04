@@ -365,11 +365,11 @@ class RuidaRPAEncoder(OpsEncoder):
         self.layer = 0
         self._emit([
             "# JOB_START",
-            "REF_POINT_2",
+            "REF_POINT_ABSOLUTE",
             "SET_ABSOLUTE",
             "REF_POINT_SET",
             "ENABLE_BLOCK_CUTTING State:OFF",
-            "START_PROCESS",
+            "START_JOB",
             "FEED_REPEAT 0 0",
             "SET_FEED_AUTO_PAUSE State:OFF",
             ])
@@ -384,7 +384,7 @@ class RuidaRPAEncoder(OpsEncoder):
             "# JOB_END",
             "BLOCK_END",
             "LAYER_END",
-            "SET_FILE_SUM",
+            "END_JOB",
             "EOF",
             ])
 
