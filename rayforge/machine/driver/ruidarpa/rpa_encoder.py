@@ -8,7 +8,7 @@ Coordinates use mm natively (no unit conversion needed).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Set
 
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
@@ -51,6 +51,9 @@ class RuidaRPAEncoder(OpsEncoder):
         self.layer: int = 0
         self.doc: Optional["Doc"] = None
         self.machine: Optional["Machine"] = None
+        self._active_layer_uids: Set[str] = set()
+        self._layer_index_by_uid: Dict[str, int] = {}
+        self._active_layer: bool = False
 
     def encode(
         self, ops: Ops, machine: "Machine", doc: "Doc"
@@ -69,6 +72,27 @@ class RuidaRPAEncoder(OpsEncoder):
         self.doc = doc
         self.machine = machine
         self.op_map = MachineCodeOpMap()
+
+        # Pre-scan ops to find which layers have MOVE/CUT commands.
+        # Empty layers (no geometry) will have only LAYER_START/LAYER_END.
+        self._active_layer_uids = set()
+        self._layer_index_by_uid = {
+            layer.uid: i for i, layer in enumerate(doc.layers)
+        }
+        _current_uid: Optional[str] = None
+        _active_cts = (
+            CommandType.MOVE_TO, CommandType.LINE_TO, CommandType.ARC_TO,
+            CommandType.BEZIER_TO, CommandType.SCAN_LINE,
+            CommandType.QUADRATIC_BEZIER_TO,
+        )
+        for i in range(ops.len()):
+            ct = ops.command_type(i)
+            if ct == CommandType.LAYER_START:
+                _current_uid = ops.layer_uid(i)
+            elif ct == CommandType.LAYER_END:
+                _current_uid = None
+            elif ct in _active_cts and _current_uid is not None:
+                self._active_layer_uids.add(_current_uid)
 
         for i in range(ops.len()):
             start_line = len(self.lines)
@@ -371,9 +395,9 @@ class RuidaRPAEncoder(OpsEncoder):
         - Offset Settings (§10.6)
         - Array Settings (§10.7)
         """
-        self.layer = 0
         lines: List[str] = [
             "# JOB_START",
+            "# HEADER",
             "REF_POINT_ABSOLUTE",
             "SET_ABSOLUTE",
             "REF_POINT_SET",
@@ -403,6 +427,7 @@ class RuidaRPAEncoder(OpsEncoder):
                 )
 
         lines.extend([
+            "# JOB SETTINGS",
             f"JOB_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
             f"JOB_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
             f"DOCUMENT_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
@@ -411,20 +436,33 @@ class RuidaRPAEncoder(OpsEncoder):
             "ARRAY_DIRECTION Dir:0",
         ])
 
-        # ── Layer Settings (§10.5) ──
+        # ── Layer Settings (§10.5) — skip layers with no MOVE/CUT ──
         if self.doc is not None:
+            lines.append("# LAYER SETTINGS")
             for i, layer in enumerate(self.doc.layers):
+                if layer.uid not in self._active_layer_uids:
+                    logger.debug(
+                        "Skipping layer %d uid=%s (no MOVE/CUT ops)",
+                        i, layer.uid,
+                    )
+                    lines.append(
+                        f"# LAYER {i} SKIPPED (no geometry)"
+                    )
+                    continue
                 lines.extend(
                     self._emit_layer_header(i, layer, job_tr_x, job_tr_y,
                                             job_bl_x, job_bl_y)
                 )
-            if self.doc.layers:
-                lines.append(
-                    f"LAST_LAYER Layer:{len(self.doc.layers) - 1}"
+            if self._active_layer_uids:
+                last_active = max(
+                    i for i, layer in enumerate(self.doc.layers)
+                    if layer.uid in self._active_layer_uids
                 )
+                lines.append(f"LAST_LAYER Layer:{last_active}")
 
         # ── Offset Settings (§10.6) ──
         lines.extend([
+            "# OFFSET SETTINGS",
             "PEN_OFFSET_AXIS Axis:X REL=0.000mm",
             "PEN_OFFSET_AXIS Axis:Y REL=0.000mm",
             "LAYER_OFFSET_AXIS Axis:X REL=0.000mm",
@@ -434,6 +472,7 @@ class RuidaRPAEncoder(OpsEncoder):
 
         # ── Array Settings (§10.7) ──
         lines.extend([
+            "# ARRAY SETTINGS",
             "ELEMENT_MAX_INDEX 0",
             "ELEMENT_NAME_MAX_INDEX 0",
             "ELEMENT_INDEX 0",
@@ -488,6 +527,7 @@ class RuidaRPAEncoder(OpsEncoder):
         bl_xy = f"X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm"
 
         lines.extend([
+            f"# LAYER {layer_index} SETTINGS",
             f"SPEED_LASER_1_LAYER Layer:{layer_index} Speed:{speed:.3f}mm/S",
             f"MIN_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
             f"MAX_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
@@ -509,6 +549,7 @@ class RuidaRPAEncoder(OpsEncoder):
         The checksum is auto-calculated by the driver when auto_checksum=True.
         """
         self._emit([
+            "# TAIL",
             "# JOB_END",
             "ARRAY_END",
             "BLOCK_END",
@@ -520,15 +561,28 @@ class RuidaRPAEncoder(OpsEncoder):
     def _handle_layer_start(self, ops: Ops, idx: int) -> None:
         """Emit layer start marker and SELECT_LAYER for §10.8."""
         layer_uid = ops.layer_uid(idx)
+        if layer_uid not in self._active_layer_uids:
+            layer_index = self._layer_index_by_uid.get(
+                layer_uid, 0
+            )
+            self._emit([
+                f"# LAYER {layer_index} SKIPPED (no geometry)",
+            ])
+            self._active_layer = False
+            return
+        self._active_layer = True
+        self.layer = self._layer_index_by_uid.get(layer_uid, 0)
         self._emit([
+            f"# LAYER {self.layer} ACTIONS",
             f"# LAYER_START uid={layer_uid} part={self.layer}",
             f"SELECT_LAYER Layer:{self.layer}",
         ])
 
     def _handle_layer_end(self) -> None:
-        """Emit a layer end marker."""
+        """Emit a layer end marker (skipped for layers with no ops)."""
+        if not self._active_layer:
+            return
         self._emit(["# LAYER_END"])
-        self.layer += 1  # Increment part for next layer
 
     def _handle_workpiece_start(self, ops: Ops, idx: int) -> None:
         """Emit a workpiece start marker."""
@@ -544,7 +598,7 @@ class RuidaRPAEncoder(OpsEncoder):
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        self._emit(["# OPS_SECTION_START"])
+        self._emit(["# OPS ACTIONS", "# OPS_SECTION_START"])
 
     def _handle_ops_section_end(self) -> None:
         """Emit nothing for ops section end.
