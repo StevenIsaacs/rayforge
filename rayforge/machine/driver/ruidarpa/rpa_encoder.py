@@ -8,7 +8,7 @@ Coordinates use mm natively (no unit conversion needed).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
@@ -54,6 +54,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self._active_layer_uids: Set[str] = set()
         self._layer_index_by_uid: Dict[str, int] = {}
         self._active_layer: bool = False
+        self._layer_bounds: Dict[str, Tuple[float, float, float, float]] = {}
 
     def encode(
         self, ops: Ops, machine: "Machine", doc: "Doc"
@@ -85,6 +86,12 @@ class RuidaRPAEncoder(OpsEncoder):
             CommandType.BEZIER_TO, CommandType.SCAN_LINE,
             CommandType.QUADRATIC_BEZIER_TO,
         )
+        # CUT command types (excludes MOVE_TO/travel) for bounding box tracking
+        _cut_cts = (
+            CommandType.LINE_TO, CommandType.ARC_TO,
+            CommandType.BEZIER_TO, CommandType.SCAN_LINE,
+            CommandType.QUADRATIC_BEZIER_TO,
+        )
         for i in range(ops.len()):
             ct = ops.command_type(i)
             if ct == CommandType.LAYER_START:
@@ -93,6 +100,20 @@ class RuidaRPAEncoder(OpsEncoder):
                 _current_uid = None
             elif ct in _active_cts and _current_uid is not None:
                 self._active_layer_uids.add(_current_uid)
+            if ct in _cut_cts and _current_uid is not None:
+                x, y, _ = ops.endpoint(i)
+                if _current_uid not in self._layer_bounds:
+                    self._layer_bounds[_current_uid] = (
+                        x, y, x, y
+                    )
+                else:
+                    mn_x, mn_y, mx_x, mx_y = (
+                        self._layer_bounds[_current_uid]
+                    )
+                    self._layer_bounds[_current_uid] = (
+                        min(mn_x, x), min(mn_y, y),
+                        max(mx_x, x), max(mx_y, y),
+                    )
 
         for i in range(ops.len()):
             start_line = len(self.lines)
@@ -449,9 +470,13 @@ class RuidaRPAEncoder(OpsEncoder):
                         f"# LAYER {i} SKIPPED (no geometry)"
                     )
                     continue
+                bounds = self._layer_bounds.get(
+                    layer.uid, (job_tr_x, job_tr_y, job_bl_x, job_bl_y)
+                )
+                tr_x, tr_y, bl_x, bl_y = bounds
                 lines.extend(
-                    self._emit_layer_header(i, layer, job_tr_x, job_tr_y,
-                                            job_bl_x, job_bl_y)
+                    self._emit_layer_header(i, layer, tr_x, tr_y,
+                                            bl_x, bl_y)
                 )
             if self._active_layer_uids:
                 last_active = max(
@@ -499,12 +524,15 @@ class RuidaRPAEncoder(OpsEncoder):
         self,
         layer_index: int,
         layer: "Layer",
-        job_tr_x: float,
-        job_tr_y: float,
-        job_bl_x: float,
-        job_bl_y: float,
+        tr_x: float,
+        tr_y: float,
+        bl_x: float,
+        bl_y: float,
     ) -> List[str]:
         """Emit the layer settings block for §10.5 of the integration guide.
+
+        Layer bounding box (tr_x, tr_y = top-right, bl_x, bl_y = bottom-left)
+        is computed from the actual CUT command coordinates for the layer.
 
         Extracts speed, power, and color from the layer's workflow steps.
         Falls back to defaults if no step data is available.
@@ -523,8 +551,8 @@ class RuidaRPAEncoder(OpsEncoder):
 
         power_pct = power * 100.0
 
-        tr_xy = f"X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm"
-        bl_xy = f"X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm"
+        tr_xy = f"X={tr_x:.3f}mm Y={tr_y:.3f}mm"
+        bl_xy = f"X={bl_x:.3f}mm Y={bl_y:.3f}mm"
 
         lines.extend([
             f"# LAYER {layer_index} SETTINGS",
