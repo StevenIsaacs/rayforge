@@ -488,14 +488,23 @@ class RuidaRPAAdapter(Driver):
 
     # --- Script execution ---
 
-    async def _run_script(self, script_lines: List[str]) -> None:
-        """Run an rpascript via the backend in a thread pool executor."""
+    async def _run_script(self, script_lines: List[str],
+                          auto_checksum: bool = False) -> None:
+        """Run an rpascript via the backend in a thread pool executor.
+
+        Args:
+            script_lines: Rpascript command lines to execute.
+            auto_checksum: Whether to auto-calculate END_JOB checksum.
+                Only set True for full job scripts that contain END_JOB.
+        """
         if not script_lines:
             return
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._backend.run, script_lines)
+        await loop.run_in_executor(
+            None, self._backend.run, script_lines, auto_checksum
+        )
 
     # --- Job control ---
 
@@ -531,7 +540,7 @@ class RuidaRPAAdapter(Driver):
         )
 
         if text_lines:
-            await self._run_script(text_lines)
+            await self._run_script(text_lines, auto_checksum=True)
 
         self.job_finished.send(self)
 
@@ -547,7 +556,7 @@ class RuidaRPAAdapter(Driver):
                 len(lines),
                 extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
             )
-            await self._run_script(lines)
+            await self._run_script(lines, auto_checksum=True)
         self.job_finished.send(self)
 
     async def set_hold(self, hold: bool = True) -> None:

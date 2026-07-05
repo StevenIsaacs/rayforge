@@ -22,6 +22,7 @@ from rayforge.pipeline.encoder.base import (
 
 if TYPE_CHECKING:
     from rayforge.core.doc import Doc
+    from rayforge.core.layer import Layer
     from rayforge.machine.models.machine import Machine
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,8 @@ class RuidaRPAEncoder(OpsEncoder):
         self.lines: List[str] = []
         self.op_map: Optional[MachineCodeOpMap] = None
         self.layer: int = 0
+        self.doc: Optional["Doc"] = None
+        self.machine: Optional["Machine"] = None
 
     def encode(
         self, ops: Ops, machine: "Machine", doc: "Doc"
@@ -63,6 +66,8 @@ class RuidaRPAEncoder(OpsEncoder):
             EncodedOutput with rpascript text, op_map, and no driver_data.
         """
         self._reset_state()
+        self.doc = doc
+        self.machine = machine
         self.op_map = MachineCodeOpMap()
 
         for i in range(ops.len()):
@@ -106,8 +111,8 @@ class RuidaRPAEncoder(OpsEncoder):
         elif ct == CommandType.SET_PULSE_WIDTH:
             self._handle_set_pulse_width(ops, idx)
         elif ct == CommandType.SET_COOLANT:
-            # TODO: This may be renamed to SET_AIR_ASSIST in the future, but for
-            # now we handle it as coolant.
+            # TODO: May be renamed to SET_AIR_ASSIST in the future, but for now
+            # we handle it as coolant.
             self._handle_air_assist(ops, idx)
         elif ct == CommandType.SET_HEAD:
             self._handle_set_laser(ops, idx, machine)
@@ -357,13 +362,17 @@ class RuidaRPAEncoder(OpsEncoder):
     # -- Structural handlers ------------------------------------------------
 
     def _handle_job_start(self) -> None:
-        """Emit job start framing.
+        """Emit job start framing and all setup sections.
 
-        SET_ABSOLUTE establishes absolute coordinate mode.
-        START_PROCESS begins the processing block.
+        Per the integration guide §10.3-10.7, the head section includes:
+        - Header (§10.3)
+        - Job Settings (§10.4)
+        - Layer Settings (§10.5)
+        - Offset Settings (§10.6)
+        - Array Settings (§10.7)
         """
         self.layer = 0
-        self._emit([
+        lines: List[str] = [
             "# JOB_START",
             "REF_POINT_ABSOLUTE",
             "SET_ABSOLUTE",
@@ -372,26 +381,149 @@ class RuidaRPAEncoder(OpsEncoder):
             "START_JOB",
             "FEED_REPEAT 0 0",
             "SET_FEED_AUTO_PAUSE State:OFF",
-            ])
+        ]
+
+        # ── Job Settings (§10.4) ──
+        # Use machine work area for job/document bounds
+        job_tr_x = 0.0
+        job_tr_y = 0.0
+        job_bl_x = 400.0
+        job_bl_y = 300.0
+        if self.machine is not None:
+            try:
+                wx, wy, ww, wh = self.machine.work_area
+                job_tr_x = wx
+                job_tr_y = wy
+                job_bl_x = wx + ww
+                job_bl_y = wy + wh
+            except (AttributeError, TypeError, ValueError):
+                logger.warning(
+                    "Could not read machine work_area, using default "
+                    "400x300mm bounds"
+                )
+
+        lines.extend([
+            f"JOB_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
+            f"JOB_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
+            f"DOCUMENT_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
+            f"DOCUMENT_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
+            "JOB_COPIES Columns=1 Rows=1 XStep=0.000mm YStep=0.000mm",
+            "ARRAY_DIRECTION Dir:0",
+        ])
+
+        # ── Layer Settings (§10.5) ──
+        if self.doc is not None:
+            for i, layer in enumerate(self.doc.layers):
+                lines.extend(
+                    self._emit_layer_header(i, layer, job_tr_x, job_tr_y,
+                                            job_bl_x, job_bl_y)
+                )
+            if self.doc.layers:
+                lines.append(
+                    f"LAST_LAYER Layer:{len(self.doc.layers) - 1}"
+                )
+
+        # ── Offset Settings (§10.6) ──
+        lines.extend([
+            "PEN_OFFSET_AXIS Axis:X REL=0.000mm",
+            "PEN_OFFSET_AXIS Axis:Y REL=0.000mm",
+            "LAYER_OFFSET_AXIS Axis:X REL=0.000mm",
+            "LAYER_OFFSET_AXIS Axis:Y REL=0.000mm",
+            "DISPLAY_OFFSET X=0.000mm Y=0.000mm",
+        ])
+
+        # ── Array Settings (§10.7) ──
+        lines.extend([
+            "ELEMENT_MAX_INDEX 0",
+            "ELEMENT_NAME_MAX_INDEX 0",
+            "ELEMENT_INDEX 0",
+            "ELEMENT_NAME_INDEX 0",
+            'ELEMENT_NAME String:"UNNAMED "',
+            f"ELEMENT_ARRAY_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
+            f"ELEMENT_ARRAY_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
+            "ELEMENT_COPIES Columns=1 Rows=1 XStep=0.000mm YStep=0.000mm",
+            "ELEMENT_ARRAY_ADD X=0.000mm Y=0.000mm",
+            "ELEMENT_ARRAY_MIRROR 0",
+            "ARRAY_START 0",
+            "SET_CURRENT_ELEMENT_INDEX 0",
+            f"ARRAY_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
+            f"ARRAY_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
+            "ARRAY_ADD X=0.000mm Y=0.000mm",
+            "ARRAY_MIRROR 0",
+            "ARRAY_EVEN_DISTANCE XStep=0.000mm YStep=0.000mm",
+            "ARRAY_COPIES Columns=1 Rows=1 XStep=0.000mm YStep=0.000mm",
+        ])
+
+        self._emit(lines)
+
+    def _emit_layer_header(
+        self,
+        layer_index: int,
+        layer: "Layer",
+        job_tr_x: float,
+        job_tr_y: float,
+        job_bl_x: float,
+        job_bl_y: float,
+    ) -> List[str]:
+        """Emit the layer settings block for §10.5 of the integration guide.
+
+        Extracts speed, power, and color from the layer's workflow steps.
+        Falls back to defaults if no step data is available.
+        """
+        lines: List[str] = []
+
+        # Extract settings from the layer's workflow steps (first step wins)
+        speed = 100.0  # default mm/s
+        power = 0.2    # default 20%
+        color = layer.color  # from Layer, not Step
+        if layer.workflow is not None:
+            steps = layer.workflow.steps
+            if steps:
+                speed = steps[0].cut_speed
+                power = steps[0].power
+
+        power_pct = power * 100.0
+
+        tr_xy = f"X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm"
+        bl_xy = f"X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm"
+
+        lines.extend([
+            f"SPEED_LASER_1_LAYER Layer:{layer_index} Speed:{speed:.3f}mm/S",
+            f"MIN_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
+            f"MAX_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
+            f"MIN_POWER_2_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
+            f"MAX_POWER_2_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
+            f"LAYER_COLOR Layer:{layer_index} Color:\\{color}",
+            f"LAYER_ATTRIBUTES Layer:{layer_index} 3",
+            f"LAYER_TOP_RIGHT Layer:{layer_index} {tr_xy}",
+            f"LAYER_BOTTOM_LEFT Layer:{layer_index} {bl_xy}",
+            f"LAYER_EX_TOP_RIGHT Layer:{layer_index} {tr_xy}",
+            f"LAYER_EX_BOTTOM_LEFT Layer:{layer_index} {bl_xy}",
+        ])
+        return lines
 
     def _handle_job_end(self) -> None:
-        """Emit job end framing.
+        """Emit job end framing per §10.9.
 
-        BLOCK_END closes the processing block.
-        SET_FILE_SUM marks the file for checksum calculation by the runner.
+        Tail structure: ARRAY_END, BLOCK_END, SET_SETTING, END_JOB, EOF.
+        The checksum is auto-calculated by the driver when auto_checksum=True.
         """
         self._emit([
             "# JOB_END",
+            "ARRAY_END",
             "BLOCK_END",
-            "LAYER_END",
+            "SET_SETTING",
             "END_JOB",
             "EOF",
-            ])
+        ])
 
     def _handle_layer_start(self, ops: Ops, idx: int) -> None:
-        """Emit a layer start marker."""
+        """Emit layer start marker and SELECT_LAYER for §10.8."""
         layer_uid = ops.layer_uid(idx)
-        self._emit([f"# LAYER_START uid={layer_uid} part={self.layer}"])
+        self._emit([
+            f"# LAYER_START uid={layer_uid} part={self.layer}",
+            f"SELECT_LAYER Layer:{self.layer}",
+        ])
 
     def _handle_layer_end(self) -> None:
         """Emit a layer end marker."""
@@ -412,11 +544,11 @@ class RuidaRPAEncoder(OpsEncoder):
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        self._emit([f"# OPS_SECTION_START"])
+        self._emit(["# OPS_SECTION_START"])
 
     def _handle_ops_section_end(self) -> None:
         """Emit nothing for ops section end.
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        self._emit([f"# OPS_SECTION_END"])
+        self._emit(["# OPS_SECTION_END"])
