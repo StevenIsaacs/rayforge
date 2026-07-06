@@ -391,7 +391,7 @@ class RuidaRPAEncoder(OpsEncoder):
                 None,
             )
             if laser_head is not None:
-                device = laser_head.tool_number - 1
+                device = laser_head.tool_number
         except (AttributeError, TypeError):
             logger.debug(
                 "machine.heads not available, falling back to "
@@ -429,23 +429,34 @@ class RuidaRPAEncoder(OpsEncoder):
         ]
 
         # ── Job Settings (§10.4) ──
-        # Use machine work area for job/document bounds
-        job_tr_x = 0.0
-        job_tr_y = 0.0
-        job_bl_x = 400.0
-        job_bl_y = 300.0
-        if self.machine is not None:
-            try:
-                wx, wy, ww, wh = self.machine.work_area
-                job_tr_x = wx
-                job_tr_y = wy
-                job_bl_x = wx + ww
-                job_bl_y = wy + wh
-            except (AttributeError, TypeError, ValueError):
-                logger.warning(
-                    "Could not read machine work_area, using default "
-                    "400x300mm bounds"
-                )
+        # Compute combined job bounds from all active layers' CUT extents.
+        # Fall back to machine work area if no layer has bounds.
+        if self._layer_bounds:
+            all_min_x = [b[0] for b in self._layer_bounds.values()]
+            all_min_y = [b[1] for b in self._layer_bounds.values()]
+            all_max_x = [b[2] for b in self._layer_bounds.values()]
+            all_max_y = [b[3] for b in self._layer_bounds.values()]
+            job_tr_x = min(all_min_x)
+            job_tr_y = min(all_min_y)
+            job_bl_x = max(all_max_x)
+            job_bl_y = max(all_max_y)
+        else:
+            job_tr_x = 0.0
+            job_tr_y = 0.0
+            job_bl_x = 400.0
+            job_bl_y = 300.0
+            if self.machine is not None:
+                try:
+                    wx, wy, ww, wh = self.machine.work_area
+                    job_tr_x = wx
+                    job_tr_y = wy
+                    job_bl_x = wx + ww
+                    job_bl_y = wy + wh
+                except (AttributeError, TypeError, ValueError):
+                    logger.warning(
+                        "Could not read machine work_area, using "
+                        "default 400x300mm bounds"
+                    )
 
         lines.extend([
             "# JOB SETTINGS",
