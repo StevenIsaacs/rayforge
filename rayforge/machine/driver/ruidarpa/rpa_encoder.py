@@ -206,7 +206,7 @@ class RuidaRPAEncoder(OpsEncoder):
         """Rapid move (laser off) to an absolute position."""
         x, y, z = ops.endpoint(idx)
         self.current_pos = (x, y, z)
-        self._emit([f"REL_MOVE_XY Option=RAPID_ORIGIN X={x:.3f}mm Y={y:.3f}mm"])
+        self._emit([f"MOVE_ABS_XY X={x:.3f}mm Y={y:.3f}mm"])
 
     def _handle_line_to(self, ops: Ops, idx: int) -> None:
         """Cutting move (laser on) to an absolute position."""
@@ -334,8 +334,8 @@ class RuidaRPAEncoder(OpsEncoder):
         freq_hz = ops.frequency(idx)
         freq_khz = freq_hz / 1000.0
         self._emit([
-            f"FREQUENCY_PART Laser={self.active_laser}"
-            f" Part={self.layer} Freq={freq_khz:.3f}KHz"
+            f"FREQUENCY_LAYER Laser={self.active_laser}"
+            f" Layer={self.layer} Freq={freq_khz:.3f}KHz"
         ])
 
     def _handle_set_pulse_width(

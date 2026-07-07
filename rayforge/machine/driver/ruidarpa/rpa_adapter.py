@@ -561,15 +561,15 @@ class RuidaRPAAdapter(Driver):
 
     async def set_hold(self, hold: bool = True) -> None:
         if hold:
-            await self._run_script(["PAUSE_PROCESS"])
+            await self._run_script(["PAUSE_JOB"])
         else:
-            await self._run_script(["RESTORE_PROCESS"])
+            await self._run_script(["RESTORE_JOB"])
 
     async def cancel(self) -> None:
-        await self._run_script(["STOP_PROCESS"])
+        await self._run_script(["STOP_JOB"])
 
     async def clear_alarm(self) -> None:
-        await self._run_script(["STOP_PROCESS"])
+        await self._run_script(["STOP_JOB"])
 
     # --- Movement ---
 
@@ -578,14 +578,14 @@ class RuidaRPAAdapter(Driver):
         # The RPA TUI service defaults to 600 mm/s.
         cmds: List[str] = []
         if axes is None:
-            cmds.append("REL_MOVE_XY Option=0 X=-5 Y=-5")
+            cmds.append("MOVE_RAPID_XY Option=RAPID_ORIGIN X=-5 Y=-5")
         else:
             if axes & (Axis.X & Axis.Y):
-                cmds.append("REL_MOVE_XY Option=0 X=-5 Y=-5")
+                cmds.append("MOVE_RAPID_XY Option=RAPID_ORIGIN X=-5 Y=-5")
             elif axes & Axis.X:
-                cmds.append("REL_MOVE_X Option=0 X=0.0mm")
+                cmds.append("MOVE_RAPID_X Option=RAPID_ORIGIN X=0.0mm")
             elif axes & Axis.Y:
-                cmds.append("REL_MOVE_Y Option=0 Y=0.0mm")
+                cmds.append("MOVE_RAPID_Y Option=RAPID_ORIGIN Y=0.0mm")
             if axes & Axis.Z:
                 cmds.append("HOME_Z")
         if cmds:
@@ -603,7 +603,9 @@ class RuidaRPAAdapter(Driver):
         )
         cmds: List[str] = []
         cmds.append("SPEED_LASER_1 Speed:600")
-        cmds.append(f"REL_MOVE_XY Option=0 X={pos_x:.3f}mm Y={pos_y:.3f}mm")
+        cmds.append(
+            f"MOVE_RAPID_XY Option=RAPID_ORIGIN"
+            f" X={pos_x:.3f}mm Y={pos_y:.3f}mm")
         await self._run_script(cmds)
 
     async def select_tool(self, tool_number: int) -> None:
@@ -627,15 +629,19 @@ class RuidaRPAAdapter(Driver):
             _delta_x = deltas.get("x", 0.0)
             _delta_y = deltas.get("y", 0.0)
             cmds.append(
-                f"REL_MOVE_XY Option=2 X={_delta_x:.3f}mm "
+                f"MOVE_RAPID_XY Option=RAPID_NONE X={_delta_x:.3f}mm "
                 f"Y={_delta_y:.3f}mm")
         else:
             if _move_x:
                 _delta_x = deltas.get("x", 0.0)
-                cmds.append(f"REL_MOVE_X Option=2 X={_delta_x:.3f}mm")
+                cmds.append(
+                    f"MOVE_RAPID_X Option=RAPID_NONE"
+                    f" X={_delta_x:.3f}mm")
             if _move_y:
                 _delta_y = deltas.get("y", 0.0)
-                cmds.append(f"REL_MOVE_Y Option=2 Y={_delta_y:.3f}mm")
+                cmds.append(
+                    f"MOVE_RAPID_Y Option=RAPID_NONE"
+                    f" Y={_delta_y:.3f}mm")
         if cmds:
             logger.debug(
                 "Jogging axes: %s",
