@@ -121,8 +121,6 @@ class RuidaRPAAdapter(Driver):
 
     @property
     def supported_wcs(self) -> List[str]:
-        if not self._is_connected:
-            return ["MACHINE"]
         return ["MACHINE", "REF0", "REF1"]
 
     @property
@@ -691,7 +689,11 @@ class RuidaRPAAdapter(Driver):
         self.wcs_updated.send(self, offsets={wcs_slot: (x, y, z)})
 
     async def read_wcs_offsets(self) -> Dict[str, Pos]:
-        offsets: Dict[str, Pos] = {"MACHINE": (0.0, 0.0, 0.0)}
+        offsets: Dict[str, Pos] = {
+            "MACHINE": (0.0, 0.0, 0.0),
+            "REF0": (0.0, 0.0, 0.0),
+            "REF1": (0.0, 0.0, 0.0),
+        }
         self.wcs_updated.send(self, offsets=offsets)
         return offsets
 
