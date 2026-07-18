@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Rayforge\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-06-15 20:47+0200\n"
+"POT-Creation-Date: 2026-07-16 23:19+0200\n"
 "PO-Revision-Date: 2025-07-13 11:49+0200\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: Chinese (Simplified)\n"
@@ -216,6 +216,31 @@ msgstr "串口不能为空。"
 #: rayforge/core/varset/serialportvar.py
 msgid "Serial Port"
 msgstr "串口"
+
+#: rayforge/core/cut_side.py
+msgid "Centerline"
+msgstr "中心线"
+
+#: rayforge/core/cut_side.py
+msgid "Inside"
+msgstr "内部"
+
+#: rayforge/core/cut_side.py
+msgid "Outside"
+msgstr "外部"
+
+#: rayforge/core/cut_side.py
+msgid "Inside-Outside"
+msgstr "内-外"
+
+#: rayforge/core/cut_side.py
+msgid "Outside-Inside"
+msgstr "外-内"
+
+#: rayforge/core/capability.py rayforge/machine/models/laser.py
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+msgid "Laser Head"
+msgstr "激光头"
 
 #: rayforge/core/capability.py rayforge/ui_gtk/main_menu.py
 #: rayforge/ui_gtk/doceditor/asset_browser.py
@@ -1356,6 +1381,14 @@ msgid "The WebSocket port for the device"
 msgstr "设备的WebSocket端口"
 
 #: rayforge/machine/driver/grbl/grbl_network.py
+msgid "Protocol variant"
+msgstr "协议变体"
+
+#: rayforge/machine/driver/grbl/grbl_network.py
+msgid "ESP3D or Longer GRBL variant"
+msgstr "ESP3D或Longer GRBL变体"
+
+#: rayforge/machine/driver/grbl/grbl_network.py
 msgid "Host is not configured. Please set a valid IP address or hostname."
 msgstr "主机未配置。请设置有效的IP地址或主机名。"
 
@@ -1440,11 +1473,6 @@ msgstr "矩阵+畸变已导入"
 #, python-brace-format
 msgid "{label} (for {machine_name})"
 msgstr "{label}（用于{machine_name}）"
-
-#: rayforge/machine/models/laser.py
-#: rayforge/ui_gtk/machine/laser_control_widget.py
-msgid "Laser Head"
-msgstr "激光头"
 
 #: rayforge/machine/models/machine.py
 msgid "Default Machine"
@@ -1665,6 +1693,30 @@ msgstr "探测循环"
 #: rayforge/machine/models/dialect/base.py
 msgid "Dwell"
 msgstr "停留"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Spindle On (CW)"
+msgstr "主轴开启 (CW)"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Spindle On (CCW)"
+msgstr "主轴开启 (CCW)"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Spindle Off"
+msgstr "主轴关闭"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Coolant Flood"
+msgstr "冷却液喷淋"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Coolant Mist"
+msgstr "冷却液雾化"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Coolant Off"
+msgstr "冷却液关闭"
 
 #: rayforge/machine/models/dialect/base.py
 msgid "Scripts"
@@ -2131,6 +2183,34 @@ msgid "Categories"
 msgstr "类别"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "English"
+msgstr "英语"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "German"
+msgstr "德语"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Spanish"
+msgstr "西班牙语"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "French"
+msgstr "法语"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Portuguese"
+msgstr "葡萄牙语"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Ukrainian"
+msgstr "乌克兰语"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Chinese (Simplified)"
+msgstr "简体中文"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
 #: rayforge/ui_gtk/about.py
 msgid "System"
 msgstr "系统"
@@ -2165,6 +2245,10 @@ msgid "Layer Color"
 msgstr "图层颜色"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "System Default"
+msgstr "系统默认"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
 #: rayforge/ui_gtk/machine/rotary_module_page.py
 #: rayforge/ui_gtk/machine/settings_dialog.py
 #: rayforge/ui_gtk/machine/general_preferences_page.py
@@ -2184,6 +2268,14 @@ msgstr "与应用程序外观和感觉相关的设置。"
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid "Theme"
 msgstr "主题"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Language"
+msgstr "语言"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "The application language. Changes require a restart."
+msgstr "应用程序语言。更改需要重启。"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid "Operation Colors"
@@ -2282,6 +2374,121 @@ msgid ""
 msgstr ""
 "<a href=\"https://rayforge.org/docs/general-info/usage-tracking\">了解更多</"
 "a>关于使用跟踪和隐私的信息。"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Restart required"
+msgstr "需要重启"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid ""
+"The language will take effect after restarting Rayforge. Would you like to "
+"restart now?"
+msgstr "语言将在重启 Rayforge 后生效。是否现在重启？"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+#: rayforge/ui_gtk/shared/sanity_check_dialog.py rayforge/ui_gtk/project_cmd.py
+msgid "_Cancel"
+msgstr "取消(_C)"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "_Restart"
+msgstr "重启(_R)"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Copies keep their original layers."
+msgstr "副本保留其原始图层。"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "_Apply"
+msgstr "_应用"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Grid Array"
+msgstr "网格阵列"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Grid"
+msgstr "网格"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Rows"
+msgstr "行"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Columns"
+msgstr "列"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Displacement"
+msgstr "位移"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Gap"
+msgstr "间隙"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Spacing"
+msgstr "间距"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Displacement is center-to-center; gap is edge-to-edge."
+msgstr "位移为中心到中心；间隙为边缘到边缘。"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Column spacing"
+msgstr "列间距"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Row spacing"
+msgstr "行间距"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Point Rotation Array"
+msgstr "点旋转阵列"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Point Rotation"
+msgstr "点旋转"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Rotates copies in place around the selection's centre."
+msgstr "围绕选择中心原地旋转副本。"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Count"
+msgstr "数量"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Total angle (deg)"
+msgstr "总角度（度）"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Circular Array"
+msgstr "圆形阵列"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Circular"
+msgstr "圆形"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Places copies along a circular arc around a centre."
+msgstr "围绕中心沿圆弧放置副本。"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Center X"
+msgstr "中心 X"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Center Y"
+msgstr "中心 Y"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/machine/nogo_zones_page.py
+msgid "Radius"
+msgstr "半径"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Rotate copies"
+msgstr "旋转副本"
 
 #: rayforge/ui_gtk/canvas2d/elements/tab_handle.py
 msgid "Move Tab"
@@ -3186,10 +3393,6 @@ msgstr "深度"
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 msgid "Depth (Z extent) in mm"
 msgstr "深度 (Z范围) (mm)"
-
-#: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Radius"
-msgstr "半径"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 msgid "Cylinder radius in mm"
@@ -5027,10 +5230,6 @@ msgstr "选择"
 msgid "Job Sanity Check"
 msgstr "作业检查"
 
-#: rayforge/ui_gtk/shared/sanity_check_dialog.py rayforge/ui_gtk/project_cmd.py
-msgid "_Cancel"
-msgstr "取消(_C)"
-
 #: rayforge/ui_gtk/shared/sanity_check_dialog.py
 msgid "_Proceed"
 msgstr "_继续"
@@ -5255,6 +5454,10 @@ msgstr "垂直翻转"
 #: rayforge/ui_gtk/main_menu.py
 msgid "Flip"
 msgstr "翻转"
+
+#: rayforge/ui_gtk/main_menu.py
+msgid "Array"
+msgstr "阵列"
 
 #: rayforge/ui_gtk/main_menu.py
 msgid "Arrange"
@@ -5689,6 +5892,12 @@ msgstr "启用 {}"
 msgid "Toggle {}"
 msgstr "切换 {}"
 
+#: rayforge/ui_gtk/doceditor/step_settings/base.py
+#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
+#, python-brace-format
+msgid "Change {key}"
+msgstr "更改{key}"
+
 #: rayforge/ui_gtk/doceditor/material_library_list.py
 msgid "1 material"
 msgstr "1 种材料"
@@ -5758,11 +5967,6 @@ msgstr "此操作的功率、速度和激光头选择。"
 #: rayforge/ui_gtk/doceditor/step_settings_dialog.py
 msgid "Change Laser"
 msgstr "更改激光"
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-#, python-brace-format
-msgid "Change {key}"
-msgstr "更改{key}"
 
 #: rayforge/ui_gtk/doceditor/step_settings_dialog.py
 msgid "No post-processing options available for this step."
@@ -6772,27 +6976,6 @@ msgid ""
 "configs."
 msgstr "自定义配置目录的路径。适用于使用独立配置进行测试。"
 
-#: rayforge/pipeline/producer/placeholder.py
-msgid "Missing Producer"
-msgstr "缺少生产者"
-
-#: rayforge/pipeline/producer/placeholder.py
-#: rayforge/pipeline/transformer/placeholder.py
-msgid "Missing: {}"
-msgstr "缺失：{}"
-
-#: rayforge/pipeline/producer/base.py
-msgid "Centerline"
-msgstr "中心线"
-
-#: rayforge/pipeline/producer/base.py
-msgid "Inside"
-msgstr "内部"
-
-#: rayforge/pipeline/producer/base.py
-msgid "Outside"
-msgstr "外部"
-
 #: rayforge/pipeline/stage/step_runner.py
 msgid "Assembling step..."
 msgstr "正在组装步骤..."
@@ -6812,6 +6995,34 @@ msgstr "正在存储最终作业制品..."
 #: rayforge/pipeline/stage/job_runner.py rayforge/pipeline/stage/job_compute.py
 msgid "Job finalization complete"
 msgstr "作业定稿完成"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Variable Power"
+msgstr "可变功率"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Constant Power"
+msgstr "恒定功率"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Dither"
+msgstr "抖动"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Multiple Depths"
+msgstr "多深度"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Variable"
+msgstr "可变"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Constant"
+msgstr "恒定"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Multi-Pass"
+msgstr "多遍"
 
 #: rayforge/pipeline/stage/workpiece_compute.py
 #, python-brace-format
@@ -6865,6 +7076,10 @@ msgstr "正在渲染纹理..."
 #: rayforge/pipeline/view/view_compute.py
 msgid "Rendering complete."
 msgstr "渲染完成。"
+
+#: rayforge/pipeline/transformer/placeholder.py
+msgid "Missing: {}"
+msgstr "缺失：{}"
 
 #: rayforge/pipeline/transformer/placeholder.py
 msgid "This transformer is not available."
@@ -6951,16 +7166,16 @@ msgid "Move item(s)"
 msgstr "移动项目"
 
 #: rayforge/doceditor/transform_cmd.py
-msgid "Resize item(s)"
-msgstr "调整项目大小"
-
-#: rayforge/doceditor/transform_cmd.py
 msgid "Change item angle"
 msgstr "更改项目角度"
 
 #: rayforge/doceditor/transform_cmd.py
 msgid "Change item shear"
 msgstr "更改项目剪切"
+
+#: rayforge/doceditor/transform_cmd.py
+msgid "Resize item(s)"
+msgstr "调整项目大小"
 
 #: rayforge/doceditor/asset_cmd.py
 msgid "Update Asset"
@@ -7158,6 +7373,14 @@ msgstr "重新排列工件"
 msgid "Reorder items"
 msgstr "重新排序项目"
 
+#: rayforge/doceditor/array_cmd.py
+msgid "Create Array"
+msgstr "创建阵列"
+
+#: rayforge/doceditor/array_cmd.py
+msgid "Create array copy"
+msgstr "创建阵列副本"
+
 #: rayforge/doceditor/editor.py
 #, python-brace-format
 msgid "{count} asset(s) require disabled addon '{addon}'"
@@ -7290,3 +7513,19 @@ msgstr "无效或不支持的BMP数据。"
 #: rayforge/image/ruida/importer.py
 msgid "File contains no vector commands."
 msgstr "文件不包含矢量命令。"
+
+#: rayforge/image/dither.py
+msgid "Floyd Steinberg"
+msgstr "Floyd Steinberg"
+
+#: rayforge/image/dither.py
+msgid "Bayer 2"
+msgstr "Bayer 2"
+
+#: rayforge/image/dither.py
+msgid "Bayer 4"
+msgstr "Bayer 4"
+
+#: rayforge/image/dither.py
+msgid "Bayer 8"
+msgstr "Bayer 8"

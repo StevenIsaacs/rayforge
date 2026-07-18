@@ -8,10 +8,8 @@ from gi.repository import Adw, Gtk
 from ...context import get_context
 from ...core.capability import Capability, LaserHeadVar
 from ...core.step import Step
-from ...core.varset import VarSet
 from ...core.undo import ChangePropertyCommand, HistoryManager
-from ...pipeline.producer import OpsProducer
-from ...pipeline.producer.placeholder import PlaceholderProducer
+from ...core.varset import VarSet
 from ...pipeline.transformer import OpsTransformer
 from ...pipeline.transformer.placeholder import PlaceholderTransformer
 from ..icons import get_icon
@@ -36,39 +34,19 @@ class GeneralStepSettingsView(TrackedPreferencesPage):
         self.editor = editor
         self.doc = editor.doc
         self.step = step
-        producer_type = (
-            step.opsproducer_dict.get("type", "unknown")
-            if step.opsproducer_dict
-            else "unknown"
-        )
-        self.key = producer_type.lower().replace("producer", "")
+        producer_type = step.ASSEMBLER_NAME or "unknown"
+        self.key = producer_type.lower()
         self.path_prefix = "/step-settings/"
         self.history_manager: HistoryManager = self.doc.history_manager
 
-        # 1. Producer Settings
-        producer_dict = self.step.opsproducer_dict
+        # 1. Producer Settings (no longer deserialized — widgets read step
+        #    attributes directly via set_step_property)
         producer = None
-        if producer_dict:
-            producer_name = producer_dict.get("type")
-            if producer_name:
-                producer = OpsProducer.from_dict(producer_dict)
 
         context = get_context()
         if context:
             context.plugin_mgr.hook.step_settings_loaded(
-                dialog=self, step=self.step, producer=producer
-            )
-
-        # Add placeholder widget if producer is not available
-        if isinstance(producer, PlaceholderProducer) and producer_dict:
-            self.add(
-                PlaceholderSettingsWidget(
-                    self.editor,
-                    producer.label,
-                    producer,
-                    self,
-                    self.step,
-                )
+                dialog=self, step=self.step, producer=None
             )
 
         # Build settings UI from capability VarSet.
@@ -85,6 +63,12 @@ class GeneralStepSettingsView(TrackedPreferencesPage):
             ),
             debounce_ms=300,
         )
+
+        self.name_row = Adw.EntryRow(title=_("Name"))
+        self.name_row.set_text(step.name)
+        self.name_row.connect("changed", self._on_name_changed)
+        self._updating_name = False
+        self.varset_widget.add(self.name_row)
 
         self.recipe_control = RecipeControlWidget(self.editor, self.step)
         self.recipe_control.recipe_applied.connect(self._sync_widgets_to_model)
@@ -116,6 +100,9 @@ class GeneralStepSettingsView(TrackedPreferencesPage):
                 continue
             values[key] = getattr(self.step, key, None)
         self.varset_widget.set_values(values)
+        self._updating_name = True
+        self.name_row.set_text(self.step.name)
+        self._updating_name = False
 
         # Sync laser head selector using UID-to-name mapping
         if "selected_laser_uid" in self.varset_widget.widget_map:
@@ -213,6 +200,14 @@ class GeneralStepSettingsView(TrackedPreferencesPage):
         self.history_manager.execute(command)
         self.changed.send(self)
 
+    def _on_name_changed(self, row):
+        if self._updating_name:
+            return
+        new_name = row.get_text().strip()
+        if not new_name or new_name == self.step.name:
+            return
+        self.editor.step.rename_step(self.step, new_name)
+
 
 class PostProcessingSettingsView(TrackedPreferencesPage):
     """A view for the post-processing transformers of a Step."""
@@ -223,12 +218,8 @@ class PostProcessingSettingsView(TrackedPreferencesPage):
         super().__init__()
         self.editor = editor
         self.step = step
-        producer_type = (
-            step.opsproducer_dict.get("type", "unknown")
-            if step.opsproducer_dict
-            else "unknown"
-        )
-        producer_key = producer_type.lower().replace("producer", "")
+        producer_type = step.ASSEMBLER_NAME or "unknown"
+        producer_key = producer_type.lower()
         self.key = f"{producer_key}/post-processing"
         self.path_prefix = "/step-settings/"
 

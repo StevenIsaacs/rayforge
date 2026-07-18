@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
+from raygeo.ops.state import AirAssistMode
 from raygeo.ops.types import CommandType
 
 from ....pipeline.encoder.base import (
@@ -134,6 +135,8 @@ class RuidaEncoder(OpsEncoder):
             self._handle_set_frequency(ops, idx, binary, text)
         elif ct == CommandType.SET_PULSE_WIDTH:
             self._handle_set_pulse_width(ops, idx, binary, text)
+        elif ct == CommandType.SET_AIR_ASSIST:
+            self._handle_air_assist(ops, idx, binary, text)
         elif ct == CommandType.SET_COOLANT:
             self._handle_coolant(ops, idx, binary, text)
         elif ct == CommandType.SET_HEAD:
@@ -239,16 +242,16 @@ class RuidaEncoder(OpsEncoder):
         )
         text.append(f"PULSE_WIDTH {pw:.1f}")
 
-    def _handle_coolant(
+    def _handle_air_assist(
         self,
         ops: Ops,
         idx: int,
         binary: List[bytes],
         text: List[str],
     ) -> None:
-        """Handle SetCoolantCommand - update coolant state."""
-        mode = ops.coolant(idx)
-        if mode == "Air":
+        """Handle SetAirAssistCommand - update air assist state."""
+        mode = ops.air_assist(idx)
+        if mode == AirAssistMode.ON:
             if not self.air_assist:
                 self.air_assist = True
                 binary.append(b"\xca\x13")
@@ -258,6 +261,15 @@ class RuidaEncoder(OpsEncoder):
                 self.air_assist = False
                 binary.append(b"\xca\x12")
                 text.append("AIR_ASSIST OFF")
+
+    def _handle_coolant(
+        self,
+        ops: Ops,
+        idx: int,
+        binary: List[bytes],
+        text: List[str],
+    ) -> None:
+        """Handle SetCoolantCommand - coolant not used on laser cutters."""
 
     def _handle_set_laser(
         self,

@@ -1,12 +1,15 @@
 import cairo
 import numpy as np
+from raygeo.image.dither import (
+    apply_bayer_dither,
+    apply_floyd_steinberg_dither,
+)
 
 from rayforge.image.dither import (
     BAYER_MATRICES,
     DitherAlgorithm,
     surface_to_dithered_array,
 )
-from raygeo.image import apply_bayer_dither, apply_floyd_steinberg_dither
 
 
 def test_bayer_matrices_shape_and_values():

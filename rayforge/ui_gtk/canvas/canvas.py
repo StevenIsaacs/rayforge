@@ -4,6 +4,7 @@ import logging
 import math
 from enum import Enum, auto
 from typing import (
+    TYPE_CHECKING,
     Any,
     Generator,
     List,
@@ -11,16 +12,15 @@ from typing import (
     Set,
     Tuple,
     Union,
-    TYPE_CHECKING,
 )
 
 import cairo
 import numpy as np
 from blinker import Signal
 from gi.repository import Gdk, Graphene, Gtk
+from raygeo.geo import Matrix
 
 from ...core.color import ColorRGBA
-from ...core.matrix import Matrix
 from ..shared.keyboard import is_primary_keyval
 from . import transform
 from .cursor import get_cursor_for_region
@@ -30,6 +30,7 @@ from .multiselect import MultiSelectionGroup
 from .overlays import render_selection_frame, render_selection_handles
 from .region import (
     BBOX_REGIONS,
+    MOVE_HANDLES,
     RESIZE_HANDLES,
     ROTATE_HANDLES,
     ROTATE_SHEAR_HANDLES,
@@ -131,6 +132,12 @@ class Canvas(Gtk.DrawingArea):
 
         # Fired after any transform gesture ends.
         self.transform_end = Signal()
+
+        # Fired during an active transform gesture on each mouse-move
+        # (after the elements have been repositioned).  Receives one
+        # argument ``elements`` — the list of canvas elements that
+        # were just moved / resized / rotated / sheared.
+        self.transform_moved = Signal()
 
         self.elements_deleted = Signal()
         self.selection_changed = Signal()
@@ -396,9 +403,9 @@ class Canvas(Gtk.DrawingArea):
         # We build a set of candidate regions based on the current mode.
         handle_candidates: Optional[Set[ElementRegion]] = None
         if self._selection_mode == SelectionMode.RESIZE:
-            handle_candidates = RESIZE_HANDLES
+            handle_candidates = RESIZE_HANDLES | MOVE_HANDLES
         elif self._selection_mode == SelectionMode.ROTATE_SHEAR:
-            handle_candidates = ROTATE_SHEAR_HANDLES
+            handle_candidates = ROTATE_SHEAR_HANDLES | MOVE_HANDLES
 
         if handle_candidates:
             target: Optional[Union[CanvasElement, MultiSelectionGroup]] = None
@@ -439,7 +446,10 @@ class Canvas(Gtk.DrawingArea):
         if self._selection_group:
             # Check for body or any handle to set the general group hover flag
             all_group_regions = (
-                RESIZE_HANDLES | ROTATE_SHEAR_HANDLES | {ElementRegion.BODY}
+                RESIZE_HANDLES
+                | ROTATE_SHEAR_HANDLES
+                | MOVE_HANDLES
+                | {ElementRegion.BODY}
             )
             if (
                 self._selection_group.check_region_hit(
@@ -776,7 +786,10 @@ class Canvas(Gtk.DrawingArea):
             if not elements_to_transform:
                 return
 
-            if self._active_region == ElementRegion.BODY:
+            if self._active_region in (
+                ElementRegion.BODY,
+                ElementRegion.MOVE,
+            ):
                 self._moving = True
                 self.move_begin.send(
                     self,
@@ -906,6 +919,9 @@ class Canvas(Gtk.DrawingArea):
         if self._selection_group:
             if self._moving:
                 self._selection_group.apply_move(world_dx, world_dy)
+                self.transform_moved.send(
+                    self, elements=self._selection_group.elements
+                )
             elif self._resizing:
                 if self._active_origin:
                     self._selection_group.resize_from_drag(
@@ -959,6 +975,9 @@ class Canvas(Gtk.DrawingArea):
                             constrained_dy,
                             self._initial_world_transform,
                         )
+                        self.transform_moved.send(
+                            self, elements=[self._drag_target]
+                        )
                         self.queue_draw()
                     else:
                         # Standard, unconstrained move.
@@ -967,6 +986,9 @@ class Canvas(Gtk.DrawingArea):
                             world_dx,
                             world_dy,
                             self._initial_world_transform,
+                        )
+                        self.transform_moved.send(
+                            self, elements=[self._drag_target]
                         )
                         self.queue_draw()
             elif self._resizing:

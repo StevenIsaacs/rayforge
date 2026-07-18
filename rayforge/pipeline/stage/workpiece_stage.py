@@ -20,7 +20,8 @@ from ..dag.node import NodeState
 from .base import PipelineStage
 
 if TYPE_CHECKING:
-    from ...core.matrix import Matrix
+    from raygeo.geo import Matrix
+
     from ...core.step import Step
     from ...core.workpiece import WorkPiece
     from ...machine.models.machine import Machine
@@ -113,13 +114,14 @@ class WorkPiecePipelineStage(PipelineStage):
             logger.error("Cannot generate ops: No machine is configured.")
             return None
 
-        settings = step.get_settings()
+        settings = step.to_dict()
         settings["machine_supports_arcs"] = self._machine.supports_arcs
         settings["machine_supports_curves"] = self._machine.supports_curves
         settings["arc_tolerance"] = self._machine.arc_tolerance
         settings["driver_native_overscan"] = (
             self._machine.driver.native_overscan
         )
+        settings.setdefault("bidir_x_offset_mm", 0.0)
 
         try:
             selected_laser = step.get_selected_laser(self._machine)
@@ -362,7 +364,6 @@ class WorkPiecePipelineStage(PipelineStage):
             make_workpiece_artifact_in_subprocess,
             self._artifact_manager.get_store(),
             workpiece_dict,
-            step.opsproducer_dict,
             step.per_workpiece_transformers_dicts,
             laser_dict,
             settings,

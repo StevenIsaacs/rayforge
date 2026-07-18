@@ -5,6 +5,100 @@ All notable changes to Rayforge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.8.5
+
+### Changed
+
+- Upgrade raygeo to 1.21.3 to fix adaptive wavefronts generating
+  wave duplicates and mask_scan/dither raster mode ignoring
+  step_power
+- Group selections in the properties panel no longer reset
+  relative positions, angles, and transformations between
+  grouped workpieces (#311)
+
+## 1.8.4
+
+### Added
+
+- Speed vs Offset mode in the material test grid for empirical
+  bidirectional offset calibration (#312) by Github user vyvcodd.
+
+### Changed
+
+- Major pipeline refactor: replace OpsProducer system with
+  assembler registry; all step settings now read/write step
+  attributes directly (#309)
+- Updated translations
+
+### Fixed
+
+- Upgrade raygeo to 1.12.2 to fix label power in material test
+  grid
+- Text from addons not translated
+
+## 1.8.3
+
+### Added
+
+- Language selector in the General settings page to change the UI
+  language at runtime (#303)
+- Drag handle grab gizmo below the selection frame for easier
+  workpiece grabbing (#173)
+- Support for tool numbers outside the 0-255 range, with new device
+  profile for Makera Carvera (#302)
+- Air assist toggle to the material test grid (#304)
+- CNC spindle and coolant fields in the G-code dialect
+
+### Changed
+
+- Upgrade raygeo to 1.21.1 with faster smoothing and 3D rendering
+  performance
+- Text rendering now handled by raygeo for better font support
+  across platforms
+- Updated translations
+
+### Fixed
+
+- G-code placeholders being incorrectly rejected in the encoder
+  context
+- Axis replacement mode emitting duplicate Y words causing GRBL
+  error 25 (#310)
+- Toggle buttons of varsets not changing background color when
+  toggled on
+- Material test grid missing workpiece UID section commands
+- Out of memory crash when opening SVG files containing circles
+- macOS-only transport test failures (#306)
+- Pixi environment solving for osx-arm64 (#306)
+
+## 1.8.2
+
+### Added
+
+- Configurable GRBL protocol variant for Longer Ray5 (by Uwe Woessner)
+- Device profile modifications for Longer Ray5 (by Uwe Woessner)
+
+### Changed
+
+- Upgrade raygeo to 1.15.1
+- Bump addon API version to 17 for incompatible raygeo changes
+- Replace Cairo text path with Pango-based text_to_geometry for robust font
+  fallback (#293)
+- Defer histogram computation to idle callback and cap render resolution in
+  raster widget
+- Update pypdf to version 6.12.2
+- Update macOS setup to use Brewfile (by Lukas Huber)
+- Updated translations
+
+### Fixed
+
+- Various device profiles missing `{extra_cmd}` in G-code dialect causing
+  A axis not emitted (#301)
+- GRBL buffer stall recovery resending G-code to freshly reset firmware
+  after cancel
+- Contour producer dropping open contours in Outside/Inside cut modes
+- Overscan transformer doubling up for drivers with native overscan (Ruida)
+- Website markdown links using trailing-slash bug in React Router
+
 ## 1.8.1
 
 ### Added

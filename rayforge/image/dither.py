@@ -1,13 +1,14 @@
 """Dithering algorithms for converting grayscale images to binary."""
 
 from enum import Enum
+from gettext import gettext as _
 
 import numpy as np
-from raygeo.image import (
+from raygeo.image.convert import rgba_to_grayscale
+from raygeo.image.dither import (
     apply_bayer_dither,
     apply_floyd_steinberg_dither,
     apply_minimum_run_length,
-    rgba_to_grayscale,
 )
 
 
@@ -16,6 +17,16 @@ class DitherAlgorithm(Enum):
     BAYER2 = "bayer2"
     BAYER4 = "bayer4"
     BAYER8 = "bayer8"
+
+    @property
+    def display_name(self) -> str:
+        names = {
+            self.FLOYD_STEINBERG: _("Floyd Steinberg"),
+            self.BAYER2: _("Bayer 2"),
+            self.BAYER4: _("Bayer 4"),
+            self.BAYER8: _("Bayer 8"),
+        }
+        return names[self]
 
 
 BAYER_MATRICES = {

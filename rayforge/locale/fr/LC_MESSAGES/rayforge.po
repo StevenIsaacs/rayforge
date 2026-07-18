@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: rayforge\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-06-15 20:47+0200\n"
+"POT-Creation-Date: 2026-07-16 23:19+0200\n"
 "PO-Revision-Date: 2025-10-15 07:10+0200\n"
 "Last-Translator: Samuel <knipknap@gmail.com>\n"
 "Language-Team: French\n"
@@ -217,6 +217,31 @@ msgstr "Le port série ne peut pas être vide."
 #: rayforge/core/varset/serialportvar.py
 msgid "Serial Port"
 msgstr "Port série"
+
+#: rayforge/core/cut_side.py
+msgid "Centerline"
+msgstr "Ligne centrale"
+
+#: rayforge/core/cut_side.py
+msgid "Inside"
+msgstr "Intérieur"
+
+#: rayforge/core/cut_side.py
+msgid "Outside"
+msgstr "Extérieur"
+
+#: rayforge/core/cut_side.py
+msgid "Inside-Outside"
+msgstr "Intérieur-Extérieur"
+
+#: rayforge/core/cut_side.py
+msgid "Outside-Inside"
+msgstr "Extérieur-Intérieur"
+
+#: rayforge/core/capability.py rayforge/machine/models/laser.py
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+msgid "Laser Head"
+msgstr "Tête laser"
 
 #: rayforge/core/capability.py rayforge/ui_gtk/main_menu.py
 #: rayforge/ui_gtk/doceditor/asset_browser.py
@@ -1496,6 +1521,14 @@ msgid "The WebSocket port for the device"
 msgstr "Le port WebSocket du périphérique"
 
 #: rayforge/machine/driver/grbl/grbl_network.py
+msgid "Protocol variant"
+msgstr "Variante de protocol"
+
+#: rayforge/machine/driver/grbl/grbl_network.py
+msgid "ESP3D or Longer GRBL variant"
+msgstr "Variante ESP3D ou Longer GRBL"
+
+#: rayforge/machine/driver/grbl/grbl_network.py
 msgid "Host is not configured. Please set a valid IP address or hostname."
 msgstr ""
 "L'hôte n'est pas configuré. Veuillez définir une adresse IP ou un nom d'hôte "
@@ -1584,11 +1617,6 @@ msgstr "matrice + distorsion importée"
 #, python-brace-format
 msgid "{label} (for {machine_name})"
 msgstr "{label} (pour {machine_name})"
-
-#: rayforge/machine/models/laser.py
-#: rayforge/ui_gtk/machine/laser_control_widget.py
-msgid "Laser Head"
-msgstr "Tête laser"
 
 #: rayforge/machine/models/machine.py
 msgid "Default Machine"
@@ -1820,6 +1848,30 @@ msgstr "Cycle de palpage"
 #: rayforge/machine/models/dialect/base.py
 msgid "Dwell"
 msgstr "Temporisation"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Spindle On (CW)"
+msgstr "Broche marche (CW)"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Spindle On (CCW)"
+msgstr "Broche marche (CCW)"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Spindle Off"
+msgstr "Broche arrêt"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Coolant Flood"
+msgstr "Liquidide de refroidissement inondation"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Coolant Mist"
+msgstr "Liquidide de refroidissement brouillard"
+
+#: rayforge/machine/models/dialect/base.py
+msgid "Coolant Off"
+msgstr "Liquidide de refroidissement arrêt"
 
 #: rayforge/machine/models/dialect/base.py
 msgid "Scripts"
@@ -2307,6 +2359,34 @@ msgid "Categories"
 msgstr "Catégories"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "English"
+msgstr "Anglais"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "German"
+msgstr "Allemand"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Spanish"
+msgstr "Espagnol"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "French"
+msgstr "Français"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Portuguese"
+msgstr "Portugais"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Ukrainian"
+msgstr "Ukrainien"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Chinese (Simplified)"
+msgstr "Chinois (simplifié)"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
 #: rayforge/ui_gtk/about.py
 msgid "System"
 msgstr "Système"
@@ -2341,6 +2421,10 @@ msgid "Layer Color"
 msgstr "Couleur du calque"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "System Default"
+msgstr "Par défaut du système"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
 #: rayforge/ui_gtk/machine/rotary_module_page.py
 #: rayforge/ui_gtk/machine/settings_dialog.py
 #: rayforge/ui_gtk/machine/general_preferences_page.py
@@ -2360,6 +2444,15 @@ msgstr "Paramètres liés à l’apparence et à l’ergonomie de l’applicatio
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid "Theme"
 msgstr "Thème"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Language"
+msgstr "Langue"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "The application language. Changes require a restart."
+msgstr ""
+"La langue de l'application. Les modifications nécessitent un redémarrage."
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid "Operation Colors"
@@ -2466,6 +2559,123 @@ msgid ""
 msgstr ""
 "<a href=\"https://rayforge.org/docs/general-info/usage-tracking\">En savoir "
 "plus</a> sur le suivi d'utilisation et la confidentialité."
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Restart required"
+msgstr "Redémarrage requis"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid ""
+"The language will take effect after restarting Rayforge. Would you like to "
+"restart now?"
+msgstr ""
+"La langue prendra effet après le redémarrage de Rayforge. Voulez-vous "
+"redémarrer maintenant ?"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+#: rayforge/ui_gtk/shared/sanity_check_dialog.py rayforge/ui_gtk/project_cmd.py
+msgid "_Cancel"
+msgstr "_Annuler"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "_Restart"
+msgstr "_Redémarrer"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Copies keep their original layers."
+msgstr "Les copies conservent leurs calques d'origine."
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "_Apply"
+msgstr "_Appliquer"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Grid Array"
+msgstr "Grille"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Grid"
+msgstr "Grille"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Rows"
+msgstr "Lignes"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Columns"
+msgstr "Colonnes"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Displacement"
+msgstr "Déplacement"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Gap"
+msgstr "Écart"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Spacing"
+msgstr "Espacement"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Displacement is center-to-center; gap is edge-to-edge."
+msgstr "Le déplacement est de centre à centre ; l'écart est de bord à bord."
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Column spacing"
+msgstr "Espacement des colonnes"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Row spacing"
+msgstr "Espacement des lignes"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Point Rotation Array"
+msgstr "Tableau de rotation de points"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Point Rotation"
+msgstr "Rotation de points"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Rotates copies in place around the selection's centre."
+msgstr "Fait tourner les copies sur place autour du centre de la sélection."
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Count"
+msgstr "Nombre"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Total angle (deg)"
+msgstr "Angle total (degrés)"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Circular Array"
+msgstr "Tableau circulaire"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Circular"
+msgstr "Circulaire"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Places copies along a circular arc around a centre."
+msgstr "Place les copies le long d'un arc circulaire autour d'un centre."
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Center X"
+msgstr "Centre X"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Center Y"
+msgstr "Centre Y"
+
+#: rayforge/ui_gtk/array_dialog.py rayforge/ui_gtk/machine/nogo_zones_page.py
+msgid "Radius"
+msgstr "Rayon"
+
+#: rayforge/ui_gtk/array_dialog.py
+msgid "Rotate copies"
+msgstr "Faire tourner les copies"
 
 #: rayforge/ui_gtk/canvas2d/elements/tab_handle.py
 msgid "Move Tab"
@@ -3388,10 +3598,6 @@ msgstr "Profondeur"
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 msgid "Depth (Z extent) in mm"
 msgstr "Profondeur (étendue Z) en mm"
-
-#: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Radius"
-msgstr "Rayon"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 msgid "Cylinder radius in mm"
@@ -5313,10 +5519,6 @@ msgstr "Sélectionner"
 msgid "Job Sanity Check"
 msgstr "Vérification du travail"
 
-#: rayforge/ui_gtk/shared/sanity_check_dialog.py rayforge/ui_gtk/project_cmd.py
-msgid "_Cancel"
-msgstr "_Annuler"
-
 #: rayforge/ui_gtk/shared/sanity_check_dialog.py
 msgid "_Proceed"
 msgstr "_Continuer"
@@ -5542,6 +5744,10 @@ msgstr "Retourner verticalement"
 #: rayforge/ui_gtk/main_menu.py
 msgid "Flip"
 msgstr "Retourner"
+
+#: rayforge/ui_gtk/main_menu.py
+msgid "Array"
+msgstr "Tableau"
 
 #: rayforge/ui_gtk/main_menu.py
 msgid "Arrange"
@@ -5991,6 +6197,12 @@ msgstr "Activer {}"
 msgid "Toggle {}"
 msgstr "Basculer {}"
 
+#: rayforge/ui_gtk/doceditor/step_settings/base.py
+#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
+#, python-brace-format
+msgid "Change {key}"
+msgstr "Modifier {key}"
+
 #: rayforge/ui_gtk/doceditor/material_library_list.py
 msgid "1 material"
 msgstr "1 matériau"
@@ -6064,11 +6276,6 @@ msgstr "Puissance, vitesse et sélection de la tête laser pour cette opération
 #: rayforge/ui_gtk/doceditor/step_settings_dialog.py
 msgid "Change Laser"
 msgstr "Changer de laser"
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-#, python-brace-format
-msgid "Change {key}"
-msgstr "Modifier {key}"
 
 #: rayforge/ui_gtk/doceditor/step_settings_dialog.py
 msgid "No post-processing options available for this step."
@@ -7120,27 +7327,6 @@ msgstr ""
 "Chemin vers un répertoire de configuration personnalisé. Utile pour les "
 "tests avec des configurations isolées."
 
-#: rayforge/pipeline/producer/placeholder.py
-msgid "Missing Producer"
-msgstr "Producteur manquant"
-
-#: rayforge/pipeline/producer/placeholder.py
-#: rayforge/pipeline/transformer/placeholder.py
-msgid "Missing: {}"
-msgstr "Manquant : {}"
-
-#: rayforge/pipeline/producer/base.py
-msgid "Centerline"
-msgstr "Ligne centrale"
-
-#: rayforge/pipeline/producer/base.py
-msgid "Inside"
-msgstr "Intérieur"
-
-#: rayforge/pipeline/producer/base.py
-msgid "Outside"
-msgstr "Extérieur"
-
 #: rayforge/pipeline/stage/step_runner.py
 msgid "Assembling step..."
 msgstr "Assemblage de l'étape..."
@@ -7160,6 +7346,34 @@ msgstr "Stockage de l'artefact final de la tâche..."
 #: rayforge/pipeline/stage/job_runner.py rayforge/pipeline/stage/job_compute.py
 msgid "Job finalization complete"
 msgstr "Finalisation de la tâche terminée"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Variable Power"
+msgstr "Puissance variable"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Constant Power"
+msgstr "Puissance constante"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Dither"
+msgstr "Tramage"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Multiple Depths"
+msgstr "Profondeurs multiples"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Variable"
+msgstr "Variable"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Constant"
+msgstr "Constante"
+
+#: rayforge/pipeline/stage/assembler_helpers.py
+msgid "Multi-Pass"
+msgstr "Passages multiples"
 
 #: rayforge/pipeline/stage/workpiece_compute.py
 #, python-brace-format
@@ -7213,6 +7427,10 @@ msgstr "Rendu de la texture..."
 #: rayforge/pipeline/view/view_compute.py
 msgid "Rendering complete."
 msgstr "Rendu terminé."
+
+#: rayforge/pipeline/transformer/placeholder.py
+msgid "Missing: {}"
+msgstr "Manquant : {}"
 
 #: rayforge/pipeline/transformer/placeholder.py
 msgid "This transformer is not available."
@@ -7299,16 +7517,16 @@ msgid "Move item(s)"
 msgstr "Déplacer le(s) élément(s)"
 
 #: rayforge/doceditor/transform_cmd.py
-msgid "Resize item(s)"
-msgstr "Redimensionner le(s) élément(s)"
-
-#: rayforge/doceditor/transform_cmd.py
 msgid "Change item angle"
 msgstr "Modifier l’angle de l’élément"
 
 #: rayforge/doceditor/transform_cmd.py
 msgid "Change item shear"
 msgstr "Modifier le cisaillement de l’élément"
+
+#: rayforge/doceditor/transform_cmd.py
+msgid "Resize item(s)"
+msgstr "Redimensionner le(s) élément(s)"
 
 #: rayforge/doceditor/asset_cmd.py
 msgid "Update Asset"
@@ -7511,6 +7729,14 @@ msgstr "Réorganiser les pièces"
 msgid "Reorder items"
 msgstr "Réorganiser les éléments"
 
+#: rayforge/doceditor/array_cmd.py
+msgid "Create Array"
+msgstr "Créer un tableau"
+
+#: rayforge/doceditor/array_cmd.py
+msgid "Create array copy"
+msgstr "Créer une copie du tableau"
+
 #: rayforge/doceditor/editor.py
 #, python-brace-format
 msgid "{count} asset(s) require disabled addon '{addon}'"
@@ -7643,3 +7869,19 @@ msgstr "Données BMP non valides ou non prises en charge."
 #: rayforge/image/ruida/importer.py
 msgid "File contains no vector commands."
 msgstr "Le fichier ne contient aucune commande de vecteur."
+
+#: rayforge/image/dither.py
+msgid "Floyd Steinberg"
+msgstr "Floyd Steinberg"
+
+#: rayforge/image/dither.py
+msgid "Bayer 2"
+msgstr "Bayer 2"
+
+#: rayforge/image/dither.py
+msgid "Bayer 4"
+msgstr "Bayer 4"
+
+#: rayforge/image/dither.py
+msgid "Bayer 8"
+msgstr "Bayer 8"
