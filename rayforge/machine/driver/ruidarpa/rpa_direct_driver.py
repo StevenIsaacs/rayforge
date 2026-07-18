@@ -146,6 +146,74 @@ class RpaDirectDriver:
         if self._driver is not None:
             self._driver.cancel_script()
 
+    # --- Head/Tail scripts ---
+
+    def set_head_script(self, script: list[str]) -> None:
+        """Set the head script executed before every job.
+
+        The head script runs automatically by ``run_job`` before the
+        job-specific commands.  Pass an empty list to clear.
+
+        Args:
+            script: List of rpascript command strings.
+        """
+        driver = self._require_connected()
+        driver.set_head_script(script)
+
+    def get_head_script(self) -> list[str]:
+        """Return the current head script."""
+        driver = self._require_connected()
+        return driver.get_head_script()
+
+    def set_tail_script(self, script: list[str]) -> None:
+        """Set the tail script executed after every job.
+
+        The tail script runs automatically by ``run_job`` after the
+        job-specific commands.  Pass an empty list to clear.
+
+        Args:
+            script: List of rpascript command strings.
+        """
+        driver = self._require_connected()
+        driver.set_tail_script(script)
+
+    def get_tail_script(self) -> list[str]:
+        """Return the current tail script."""
+        driver = self._require_connected()
+        return driver.get_tail_script()
+
+    def run_job(self, script: list[str],
+                auto_checksum: bool = False) -> None:
+        """Run a job with automatic head and tail composition.
+
+        Executes: head_script + *script* + tail_script.  For a raw
+        script without head/tail, use ``run()`` instead.
+
+        Args:
+            script: Job-specific rpascript command strings.
+            auto_checksum: Whether to auto-calculate checksums.
+        """
+        if not script:
+            return
+        driver = self._require_connected()
+        driver.run_job(script, auto_checksum=auto_checksum)
+
+    def set_protect(self, enabled: bool) -> None:
+        """Enable or disable protect mode.
+
+        When enabled, the machine will not execute move/cut commands,
+        allowing safe dry-run testing.
+        """
+        driver = self._require_connected()
+        driver.set_protect(enabled)
+
+    @property
+    def protect_enabled(self) -> bool:
+        """Whether protect mode is currently enabled."""
+        if self._driver is None:
+            return False
+        return self._driver.protect_enabled
+
     # --- Status ---
 
     @property
@@ -181,6 +249,21 @@ class RpaDirectDriver:
         """
         driver = self._require_connected()
         driver.register_reply_listener(callback)
+
+    def unregister_status_listener(self) -> None:
+        """Unregister the status listener."""
+        driver = self._require_connected()
+        driver.unregister_status_listener()
+
+    def unregister_error_listener(self) -> None:
+        """Unregister the error listener."""
+        driver = self._require_connected()
+        driver.unregister_error_listener()
+
+    def unregister_reply_listener(self) -> None:
+        """Unregister the reply listener."""
+        driver = self._require_connected()
+        driver.unregister_reply_listener()
 
     # --- Internal helpers ---
 

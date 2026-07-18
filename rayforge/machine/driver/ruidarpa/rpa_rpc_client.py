@@ -192,12 +192,9 @@ class RpaRpcClient:
         """
         self._require_connected()
         if self._status_listener is not None:
-            try:
-                self._conn.root.exposed_unregister_status_listener(
-                    self._status_listener,
-                )
-            except AttributeError:
-                pass  # Server may not support unregister (pre-v0.8.0)
+            self._conn.root.exposed_unregister_status_listener(
+                self._status_listener,
+            )
             self._status_listener = None
 
     def unregister_error_listener(self, callback: Callable) -> None:
@@ -211,12 +208,9 @@ class RpaRpcClient:
         """
         self._require_connected()
         if self._error_listener is not None:
-            try:
-                self._conn.root.exposed_unregister_error_listener(
-                    self._error_listener,
-                )
-            except AttributeError:
-                pass  # Server may not support unregister (pre-v0.8.0)
+            self._conn.root.exposed_unregister_error_listener(
+                self._error_listener,
+            )
             self._error_listener = None
 
     def unregister_reply_listener(self, callback: Callable) -> None:
@@ -230,12 +224,9 @@ class RpaRpcClient:
         """
         self._require_connected()
         if self._reply_listener is not None:
-            try:
-                self._conn.root.exposed_unregister_reply_listener(
-                    self._reply_listener,
-                )
-            except AttributeError:
-                pass  # Server may not support unregister (pre-v0.8.0)
+            self._conn.root.exposed_unregister_reply_listener(
+                self._reply_listener,
+            )
             self._reply_listener = None
 
     # --- Internal helpers ---

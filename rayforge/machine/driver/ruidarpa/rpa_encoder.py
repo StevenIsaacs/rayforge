@@ -300,7 +300,10 @@ class RuidaRPAEncoder(OpsEncoder):
         """Emit a power command line and update tracked state."""
         power_pct = power_norm * 100.0
         self.power = power_pct
-        self._emit([f"IMD_POWER_1 Power={power_pct:.1f}%"])
+        self._emit([
+            f"MIN_POWER_1 Power={power_pct:.1f}%",
+            f"MAX_POWER_1 Power={power_pct:.1f}%",
+            ])
 
     def _handle_set_power(self, ops: Ops, idx: int) -> None:
         """Set laser power, skipping redundant values."""
@@ -417,8 +420,8 @@ class RuidaRPAEncoder(OpsEncoder):
         - Array Settings (§10.7)
         """
         lines: List[str] = [
-            "# JOB_START",
-            "# HEADER",
+            "# Start of Ruida RPA script",
+            "# Header",
             "REF_POINT_ABSOLUTE",
             "SET_ABSOLUTE",
             "REF_POINT_SET",
@@ -459,18 +462,16 @@ class RuidaRPAEncoder(OpsEncoder):
                     )
 
         lines.extend([
-            "# JOB SETTINGS",
+            "# Job Settings",
             f"JOB_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
             f"JOB_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
             f"DOCUMENT_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
             f"DOCUMENT_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
-            "JOB_COPIES Columns=1 Rows=1 XStep=0.000mm YStep=0.000mm",
-            "ARRAY_DIRECTION Dir:0",
         ])
 
         # ── Layer Settings (§10.5) — skip layers with no MOVE/CUT ──
         if self.doc is not None:
-            lines.append("# LAYER SETTINGS")
+            lines.append("# Layer Settings")
             for i, layer in enumerate(self.doc.layers):
                 if layer.uid not in self._active_layer_uids:
                     logger.debug(
@@ -478,7 +479,7 @@ class RuidaRPAEncoder(OpsEncoder):
                         i, layer.uid,
                     )
                     lines.append(
-                        f"# LAYER {i} SKIPPED (no geometry)"
+                        f"# Layer {i} skipped (no geometry)"
                     )
                     continue
                 bounds = self._layer_bounds.get(
@@ -498,35 +499,14 @@ class RuidaRPAEncoder(OpsEncoder):
 
         # ── Offset Settings (§10.6) ──
         lines.extend([
-            "# OFFSET SETTINGS",
-            "PEN_OFFSET_AXIS Axis:X REL=0.000mm",
-            "PEN_OFFSET_AXIS Axis:Y REL=0.000mm",
-            "LAYER_OFFSET_AXIS Axis:X REL=0.000mm",
-            "LAYER_OFFSET_AXIS Axis:Y REL=0.000mm",
-            "DISPLAY_OFFSET X=0.000mm Y=0.000mm",
+            "# Offset Settings",
+            "# Not yet supported",
         ])
 
         # ── Array Settings (§10.7) ──
         lines.extend([
-            "# ARRAY SETTINGS",
-            "ELEMENT_MAX_INDEX 0",
-            "ELEMENT_NAME_MAX_INDEX 0",
-            "ELEMENT_INDEX 0",
-            "ELEMENT_NAME_INDEX 0",
-            'ELEMENT_NAME String:"UNNAMED "',
-            f"ELEMENT_ARRAY_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
-            f"ELEMENT_ARRAY_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
-            "ELEMENT_COPIES Columns=1 Rows=1 XStep=0.000mm YStep=0.000mm",
-            "ELEMENT_ARRAY_ADD X=0.000mm Y=0.000mm",
-            "ELEMENT_ARRAY_MIRROR 0",
-            "ARRAY_START 0",
-            "SET_CURRENT_ELEMENT_INDEX 0",
-            f"ARRAY_TOP_RIGHT X={job_tr_x:.3f}mm Y={job_tr_y:.3f}mm",
-            f"ARRAY_BOTTOM_LEFT X={job_bl_x:.3f}mm Y={job_bl_y:.3f}mm",
-            "ARRAY_ADD X=0.000mm Y=0.000mm",
-            "ARRAY_MIRROR 0",
-            "ARRAY_EVEN_DISTANCE XStep=0.000mm YStep=0.000mm",
-            "ARRAY_COPIES Columns=1 Rows=1 XStep=0.000mm YStep=0.000mm",
+            "# Array Settings",
+            "# Not yet supported",
         ])
 
         self._emit(lines)
@@ -566,12 +546,10 @@ class RuidaRPAEncoder(OpsEncoder):
         bl_xy = f"X={bl_x:.3f}mm Y={bl_y:.3f}mm"
 
         lines.extend([
-            f"# LAYER {layer_index} SETTINGS",
+            f"# Layer {layer_index} settings",
             f"SPEED_LASER_1_LAYER Layer:{layer_index} Speed:{speed:.3f}mm/S",
             f"MIN_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
             f"MAX_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
-            f"MIN_POWER_2_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
-            f"MAX_POWER_2_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
             f"LAYER_COLOR Layer:{layer_index} Color:\\{color}",
             f"LAYER_ATTRIBUTES Layer:{layer_index} 3",
             f"LAYER_TOP_RIGHT Layer:{layer_index} {tr_xy}",
@@ -588,11 +566,10 @@ class RuidaRPAEncoder(OpsEncoder):
         The checksum is auto-calculated by the driver when auto_checksum=True.
         """
         self._emit([
-            "# TAIL",
-            "# JOB_END",
+            "# Tail",
+            "# Job End",
             "ARRAY_END",
             "BLOCK_END",
-            "SET_SETTING",
             "END_JOB",
             "EOF",
         ])
@@ -605,15 +582,15 @@ class RuidaRPAEncoder(OpsEncoder):
                 layer_uid, 0
             )
             self._emit([
-                f"# LAYER {layer_index} SKIPPED (no geometry)",
+                f"# Layer {layer_index} skipped (no geometry)",
             ])
             self._active_layer = False
             return
         self._active_layer = True
         self.layer = self._layer_index_by_uid.get(layer_uid, 0)
         self._emit([
-            f"# LAYER {self.layer} ACTIONS",
-            f"# LAYER_START uid={layer_uid} part={self.layer}",
+            f"# Layer {self.layer} ACTIONS",
+            f"# Layer Start uid={layer_uid} part={self.layer}",
             f"SELECT_LAYER Layer:{self.layer}",
         ])
 
@@ -621,27 +598,27 @@ class RuidaRPAEncoder(OpsEncoder):
         """Emit a layer end marker (skipped for layers with no ops)."""
         if not self._active_layer:
             return
-        self._emit(["# LAYER_END"])
+        self._emit(["# Layer End"])
 
     def _handle_workpiece_start(self, ops: Ops, idx: int) -> None:
         """Emit a workpiece start marker."""
         wp_uid = ops.workpiece_uid(idx)
-        self._emit([f"# WORKPIECE_START uid={wp_uid}"])
+        self._emit([f"# Workpiece Start uid={wp_uid}"])
 
     def _handle_workpiece_end(self) -> None:
         """Emit a workpiece end marker."""
-        self._emit(["# WORKPIECE_END"])
+        self._emit(["# Workpiece End"])
 
     def _handle_ops_section_start(self) -> None:
         """Emit nothing for ops section start.
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        self._emit(["# OPS ACTIONS", "# OPS_SECTION_START"])
+        self._emit(["# Ops Actions", "# Ops Section Start"])
 
     def _handle_ops_section_end(self) -> None:
         """Emit nothing for ops section end.
 
         Section framing is handled by JOB_START/JOB_END.
         """
-        self._emit(["# OPS_SECTION_END"])
+        self._emit(["# Ops Section End"])

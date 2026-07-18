@@ -133,6 +133,54 @@ class RuidaRPAAdapter(Driver):
             return f"ruidarpa://{usb}"
         return None
 
+    # --- Head/Tail scripts & Protect ---
+
+    async def get_head_script(self) -> list[str]:
+        """Return the head script from the backend."""
+        if self._backend is None:
+            return []
+        if isinstance(self._backend, RpaDirectDriver):
+            return self._backend.get_head_script()
+        # TUI RPC mode doesn't expose head/tail
+        return []
+
+    async def set_head_script(self, script: list[str]) -> None:
+        """Set the head script on the backend."""
+        if self._backend is None:
+            return
+        if isinstance(self._backend, RpaDirectDriver):
+            self._backend.set_head_script(script)
+
+    async def get_tail_script(self) -> list[str]:
+        """Return the tail script from the backend."""
+        if self._backend is None:
+            return []
+        if isinstance(self._backend, RpaDirectDriver):
+            return self._backend.get_tail_script()
+        return []
+
+    async def set_tail_script(self, script: list[str]) -> None:
+        """Set the tail script on the backend."""
+        if self._backend is None:
+            return
+        if isinstance(self._backend, RpaDirectDriver):
+            self._backend.set_tail_script(script)
+
+    async def get_protect(self) -> bool:
+        """Return whether protect mode is enabled."""
+        if self._backend is None:
+            return False
+        if isinstance(self._backend, RpaDirectDriver):
+            return self._backend.protect_enabled
+        return False
+
+    async def set_protect(self, enabled: bool) -> None:
+        """Enable or disable protect mode."""
+        if self._backend is None:
+            return
+        if isinstance(self._backend, RpaDirectDriver):
+            self._backend.set_protect(enabled)
+
     # --- Classmethods ---
 
     @classmethod
@@ -449,7 +497,7 @@ class RuidaRPAAdapter(Driver):
                        extra=self._log_extra(
                            "TUI_RPC" if self._tui_mode else "RPA"))
 
-    def _on_rpa_reply(self, replies: tuple[str, ...]) -> None:
+    def _on_rpa_reply(self, replies: list[str]) -> None:
         """Handle reply data from the Ruida controller."""
         if self._shutting_down:
             return
@@ -480,7 +528,12 @@ class RuidaRPAAdapter(Driver):
                     await loop.run_in_executor(None, client.stop)
                     await loop.run_in_executor(None, client.disconnect)
             else:
-                await loop.run_in_executor(None, self._backend.stop)
+                driver: RpaDirectDriver = self._backend  # type: ignore
+                if driver.is_connected:
+                    driver.unregister_status_listener()
+                    driver.unregister_error_listener()
+                    driver.unregister_reply_listener()
+                await loop.run_in_executor(None, driver.stop)
         except Exception:
             logger.exception("Error stopping RPA backend")
 
@@ -500,9 +553,14 @@ class RuidaRPAAdapter(Driver):
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, self._backend.run, script_lines, auto_checksum
-        )
+        if isinstance(self._backend, RpaDirectDriver):
+            await loop.run_in_executor(
+                None, self._backend.run_job, script_lines, auto_checksum
+            )
+        else:
+            await loop.run_in_executor(
+                None, self._backend.run, script_lines, auto_checksum
+            )
 
     # --- Job control ---
 
