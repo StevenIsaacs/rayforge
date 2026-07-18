@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple
 
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
+from raygeo.ops.state import AirAssistMode
 from raygeo.ops.types import CommandType
 
 from rayforge.pipeline.encoder.base import (
@@ -156,9 +157,9 @@ class RuidaRPAEncoder(OpsEncoder):
         elif ct == CommandType.SET_PULSE_WIDTH:
             self._handle_set_pulse_width(ops, idx)
         elif ct == CommandType.SET_COOLANT:
-            # TODO: May be renamed to SET_AIR_ASSIST in the future, but for now
-            # we handle it as coolant.
-            self._handle_air_assist(ops, idx)
+            # Legacy: SET_COOLANT with mode "Air" used for air assist.
+            # Modern code paths use SET_AIR_ASSIST instead.
+            self._handle_coolant_as_air_assist(ops, idx)
         elif ct == CommandType.SET_HEAD:
             self._handle_set_laser(ops, idx, machine)
         elif ct == CommandType.MOVE_TO:
@@ -191,6 +192,16 @@ class RuidaRPAEncoder(OpsEncoder):
             self._handle_ops_section_start()
         elif ct == CommandType.OPS_SECTION_END:
             self._handle_ops_section_end()
+        elif ct == CommandType.SET_AIR_ASSIST:
+            self._handle_set_air_assist(ops, idx)
+        elif ct == CommandType.SET_SPINDLE_RPM:
+            pass  # Ruida is laser-only; spindle not applicable
+        elif ct == CommandType.SET_HEAD_COOLANT:
+            pass  # Per-head coolant not yet supported
+        elif ct == CommandType.STATE_BLOCK_START:
+            pass  # Structural marker; no rpascript output
+        elif ct == CommandType.STATE_BLOCK_END:
+            pass  # Structural marker; no rpascript output
         else:
             raise ValueError(f"Unknown command type: {ct}")
 
@@ -351,10 +362,30 @@ class RuidaRPAEncoder(OpsEncoder):
         pw_ms = pw_us / 1000.0
         self._emit([f"LASER_INTERVAL {pw_ms:.3f}mS"])
 
-    def _handle_air_assist(self, ops: Ops, idx: int) -> None:
-        """Handle SetCoolantCommand - update coolant state."""
+    def _handle_coolant_as_air_assist(self, ops: Ops, idx: int) -> None:
+        """Handle legacy SET_COOLANT command used for air assist.
+
+        Checks coolant mode string == "Air" for backward compatibility.
+        New code paths should use SET_AIR_ASSIST instead.
+        """
         mode = ops.coolant(idx)
         if mode == "Air":
+            if not self.air_assist:
+                self.air_assist = True
+                self._emit(["AIR_ASSIST_ON"])
+        else:
+            if self.air_assist:
+                self.air_assist = False
+                self._emit(["AIR_ASSIST_OFF"])
+
+    def _handle_set_air_assist(self, ops: Ops, idx: int) -> None:
+        """Handle SET_AIR_ASSIST command — emit AIR_ASSIST_ON/OFF.
+
+        Unlike SET_COOLANT (which checks coolant mode string == "Air"),
+        this reads AirAssistMode directly from the ops.
+        """
+        mode = ops.air_assist(idx)
+        if mode == AirAssistMode.ON:
             if not self.air_assist:
                 self.air_assist = True
                 self._emit(["AIR_ASSIST_ON"])
