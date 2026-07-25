@@ -182,6 +182,7 @@ wrapper (or any other pixi command).
 - Do not repeat files in responses unless they have changes.
 
 ## Ruida Driver (ruidarpa) Development
+- The focus is development of the ruidarpa driver. Because of this it is not necessary to run a complete test suite. Only the tests directly related to the ruidarpa driver are needed.
 - The Ruida driver (ruidarpa) in development is in rayforge/machine/driver/ruidarpa
 - The Ruida driver in rayforge/machine/driver/ruida is a prototype and is for reference only. Never modify files in the rayforge/machine/driver/ruida directory tree.
-- The ruidarpa driver depends upon external/ruida-protocol-analyzer which is maintained elsewhere. Do not modify files in the external/ruida-protocol-analyzer directory tree.
+- The ruidarpa driver depends upon external/ruida-pa which is maintained elsewhere. Do not modify files in the external/ruida-pa directory tree.

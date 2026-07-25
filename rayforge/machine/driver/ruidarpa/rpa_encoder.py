@@ -145,6 +145,8 @@ class RuidaRPAEncoder(OpsEncoder):
             machine: Machine configuration for laser head resolution.
         """
         ct = ops.command_type(idx)
+        if ct not in (CommandType.MOVE_TO, CommandType.LINE_TO):
+            self._emit([f"# Ops command: {ct.name}"])
 
         if ct == CommandType.SET_POWER:
             self._handle_set_power(ops, idx)
@@ -348,7 +350,7 @@ class RuidaRPAEncoder(OpsEncoder):
         freq_hz = ops.frequency(idx)
         freq_khz = freq_hz / 1000.0
         self._emit([
-            f"FREQUENCY_LAYER Laser={self.active_laser}"
+            f"LAYER_FREQUENCY Laser={self.active_laser}"
             f" Layer={self.layer} Freq={freq_khz:.3f}KHz"
         ])
 
@@ -578,9 +580,9 @@ class RuidaRPAEncoder(OpsEncoder):
 
         lines.extend([
             f"# Layer {layer_index} settings",
-            f"SPEED_LASER_1_LAYER Layer:{layer_index} Speed:{speed:.3f}mm/S",
-            f"MIN_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
-            f"MAX_POWER_1_LAYER Layer:{layer_index} Power:{power_pct:.3f}%",
+            f"LAYER_SPEED_LASER_1 Layer:{layer_index} Speed:{speed:.3f}mm/S",
+            f"LAYER_MIN_POWER_1 Layer:{layer_index} Power:{power_pct:.3f}%",
+            f"LAYER_MAX_POWER_1 Layer:{layer_index} Power:{power_pct:.3f}%",
             f"LAYER_COLOR Layer:{layer_index} Color:\\{color}",
             f"LAYER_ATTRIBUTES Layer:{layer_index} 3",
             f"LAYER_TOP_RIGHT Layer:{layer_index} {tr_xy}",
