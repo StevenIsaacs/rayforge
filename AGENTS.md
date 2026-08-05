@@ -186,3 +186,8 @@ wrapper (or any other pixi command).
 - The Ruida driver (ruidarpa) in development is in rayforge/machine/driver/ruidarpa
 - The Ruida driver in rayforge/machine/driver/ruida is a prototype and is for reference only. Never modify files in the rayforge/machine/driver/ruida directory tree.
 - The ruidarpa driver depends upon external/ruida-pa which is maintained elsewhere. Do not modify files in the external/ruida-pa directory tree.
+- `commit.txt`: To be written only when the user requests it (e.g. "Write a new commit.txt"). This contains pre-composed change summary lines and placed in the project root. Multiple summary lines are used when more than one issue (i.e. new feature or problem fix) has been resolved in a single commit. NOTE: Each issue should have only one line. Change details are to be written to the testing log (below). Each summary line should be prefixed a word indicating the nature of the change. These are:
+	- `version:` The version number has been bumped.
+	- `feature:` A new feature has been added.
+	- `fix:` A problem has been fixed.
+- Testing logs are maintained in `docs/logs` and have names formatted as `<__version__>-testing.md`. **IMPORTANT:** The version (`<__version__>`) is the ruida-pa version. These are updated with detailed Problem, Solution and Verification information sections (not a bullet list). The testing log for the current version is to be updated when `commit.txt` is written.
