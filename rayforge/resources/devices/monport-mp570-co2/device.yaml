@@ -13,8 +13,8 @@ machine:
   max_cut_speed: 50000
   home_on_start: true
   driver_args:
-    host: ''
-    usb: ''
+    udp_host: ''
+    usb_device: ''
   heads:
   - max_power: 1000
     frame_power_percent: 0.0

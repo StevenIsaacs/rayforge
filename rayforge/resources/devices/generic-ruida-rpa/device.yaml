@@ -6,5 +6,5 @@ machine:
   driver: RuidaRPAAdapter
   origin: top_right
   driver_args:
-    host: ''
-    usb: ''
+    udp_host: ''
+    usb_device: ''

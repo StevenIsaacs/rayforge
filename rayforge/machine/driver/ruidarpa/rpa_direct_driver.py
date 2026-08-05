@@ -44,6 +44,10 @@ class RpaDirectDriver:
               usb_device: Optional[str] = None) -> bool:
         """Start connection to the Ruida controller.
 
+        Idempotent: starting with unchanged parameters is a no-op, while
+        a different host or device restarts the connection. None reuses
+        the previously used value.
+
         Args:
             udp_host: UDP hostname/IP (e.g. '192.168.1.100').
             usb_device: USB device path.
@@ -51,10 +55,8 @@ class RpaDirectDriver:
         Returns:
             True if connection succeeded.
         """
-        self._ensure_imported()
-        self._driver = RdDriver()
-        result = self._driver.start(udp_host=udp_host,
-                                    usb_device=usb_device)
+        driver = self._ensure_driver()
+        result = driver.start(udp_host=udp_host, usb_device=usb_device)
         if result:
             _logger.info("RPA direct driver connected; udp=%s, usb=%s",
                          udp_host, usb_device)
@@ -63,13 +65,16 @@ class RpaDirectDriver:
         return result
 
     def stop(self) -> None:
-        """Disconnect and clean up."""
+        """Disconnect the driver.
+
+        The underlying RdDriver instance is retained so that head/tail
+        script settings and connection parameters survive a restart.
+        """
         if self._driver is not None:
             try:
                 self._driver.stop()
             except Exception:
                 _logger.exception("Error stopping RPA direct driver")
-            self._driver = None
 
     @property
     def is_connected(self) -> bool:
@@ -81,6 +86,9 @@ class RpaDirectDriver:
     def run(self, script: list[str],
             auto_checksum: bool = False) -> None:
         """Run an Rpascript.
+
+        Queues the raw script without head/tail composition. For a
+        script with automatic head/tail framing, use ``run_job()``.
 
         Args:
             script: List of Rpascript command strings.
@@ -152,41 +160,39 @@ class RpaDirectDriver:
         """Set the head script executed before every job.
 
         The head script runs automatically by ``run_job`` before the
-        job-specific commands.  Pass an empty list to clear.
+        job-specific commands. Pass an empty list to clear. May be
+        called before ``start()``.
 
         Args:
             script: List of rpascript command strings.
         """
-        driver = self._require_connected()
-        driver.set_head_script(script)
+        self._ensure_driver().set_head_script(script)
 
     def get_head_script(self) -> list[str]:
         """Return the current head script."""
-        driver = self._require_connected()
-        return driver.get_head_script()
+        return self._ensure_driver().get_head_script()
 
     def set_tail_script(self, script: list[str]) -> None:
         """Set the tail script executed after every job.
 
         The tail script runs automatically by ``run_job`` after the
-        job-specific commands.  Pass an empty list to clear.
+        job-specific commands. Pass an empty list to clear. May be
+        called before ``start()``.
 
         Args:
             script: List of rpascript command strings.
         """
-        driver = self._require_connected()
-        driver.set_tail_script(script)
+        self._ensure_driver().set_tail_script(script)
 
     def get_tail_script(self) -> list[str]:
         """Return the current tail script."""
-        driver = self._require_connected()
-        return driver.get_tail_script()
+        return self._ensure_driver().get_tail_script()
 
     def run_job(self, script: list[str],
                 auto_checksum: bool = False) -> None:
         """Run a job with automatic head and tail composition.
 
-        Executes: head_script + *script* + tail_script.  For a raw
+        Executes: head_script + *script* + tail_script. For a raw
         script without head/tail, use ``run()`` instead.
 
         Args:
@@ -201,11 +207,10 @@ class RpaDirectDriver:
     def set_protect(self, enabled: bool) -> None:
         """Enable or disable protect mode.
 
-        When enabled, the machine will not execute move/cut commands,
-        allowing safe dry-run testing.
+        When enabled, the machine will not execute SET_SETTING commands,
+        allowing safe dry-run testing. May be called before ``start()``.
         """
-        driver = self._require_connected()
-        driver.set_protect(enabled)
+        self._ensure_driver().set_protect(enabled)
 
     @property
     def protect_enabled(self) -> bool:
@@ -218,8 +223,12 @@ class RpaDirectDriver:
 
     @property
     def machine_status(self) -> dict:
-        """Current machine status dict."""
-        if self._driver is None:
+        """Current machine status dict.
+
+        Returns an empty dict while disconnected, matching the RPC
+        client's disconnected semantics.
+        """
+        if self._driver is None or not self._driver.is_connected:
             return {}
         return self._driver.machine_status
 
@@ -231,39 +240,48 @@ class RpaDirectDriver:
         Callback signature: callable(status_event: str)
         Status events: CONNECTED, DISCONNECTED, SCRIPT_ERROR, etc.
         """
-        driver = self._require_connected()
-        driver.register_status_listener(callback)
+        self._ensure_driver().register_status_listener(callback)
 
     def register_error_listener(self, callback: Callable) -> None:
         """Register an error listener.
 
         Callback signature: callable(error_message: str)
         """
-        driver = self._require_connected()
-        driver.register_error_listener(callback)
+        self._ensure_driver().register_error_listener(callback)
 
     def register_reply_listener(self, callback: Callable) -> None:
         """Register a reply listener.
 
         Callback signature: callable(reply_data: bytes)
         """
-        driver = self._require_connected()
-        driver.register_reply_listener(callback)
+        self._ensure_driver().register_reply_listener(callback)
 
-    def unregister_status_listener(self) -> None:
-        """Unregister the status listener."""
-        driver = self._require_connected()
-        driver.unregister_status_listener()
+    def unregister_status_listener(self, listener: Callable) -> None:
+        """Unregister a status listener.
 
-    def unregister_error_listener(self) -> None:
-        """Unregister the error listener."""
-        driver = self._require_connected()
-        driver.unregister_error_listener()
+        Args:
+            listener: The exact callable previously passed to
+                :meth:`register_status_listener`.
+        """
+        self._ensure_driver().unregister_status_listener(listener)
 
-    def unregister_reply_listener(self) -> None:
-        """Unregister the reply listener."""
-        driver = self._require_connected()
-        driver.unregister_reply_listener()
+    def unregister_error_listener(self, listener: Callable) -> None:
+        """Unregister an error listener.
+
+        Args:
+            listener: The exact callable previously passed to
+                :meth:`register_error_listener`.
+        """
+        self._ensure_driver().unregister_error_listener(listener)
+
+    def unregister_reply_listener(self, listener: Callable) -> None:
+        """Unregister a reply listener.
+
+        Args:
+            listener: The exact callable previously passed to
+                :meth:`register_reply_listener`.
+        """
+        self._ensure_driver().unregister_reply_listener(listener)
 
     # --- Internal helpers ---
 
@@ -275,8 +293,16 @@ class RpaDirectDriver:
                 "Run: pixi run -e ruidarpa ..."
             )
 
+    def _ensure_driver(self) -> RdDriver:
+        """Return the RdDriver instance, creating it on first use."""
+        self._ensure_imported()
+        if self._driver is None:
+            self._driver = RdDriver()
+        return self._driver
+
     def _require_connected(self) -> RdDriver:
         """Raise RuntimeError if not connected, otherwise return the driver."""
-        if self._driver is None or not self._driver.is_connected:
+        driver = self._ensure_driver()
+        if not driver.is_connected:
             raise RuntimeError("RPA direct driver is not connected")
-        return self._driver
+        return driver

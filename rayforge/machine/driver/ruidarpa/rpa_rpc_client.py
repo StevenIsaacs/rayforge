@@ -22,6 +22,10 @@ else:
         rpyc = None  # type: ignore
         BgServingThread = None  # type: ignore
 
+# RPyC's default sync_request_timeout is 30s; 5s detects a
+# hung-but-alive server in ~5s instead of blocking the caller.
+SYNC_REQUEST_TIMEOUT = 5.0
+
 
 class RpaRpcClient:
     """RPyC client wrapper for remote Ruida controller access.
@@ -42,9 +46,6 @@ class RpaRpcClient:
         self._port = port
         self._conn: Any = None
         self._bg_thread: Any = None
-        self._status_listener: Optional[Callable] = None
-        self._error_listener: Optional[Callable] = None
-        self._reply_listener: Optional[Callable] = None
 
     # --- Lifecycle ---
 
@@ -58,8 +59,15 @@ class RpaRpcClient:
             True if connection succeeded.
         """
         self._ensure_imported()
+        if self._conn is not None:
+            # Defensive re-entrancy guard: never leak a previous
+            # connection when connect() is called while already connected.
+            self.disconnect()
         try:
-            self._conn = rpyc.connect(self._host, self._port)
+            self._conn = rpyc.connect(
+                self._host, self._port,
+                config={"sync_request_timeout": SYNC_REQUEST_TIMEOUT},
+            )
             self._bg_thread = BgServingThread(self._conn)
             _logger.info("RPA RPC client connected to %s:%d",
                          self._host, self._port)
@@ -73,7 +81,11 @@ class RpaRpcClient:
             return False
 
     def disconnect(self) -> None:
-        """Disconnect from the RPyC service."""
+        """Disconnect from the RPyC service.
+
+        Closing the connection is the cleanup path: the server
+        unregisters any callbacks registered by this client.
+        """
         # Close connection FIRST to unblock serve() in the bg thread
         if self._conn is not None:
             try:
@@ -95,12 +107,36 @@ class RpaRpcClient:
 
     @property
     def is_connected(self) -> bool:
-        """Whether the RPyC connection is active."""
-        return (
-            self._conn is not None
-            and self._bg_thread is not None
-            and self._bg_thread._thread.is_alive()
-        )
+        """Whether the remote Ruida controller is connected."""
+        if self._conn is None:
+            return False
+        try:
+            return self._conn.root.is_connected()
+        except Exception:
+            # Dead transport (EOFError/AssertionError/socket errors):
+            # treat as disconnected so the caller can clean up instead
+            # of aborting mid-shutdown.
+            _logger.debug("RPA RPC connection is dead", exc_info=True)
+            return False
+
+    def is_alive(self) -> bool:
+        """Whether the RPyC transport itself is alive.
+
+        Probes the remote service; only call success matters. The
+        remote ``is_connected()`` VALUE is deliberately NOT interpreted
+        — controller up/down transitions are handled by the status
+        listener, not by the health probe.
+        """
+        if self._conn is None:
+            return False
+        try:
+            self._conn.root.is_connected()
+            return True
+        except Exception:
+            # The probe failed: transport dead or sync-request timeout.
+            # Treat as not alive so the caller tears down and reconnects.
+            _logger.debug("RPA RPC probe failed", exc_info=True)
+            return False
 
     # --- Delegated RPC calls ---
 
@@ -126,108 +162,199 @@ class RpaRpcClient:
             auto_checksum: bool = False) -> None:
         """Run an Rpascript on the remote machine.
 
+        Queues the raw script without head/tail composition. For a
+        script with automatic head/tail framing, use ``run_job()``.
+
         Args:
             script: List of Rpascript command strings.
             auto_checksum: Whether to auto-calculate checksums.
         """
+        if not script:
+            return
         self._call("run", script, auto_checksum=auto_checksum)
+
+    def run_job(self, job: list[str],
+                auto_checksum: bool = False) -> None:
+        """Run a staged job on the remote machine.
+
+        The server composes head + job + tail before queuing. For a
+        raw script without head/tail framing, use ``run()`` instead.
+
+        Args:
+            job: Job-specific rpascript command strings.
+            auto_checksum: Whether to auto-calculate checksums.
+        """
+        if not job:
+            return
+        self._call("run_job", job, auto_checksum=auto_checksum)
 
     def cancel_script(self) -> None:
         """Cancel the currently running script remotely."""
         self._call("cancel_script")
 
-    @property
-    def machine_status(self) -> dict:
-        """Current machine status from remote."""
-        if self._conn is None:
-            return {}
-        return self._conn.root.exposed_machine_status()
+    # --- Head/Tail scripts ---
+
+    def set_head_script(self, script: list[str]) -> None:
+        """Set the head script executed before every job remotely.
+
+        Args:
+            script: List of rpascript command strings.
+        """
+        self._call("set_head_script", script)
+
+    def get_head_script(self) -> list[str]:
+        """Return the current head script from the remote machine."""
+        return self._call("get_head_script")
+
+    def set_tail_script(self, script: list[str]) -> None:
+        """Set the tail script executed after every job remotely.
+
+        Args:
+            script: List of rpascript command strings.
+        """
+        self._call("set_tail_script", script)
+
+    def get_tail_script(self) -> list[str]:
+        """Return the current tail script from the remote machine."""
+        return self._call("get_tail_script")
+
+    # --- Live commands ---
+
+    # Jog and home commands execute server-side (TuiAdapter
+    # ``_gluescript_live_command``) and return the sent rpascript lines.
+    # The client must not run those lines again — double execution.
+
+    def jog_xy_to(self, x: float, y: float) -> None:
+        """Jog the remote XY axes to an absolute position."""
+        self._call("jog_xy_to", x, y)
+
+    def jog_x_to(self, x: float) -> None:
+        """Jog the remote X axis to an absolute position."""
+        self._call("jog_x_to", x)
+
+    def jog_y_to(self, y: float) -> None:
+        """Jog the remote Y axis to an absolute position."""
+        self._call("jog_y_to", y)
+
+    def jog_z_to(self, z: float) -> None:
+        """Jog the remote Z axis to an absolute position."""
+        self._call("jog_z_to", z)
+
+    def jog_u_to(self, u: float) -> None:
+        """Jog the remote U axis to an absolute position."""
+        self._call("jog_u_to", u)
+
+    def jog_xy_rel(self, x: Optional[float] = None,
+                   y: Optional[float] = None) -> None:
+        """Jog the remote XY axes relative to the current position."""
+        self._call("jog_xy_rel", x, y)
+
+    def jog_x_rel(self, x: Optional[float] = None) -> None:
+        """Jog the remote X axis relative to the current position."""
+        self._call("jog_x_rel", x)
+
+    def jog_y_rel(self, y: Optional[float] = None) -> None:
+        """Jog the remote Y axis relative to the current position."""
+        self._call("jog_y_rel", y)
+
+    def jog_z_rel(self, z: Optional[float] = None) -> None:
+        """Jog the remote Z axis relative to the current position."""
+        self._call("jog_z_rel", z)
+
+    def jog_u_rel(self, u: Optional[float] = None) -> None:
+        """Jog the remote U axis relative to the current position."""
+        self._call("jog_u_rel", u)
+
+    def jog_set_xy_speed(self, speed: float) -> None:
+        """Set the remote XY jog speed in mm/s."""
+        self._call("jog_set_xy_speed", speed)
+
+    def jog_set_z_speed(self, speed: float) -> None:
+        """Set the remote Z jog speed in mm/s."""
+        self._call("jog_set_z_speed", speed)
+
+    def jog_set_u_speed(self, speed: float) -> None:
+        """Set the remote U jog speed in mm/s."""
+        self._call("jog_set_u_speed", speed)
+
+    def jog_set_xy_rel(self, delta: float) -> None:
+        """Set the remote relative XY jog distance in mm."""
+        self._call("jog_set_xy_rel", delta)
+
+    def jog_set_z_rel(self, delta: float) -> None:
+        """Set the remote relative Z jog distance in mm."""
+        self._call("jog_set_z_rel", delta)
+
+    def jog_set_u_rel(self, delta: float) -> None:
+        """Set the remote relative U jog distance in mm."""
+        self._call("jog_set_u_rel", delta)
+
+    def home(self) -> None:
+        """Home the remote X and Y axes."""
+        self._call("home")
+
+    def home_z(self) -> None:
+        """Home the remote Z axis."""
+        self._call("home_z")
+
+    def home_u(self) -> None:
+        """Home the remote U axis (rotary)."""
+        self._call("home_u")
+
+    # --- Listeners ---
 
     def register_status_listener(self, callback: Callable) -> None:
         """Register a status listener.
 
-        The callback reference is stored internally so that the same
-        Python object (same ``id()``) is used for later unregistration.
-        This is required because RPyC identifies remote callable
-        references by ``id()``, and bound methods create a new object
-        on each access.
+        Register at most once per connection; cleanup is connection
+        close — the server clears listeners via on_disconnect (weakref).
 
         Args:
             callback: Callable accepting a status string.
         """
         self._require_connected()
-        self._status_listener = callback
         self._conn.root.exposed_register_status_listener(callback)
 
     def register_error_listener(self, callback: Callable) -> None:
         """Register an error listener.
 
-        The callback reference is stored internally for reliable
-        unregistration (see :meth:`register_status_listener`).
+        Register at most once per connection; cleanup is connection
+        close — the server clears listeners via on_disconnect (weakref).
+
+        Args:
+            callback: Callable accepting an error string.
         """
         self._require_connected()
-        self._error_listener = callback
         self._conn.root.exposed_register_error_listener(callback)
 
     def register_reply_listener(self, callback: Callable) -> None:
         """Register a reply listener.
 
-        The callback reference is stored internally for reliable
-        unregistration (see :meth:`register_status_listener`).
+        Register at most once per connection; cleanup is connection
+        close — the server clears listeners via on_disconnect (weakref).
+
+        Args:
+            callback: Callable accepting a tuple of reply strings.
         """
         self._require_connected()
-        self._reply_listener = callback
         self._conn.root.exposed_register_reply_listener(callback)
 
-    def unregister_status_listener(self, callback: Callable) -> None:
-        """Unregister a status listener.
+    # --- Properties ---
 
-        Uses the internally stored callback reference (set by
-        :meth:`register_status_listener`) to ensure the same Python
-        object is passed — required for RPyC callable identity matching.
-
-        Args:
-            callback: Ignored; the stored reference is used instead.
-                Included for API consistency.
-        """
-        self._require_connected()
-        if self._status_listener is not None:
-            self._conn.root.exposed_unregister_status_listener(
-                self._status_listener,
-            )
-            self._status_listener = None
-
-    def unregister_error_listener(self, callback: Callable) -> None:
-        """Unregister an error listener.
-
-        Uses the internally stored callback reference (set by
-        :meth:`register_error_listener`) for reliable RPyC unregister.
-
-        Args:
-            callback: Ignored; the stored reference is used instead.
-        """
-        self._require_connected()
-        if self._error_listener is not None:
-            self._conn.root.exposed_unregister_error_listener(
-                self._error_listener,
-            )
-            self._error_listener = None
-
-    def unregister_reply_listener(self, callback: Callable) -> None:
-        """Unregister a reply listener.
-
-        Uses the internally stored callback reference (set by
-        :meth:`register_reply_listener`) for reliable RPyC unregister.
-
-        Args:
-            callback: Ignored; the stored reference is used instead.
-        """
-        self._require_connected()
-        if self._reply_listener is not None:
-            self._conn.root.exposed_unregister_reply_listener(
-                self._reply_listener,
-            )
-            self._reply_listener = None
+    @property
+    def machine_status(self) -> dict:
+        """Current machine status from the remote controller."""
+        if self._conn is None:
+            return {}
+        try:
+            return self._conn.root.machine_status()
+        except Exception:
+            # Dead transport (EOFError/AssertionError/socket errors):
+            # treat as disconnected so the caller can clean up instead
+            # of aborting mid-shutdown.
+            _logger.debug("RPA RPC machine status read failed",
+                          exc_info=True)
+            return {}
 
     # --- Internal helpers ---
 
