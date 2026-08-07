@@ -9,6 +9,8 @@ bounding-box math. Coordinates use mm natively (no unit conversion needed).
 
 from __future__ import annotations
 
+import copy
+import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -45,6 +47,62 @@ _DEFAULT_JOB_LABEL = "Rayforge Job"
 _DEFAULT_LAYER_COLOR = "#00ccff"
 
 
+class _RecordedCall:
+    """Callable that records an invocation into the plan, then forwards.
+
+    Keyword arguments are bound to the target's signature and converted
+    to positional order, so the recorded plan stays a uniform list of
+    ``(name, args)`` pairs replayable on an RPC GlueScript sink.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        target: Any,
+        plan: List[Tuple[str, Tuple]],
+    ) -> None:
+        self._name = name
+        self._target = target
+        self._plan = plan
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        if kwargs:
+            bound = inspect.signature(self._target).bind(*args, **kwargs)
+            bound.apply_defaults()
+            args = tuple(bound.arguments.values())
+        self._plan.append((self._name, copy.deepcopy(args)))
+        return self._target(*args)
+
+
+class _RecordingGlueScriptProxy:
+    """GlueScript proxy that records the encoder's call plan.
+
+    Every attribute access forwards to the wrapped GlueScript, so
+    private state reads (``_job_header``, ``_layer_actions``, ...) keep
+    resolving through ``__getattr__``. Callable attributes return a
+    ``_RecordedCall`` that records the invocation before forwarding.
+    Staging/finalize methods (``stage_gluescript`` and
+    ``stage_gluescript_delta``) are forwarded without recording — they
+    have no replay dispatch case on the RPC sink.
+    """
+
+    _UNRECORDED = frozenset({"stage_gluescript", "stage_gluescript_delta"})
+
+    def __init__(
+        self,
+        gluescript: Any,
+        plan: List[Tuple[str, Tuple]],
+    ) -> None:
+        self._wrapped = gluescript
+        self._plan = plan
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._wrapped, name)
+        if name in self._UNRECORDED or not callable(attr):
+            return attr
+        return _RecordedCall(name, attr, self._plan)
+
+
 class RuidaRPAEncoder(OpsEncoder):
     """Encodes Ops commands into rpascript text via ruida-pa GlueScript.
 
@@ -72,8 +130,19 @@ class RuidaRPAEncoder(OpsEncoder):
         self._actions_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple]] = {}
+        self._gluescript_plan: List[Tuple[str, Tuple]] = []
 
     # -- Public API ---------------------------------------------------------
+
+    def gluescript_plan(self) -> List[Tuple[str, Tuple]]:
+        """Return a deep copy of the recorded GlueScript call plan.
+
+        The plan holds the exact interleaved sequence of GlueScript
+        method calls made while encoding, as ``(method_name, args)``
+        pairs. It can be replayed on an RPC GlueScript sink to re-stage
+        the job server-side without resending the assembled rpascript.
+        """
+        return copy.deepcopy(self._gluescript_plan)
 
     def encode(
         self, ops: Ops, machine: "Machine", doc: "Doc"
@@ -98,6 +167,11 @@ class RuidaRPAEncoder(OpsEncoder):
                 "ruidadriver GlueScript is unavailable — install the "
                 "ruida-pa package to use the ruidarpa driver"
             )
+        if not hasattr(GlueScript, "stage_gluescript"):
+            raise RuntimeError(
+                "GlueScript.stage_gluescript() is missing — ruida-pa "
+                ">= 0.14.0 is required to use the ruidarpa driver"
+            )
         if ops.len() == 0:
             self.op_map = MachineCodeOpMap()
             return EncodedOutput(text="", op_map=self.op_map)
@@ -110,7 +184,9 @@ class RuidaRPAEncoder(OpsEncoder):
             layer.uid: i for i, layer in enumerate(doc.layers)
         }
         gluescript_type: Any = GlueScript
-        self._gluescript = gluescript_type()
+        self._gluescript = _RecordingGlueScriptProxy(
+            gluescript_type(), self._gluescript_plan
+        )
 
         for i in range(ops.len()):
             self._snapshot_sections()
@@ -118,7 +194,8 @@ class RuidaRPAEncoder(OpsEncoder):
             self._record_contribution(i)
 
         try:
-            lines = self._gluescript.stage_rpascript()
+            self._gluescript.stage_gluescript()
+            lines = self._gluescript.rpascript
         except RuntimeError as exc:
             raise RuntimeError(
                 "Failed to stage rpascript — the ops sequence must start "
@@ -127,7 +204,11 @@ class RuidaRPAEncoder(OpsEncoder):
 
         self._build_op_map(len(lines))
         text = "\n".join(lines)
-        return EncodedOutput(text=text, op_map=self.op_map)
+        return EncodedOutput(
+            text=text,
+            op_map=self.op_map,
+            rpa_plan=self.gluescript_plan(),
+        )
 
     # -- Command dispatch ---------------------------------------------------
 
@@ -225,16 +306,16 @@ class RuidaRPAEncoder(OpsEncoder):
         logger.warning(
             "%s power %.1f%% is below the %d%% minimum — "
             "clamping min and max power to %d%%",
-            source, power_pct, _MIN_LAYER_POWER_PERCENT,
+            source,
+            power_pct,
+            _MIN_LAYER_POWER_PERCENT,
             _MIN_LAYER_POWER_PERCENT,
         )
         return _MIN_LAYER_POWER_PERCENT
 
     def _emit_power_lines(self, power_fraction: float) -> None:
         """Emit MIN/MAX power lines for the current layer action block."""
-        power_pct = self._clamp_power_pct(
-            power_fraction * 100.0, "Per-op"
-        )
+        power_pct = self._clamp_power_pct(power_fraction * 100.0, "Per-op")
         self._add_layer_action(
             [
                 f"MIN_POWER_1 Power={power_pct:.1f}%",
@@ -274,13 +355,9 @@ class RuidaRPAEncoder(OpsEncoder):
             frequency_hz = int(first_step.frequency)
 
         layer_label = (
-            f"Layer {layer.name!r}"
-            if layer is not None
-            else "Layer ?"
+            f"Layer {layer.name!r}" if layer is not None else "Layer ?"
         )
-        power_pct = self._clamp_power_pct(
-            power_fraction * 100.0, layer_label
-        )
+        power_pct = self._clamp_power_pct(power_fraction * 100.0, layer_label)
 
         frequency_khz = (
             frequency_hz / 1000.0
@@ -435,9 +512,9 @@ class RuidaRPAEncoder(OpsEncoder):
         """
         laser_uid = ops.head_uid(idx)
         try:
-            device = int(laser_uid.split("_")[-1]) % 2
+            device = ((int(laser_uid.split("_")[-1]) - 1) % 2) + 1
         except (ValueError, IndexError):
-            device = sum(ord(c) for c in laser_uid) % 2
+            device = (sum(ord(c) for c in laser_uid) % 2) + 1
 
         try:
             laser_head = next(
@@ -449,8 +526,8 @@ class RuidaRPAEncoder(OpsEncoder):
         except (AttributeError, TypeError):
             logger.debug(
                 "machine.heads not available, falling back to "
-                "parsed laser_uid %% 2 for "
-                "laser device selection"
+                "parsed laser_uid modulo for "
+                "1-based laser device selection"
             )
 
         if device == self.active_laser:

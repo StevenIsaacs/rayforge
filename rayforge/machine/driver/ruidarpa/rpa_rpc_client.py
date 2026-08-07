@@ -40,8 +40,9 @@ class RpaRpcClient:
     DEFAULT_HOST = "127.0.0.1"
     DEFAULT_PORT = 18812
 
-    def __init__(self, host: str = DEFAULT_HOST,
-                 port: int = DEFAULT_PORT) -> None:
+    def __init__(
+        self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+    ) -> None:
         self._host = host
         self._port = port
         self._conn: Any = None
@@ -65,16 +66,27 @@ class RpaRpcClient:
             self.disconnect()
         try:
             self._conn = rpyc.connect(
-                self._host, self._port,
-                config={"sync_request_timeout": SYNC_REQUEST_TIMEOUT},
+                self._host,
+                self._port,
+                config={
+                    "sync_request_timeout": SYNC_REQUEST_TIMEOUT,
+                    # Server-raised GlueScriptDeltaMismatchError must
+                    # arrive typed so the delta path can distinguish a
+                    # contiguity break from other failures; rpyc 6.0.2
+                    # defaults both flags to False (GenericException).
+                    "import_custom_exceptions": True,
+                    "instantiate_custom_exceptions": True,
+                },
             )
             self._bg_thread = BgServingThread(self._conn)
-            _logger.info("RPA RPC client connected to %s:%d",
-                         self._host, self._port)
+            _logger.info(
+                "RPA RPC client connected to %s:%d", self._host, self._port
+            )
             return True
         except ConnectionRefusedError:
-            _logger.error("RPA RPC connection refused to %s:%d",
-                          self._host, self._port)
+            _logger.error(
+                "RPA RPC connection refused to %s:%d", self._host, self._port
+            )
             return False
         except Exception:
             _logger.exception("RPA RPC connection failed")
@@ -140,8 +152,9 @@ class RpaRpcClient:
 
     # --- Delegated RPC calls ---
 
-    def start(self, udp_host: Optional[str] = None,
-              usb_device: Optional[str] = None) -> bool:
+    def start(
+        self, udp_host: Optional[str] = None, usb_device: Optional[str] = None
+    ) -> bool:
         """Start the remote TUI adapter.
 
         Args:
@@ -151,15 +164,13 @@ class RpaRpcClient:
         Returns:
             True if started successfully.
         """
-        return self._call("start", udp_host=udp_host,
-                          usb_device=usb_device)
+        return self._call("start", udp_host=udp_host, usb_device=usb_device)
 
     def stop(self) -> None:
         """Stop the remote TUI adapter."""
         self._call("stop")
 
-    def run(self, script: list[str],
-            auto_checksum: bool = False) -> None:
+    def run(self, script: list[str], auto_checksum: bool = False) -> None:
         """Run an Rpascript on the remote machine.
 
         Queues the raw script without head/tail composition. For a
@@ -173,24 +184,50 @@ class RpaRpcClient:
             return
         self._call("run", script, auto_checksum=auto_checksum)
 
-    def run_job(self, job: list[str],
-                auto_checksum: bool = False) -> None:
-        """Run a staged job on the remote machine.
+    def run_job(
+        self, job: Optional[list[str]] = None, auto_checksum: bool = False
+    ) -> None:
+        """Run a job on the remote machine.
 
-        The server composes head + job + tail before queuing. For a
-        raw script without head/tail framing, use ``run()`` instead.
+        When ``job`` is omitted (None), the rpascript most recently
+        staged server-side via ``stage_gluescript()`` is run instead —
+        the server composes head + staged rpascript + tail before
+        queuing. For a raw script without head/tail framing, use
+        ``run()`` instead.
 
         Args:
-            job: Job-specific rpascript command strings.
+            job: Job-specific rpascript command strings. When None,
+                the staged rpascript is run.
             auto_checksum: Whether to auto-calculate checksums.
         """
-        if not job:
+        if job is not None and not job:
             return
         self._call("run_job", job, auto_checksum=auto_checksum)
+
+    def run_staged_job(self, auto_checksum: bool = False) -> None:
+        """Run the rpascript staged server-side via ``stage_gluescript``.
+
+        The server composes head + staged rpascript + tail before
+        queuing. Raises remotely when nothing has been staged.
+
+        Args:
+            auto_checksum: Whether to auto-calculate checksums.
+        """
+        self._call("run_job", None, auto_checksum=auto_checksum)
 
     def cancel_script(self) -> None:
         """Cancel the currently running script remotely."""
         self._call("cancel_script")
+
+    def _reset_staged(self) -> None:
+        """Reset the server-side staged GlueScript state.
+
+        Drops any staged rpascript (RPC ``new_gluescript``) so a stale
+        job cannot be run by ``run_staged_job()`` after a failed or
+        aborted stage. Private: only the driver's staged pipeline needs
+        it.
+        """
+        self._call("new_gluescript")
 
     # --- Head/Tail scripts ---
 
@@ -244,8 +281,9 @@ class RpaRpcClient:
         """Jog the remote U axis to an absolute position."""
         self._call("jog_u_to", u)
 
-    def jog_xy_rel(self, x: Optional[float] = None,
-                   y: Optional[float] = None) -> None:
+    def jog_xy_rel(
+        self, x: Optional[float] = None, y: Optional[float] = None
+    ) -> None:
         """Jog the remote XY axes relative to the current position."""
         self._call("jog_xy_rel", x, y)
 
@@ -342,6 +380,19 @@ class RpaRpcClient:
     # --- Properties ---
 
     @property
+    def root(self) -> Any:
+        """The RPyC service root, connected-guarded.
+
+        Exposes typed netref access to the remote service so the staged
+        pipeline can call ``exposed_stage_gluescript`` /
+        ``exposed_stage_gluescript_delta`` directly with plain Python
+        values (lists and ints must cross as real values, not the
+        string-dispatched ``_call`` helper).
+        """
+        self._require_connected()
+        return self._conn.root
+
+    @property
     def machine_status(self) -> dict:
         """Current machine status from the remote controller."""
         if self._conn is None:
@@ -352,8 +403,7 @@ class RpaRpcClient:
             # Dead transport (EOFError/AssertionError/socket errors):
             # treat as disconnected so the caller can clean up instead
             # of aborting mid-shutdown.
-            _logger.debug("RPA RPC machine status read failed",
-                          exc_info=True)
+            _logger.debug("RPA RPC machine status read failed", exc_info=True)
             return {}
 
     # --- Internal helpers ---
@@ -377,8 +427,7 @@ class RpaRpcClient:
         """Raise ImportError if rpyc or BgServingThread is not available."""
         if rpyc is None or BgServingThread is None:
             raise ImportError(
-                "rpyc is not installed. "
-                "Run: pixi run -e ruidarpa ..."
+                "rpyc is not installed. Run: pixi run -e ruidarpa ..."
             )
 
     def _require_connected(self) -> None:

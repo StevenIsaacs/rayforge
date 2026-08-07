@@ -23,6 +23,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
     Union,
 )
 
@@ -71,6 +72,70 @@ def _unwrap_mm(value: object) -> Optional[float]:
     if isinstance(value, (list, tuple)):
         return value[0]  # type: ignore[return-value]
     return value  # type: ignore[return-value]
+
+
+def _render_transcript_lines(name: str, args: Tuple) -> List[str]:
+    """Render one recorded GlueScript call as server transcript line(s).
+
+    Mirrors the driver's own transcript mirroring: ``comment`` and
+    ``inline`` expand to one line per item (the driver appends a mirror
+    line per element), so the replayed server transcript length stays
+    contiguous for the delta flush guard.
+    """
+    if name == "comment" and args and isinstance(args[0], (list, tuple)):
+        return [f"comment({[line]!r})" for line in args[0]]
+    if name == "inline" and args and isinstance(args[0], (list, tuple)):
+        return [f"inline({[command]!r})" for command in args[0]]
+    args_str = ", ".join(repr(arg) for arg in args)
+    return [f"{name}({args_str})"]
+
+
+def _stage_plan(client: RpaRpcClient, plan: List[Tuple[str, Tuple]]) -> None:
+    """Replay a recorded GlueScript plan on the server via RPC.
+
+    The server's replay registry has no ``add_layer_action`` case (raw
+    lines are forwarded-only upstream), so the plan is walked in
+    recorded order: structural calls are flushed as
+    ``stage_gluescript_delta`` batches, and each ``add_layer_action`` is
+    forwarded at its exact interleaved position. Every delta
+    re-assembles the rpascript, so the final ``end_job`` flush stages
+    the complete job. A failed stage is torn down so a stale job
+    cannot be run afterwards.
+
+    Args:
+        client: The connected RPC client.
+        plan: Recorded ``(method_name, args)`` pairs from the encoder.
+
+    Raises:
+        RuntimeError: If the server rejects a replayed batch or the
+            plan never reached ``end_job()``.
+    """
+    try:
+        root = client.root
+        root.exposed_new_gluescript()
+        flushed = 0
+        buffer: List[str] = []
+        for name, args in plan:
+            if name == "add_layer_action":
+                if buffer:
+                    root.exposed_stage_gluescript_delta(
+                        flushed, buffer, require_complete=False
+                    )
+                    flushed += len(buffer)
+                    buffer = []
+                root.exposed_add_layer_action(*args)
+            else:
+                buffer.extend(_render_transcript_lines(name, args))
+        if buffer:
+            root.exposed_stage_gluescript_delta(
+                flushed, buffer, require_complete=True
+            )
+    except Exception:
+        try:
+            client._reset_staged()
+        except Exception:
+            logger.exception("Failed to reset staged state after stage error")
+        raise
 
 
 class RuidaRPAAdapter(Driver):
@@ -223,8 +288,7 @@ class RuidaRPAAdapter(Driver):
                     key="tui",
                     label=_("TUI RPC"),
                     description=_(
-                        "Enable TUI RPC connection to a remote "
-                        "RPA TUI service"
+                        "Enable TUI RPC connection to a remote RPA TUI service"
                     ),
                     default=False,
                 ),
@@ -309,15 +373,18 @@ class RuidaRPAAdapter(Driver):
                         # disconnect, so a reconnect registers at most
                         # once per connection.
                         await loop.run_in_executor(
-                            None, client.register_status_listener,
+                            None,
+                            client.register_status_listener,
                             self._on_rpa_status,
                         )
                         await loop.run_in_executor(
-                            None, client.register_error_listener,
+                            None,
+                            client.register_error_listener,
                             self._on_rpa_error,
                         )
                         await loop.run_in_executor(
-                            None, client.register_reply_listener,
+                            None,
+                            client.register_reply_listener,
                             self._on_rpa_reply,
                         )
                 else:
@@ -332,24 +399,12 @@ class RuidaRPAAdapter(Driver):
                         # so drop any stale registration before
                         # re-registering — repeated registers would
                         # double-fire every status event.
-                        driver.unregister_status_listener(
-                            self._on_rpa_status
-                        )
-                        driver.unregister_error_listener(
-                            self._on_rpa_error
-                        )
-                        driver.unregister_reply_listener(
-                            self._on_rpa_reply
-                        )
-                        driver.register_status_listener(
-                            self._on_rpa_status
-                        )
-                        driver.register_error_listener(
-                            self._on_rpa_error
-                        )
-                        driver.register_reply_listener(
-                            self._on_rpa_reply
-                        )
+                        driver.unregister_status_listener(self._on_rpa_status)
+                        driver.unregister_error_listener(self._on_rpa_error)
+                        driver.unregister_reply_listener(self._on_rpa_reply)
+                        driver.register_status_listener(self._on_rpa_status)
+                        driver.register_error_listener(self._on_rpa_error)
+                        driver.register_reply_listener(self._on_rpa_reply)
 
                 if not connected:
                     raise ConnectionError(
@@ -362,12 +417,8 @@ class RuidaRPAAdapter(Driver):
                 # Clear any inherited head/tail framing: staged jobs
                 # carry their own ref-point framing.
                 assert backend is not None
-                await loop.run_in_executor(
-                    None, backend.set_head_script, []
-                )
-                await loop.run_in_executor(
-                    None, backend.set_tail_script, []
-                )
+                await loop.run_in_executor(None, backend.set_head_script, [])
+                await loop.run_in_executor(None, backend.set_tail_script, [])
 
                 self._is_connected = True
                 self.state.status = DeviceStatus.IDLE
@@ -407,7 +458,8 @@ class RuidaRPAAdapter(Driver):
                 break
             except Exception as e:
                 logger.warning(
-                    "RPA reconnect attempt failed: %s", e,
+                    "RPA reconnect attempt failed: %s",
+                    e,
                     extra=log_extra,
                 )
                 self.connection_status_changed.send(
@@ -426,7 +478,9 @@ class RuidaRPAAdapter(Driver):
                 sleep_time = delay * jitter
                 logger.debug(
                     "Reconnecting in %.1f seconds (base=%.1f, jitter=%.2f)",
-                    sleep_time, delay, jitter,
+                    sleep_time,
+                    delay,
+                    jitter,
                     extra=log_extra,
                 )
                 await asyncio.sleep(sleep_time)
@@ -460,10 +514,13 @@ class RuidaRPAAdapter(Driver):
                 self.connection_status_changed.send(
                     self, status=TransportStatus.CONNECTED, message=""
                 )
-                logger.info("RPA connected via %s",
-                            "RPC" if self._tui_mode else "direct",
-                            extra=self._log_extra(
-                                "TUI_RPC" if self._tui_mode else "RPA"))
+                logger.info(
+                    "RPA connected via %s",
+                    "RPC" if self._tui_mode else "direct",
+                    extra=self._log_extra(
+                        "TUI_RPC" if self._tui_mode else "RPA"
+                    ),
+                )
             elif event == "DISCONNECTED":
                 self._is_connected = False
                 self.state.status = DeviceStatus.UNKNOWN
@@ -471,9 +528,12 @@ class RuidaRPAAdapter(Driver):
                 self.connection_status_changed.send(
                     self, status=TransportStatus.DISCONNECTED, message=""
                 )
-                logger.warning("RPA disconnected",
-                               extra=self._log_extra(
-                                   "TUI_RPC" if self._tui_mode else "RPA"))
+                logger.warning(
+                    "RPA disconnected",
+                    extra=self._log_extra(
+                        "TUI_RPC" if self._tui_mode else "RPA"
+                    ),
+                )
             elif event == "TERMINATED":
                 self._is_connected = False
                 self.state.status = DeviceStatus.UNKNOWN
@@ -489,9 +549,13 @@ class RuidaRPAAdapter(Driver):
                 "MEM_MACHINE_STATUS"
             )
             if status_value is not None:
-                logger.debug("RPA status update: %s", status_value,
-                             extra=self._log_extra(
-                                 "TUI_RPC" if self._tui_mode else "RPA"))
+                logger.debug(
+                    "RPA status update: %s",
+                    status_value,
+                    extra=self._log_extra(
+                        "TUI_RPC" if self._tui_mode else "RPA"
+                    ),
+                )
 
             # Extract current position (values in mm)
             # MEM_CURRENT_POSITION_* values are (float_mm, str_description)
@@ -501,30 +565,21 @@ class RuidaRPAAdapter(Driver):
 
             if any(v is not None for v in (pos_x, pos_y, pos_z)):
                 current = self.state.machine_pos
-                new_x = (
-                    (current[0] or 0.0)
-                    if pos_x is None
-                    else pos_x
-                )
-                new_y = (
-                    (current[1] or 0.0)
-                    if pos_y is None
-                    else pos_y
-                )
-                new_z = (
-                    (current[2] or 0.0)
-                    if pos_z is None
-                    else pos_z
-                )
+                new_x = (current[0] or 0.0) if pos_x is None else pos_x
+                new_y = (current[1] or 0.0) if pos_y is None else pos_y
+                new_z = (current[2] or 0.0) if pos_z is None else pos_z
                 new_pos = (new_x, new_y, new_z)
 
                 if new_pos != current:
                     self.state = replace(self.state, machine_pos=new_pos)
                     logger.debug(
                         "RPA position update: x=%.3f y=%.3f z=%.3f",
-                        new_x, new_y, new_z,
+                        new_x,
+                        new_y,
+                        new_z,
                         extra=self._log_extra(
-                            "TUI_RPC" if self._tui_mode else "RPA"),
+                            "TUI_RPC" if self._tui_mode else "RPA"
+                        ),
                     )
                     self.state_changed.send(self, state=self.state)
 
@@ -532,17 +587,21 @@ class RuidaRPAAdapter(Driver):
         """Handle error events from the Ruida controller."""
         if self._shutting_down:
             return
-        logger.warning("RPA error: %s", msg,
-                       extra=self._log_extra(
-                           "TUI_RPC" if self._tui_mode else "RPA"))
+        logger.warning(
+            "RPA error: %s",
+            msg,
+            extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
+        )
 
     def _on_rpa_reply(self, replies: list[str]) -> None:
         """Handle reply data from the Ruida controller."""
         if self._shutting_down:
             return
-        logger.debug("RPA reply: %d lines", len(replies),
-                     extra=self._log_extra(
-                         "TUI_RPC" if self._tui_mode else "RPA"))
+        logger.debug(
+            "RPA reply: %d lines",
+            len(replies),
+            extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
+        )
 
     async def _stop_backend(self) -> None:
         """Stop and release the current backend driver."""
@@ -578,37 +637,26 @@ class RuidaRPAAdapter(Driver):
                 driver: RpaDirectDriver = self._backend  # type: ignore
                 if driver.is_connected:
                     try:
-                        driver.unregister_status_listener(
-                            self._on_rpa_status
-                        )
+                        driver.unregister_status_listener(self._on_rpa_status)
                     except Exception:
-                        logger.exception(
-                            "Error unregistering status listener"
-                        )
+                        logger.exception("Error unregistering status listener")
                     try:
-                        driver.unregister_error_listener(
-                            self._on_rpa_error
-                        )
+                        driver.unregister_error_listener(self._on_rpa_error)
                     except Exception:
-                        logger.exception(
-                            "Error unregistering error listener"
-                        )
+                        logger.exception("Error unregistering error listener")
                     try:
-                        driver.unregister_reply_listener(
-                            self._on_rpa_reply
-                        )
+                        driver.unregister_reply_listener(self._on_rpa_reply)
                     except Exception:
-                        logger.exception(
-                            "Error unregistering reply listener"
-                        )
+                        logger.exception("Error unregistering reply listener")
                 await loop.run_in_executor(None, driver.stop)
         except Exception:
             logger.exception("Error stopping RPA backend")
 
     # --- Script execution ---
 
-    async def _run_job(self, script_lines: List[str],
-                       auto_checksum: bool = False) -> None:
+    async def _run_job(
+        self, script_lines: List[str], auto_checksum: bool = False
+    ) -> None:
         """Run a staged job via the backend's ``run_job``.
 
         The backend composes head + job + tail around the job body.
@@ -627,8 +675,9 @@ class RuidaRPAAdapter(Driver):
             None, self._backend.run_job, script_lines, auto_checksum
         )
 
-    async def _run_script(self, script_lines: List[str],
-                          auto_checksum: bool = False) -> None:
+    async def _run_script(
+        self, script_lines: List[str], auto_checksum: bool = False
+    ) -> None:
         """Run raw rpascript via the backend's ``run``.
 
         Runtime commands (pause/resume, cancel, power, WCS select)
@@ -648,6 +697,35 @@ class RuidaRPAAdapter(Driver):
             None, self._backend.run, script_lines, auto_checksum
         )
 
+    async def _run_staged_job(self, encoded: EncodedOutput) -> None:
+        """Run a job by re-staging its GlueScript plan server-side.
+
+        TUI RPC mode only: the encoded output carries the recorded
+        GlueScript call plan (``rpa_plan``). The plan is replayed on
+        the server via the RPC GlueScript sink (``_stage_plan``), then
+        the staged rpascript is queued with ``run_staged_job``. A
+        failed stage is torn down so a stale job cannot be run
+        afterwards.
+
+        Args:
+            encoded: The encoder output; must carry ``rpa_plan``.
+
+        Raises:
+            DriverSetupError: If the backend is not initialized or the
+                plan is missing.
+        """
+        if self._backend is None:
+            raise DriverSetupError("Backend not initialized")
+        if encoded.rpa_plan is None:
+            raise DriverSetupError(
+                "TUI RPC mode requires a GlueScript plan (rpa_plan) — "
+                "re-encode the job with the ruidarpa encoder"
+            )
+        client: RpaRpcClient = self._backend  # type: ignore
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _stage_plan, client, encoded.rpa_plan)
+        await loop.run_in_executor(None, client.run_staged_job)
+
     # --- Job control ---
 
     async def run(
@@ -660,9 +738,7 @@ class RuidaRPAAdapter(Driver):
         ] = None,
     ) -> None:
         text_lines = [
-            line.strip()
-            for line in encoded.text.splitlines()
-            if line.strip()
+            line.strip() for line in encoded.text.splitlines() if line.strip()
         ]
         op_map = encoded.op_map
 
@@ -681,16 +757,19 @@ class RuidaRPAAdapter(Driver):
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
         )
 
-        if text_lines:
+        if self._tui_mode:
+            if text_lines:
+                # TUI RPC re-stages the GlueScript plan server-side
+                # instead of shipping the assembled rpascript text.
+                await self._run_staged_job(encoded)
+        elif text_lines:
             await self._run_job(text_lines, auto_checksum=True)
 
         self.job_finished.send(self)
 
     async def run_raw(self, machine_code: str) -> None:
         lines = [
-            line.strip()
-            for line in machine_code.splitlines()
-            if line.strip()
+            line.strip() for line in machine_code.splitlines() if line.strip()
         ]
         if lines:
             logger.info(
@@ -742,7 +821,9 @@ class RuidaRPAAdapter(Driver):
         pos_x = -pos_x
         pos_y = -pos_y
         logger.info(
-            "move_to x=%.3f y=%.3f", pos_x, pos_y,
+            "move_to x=%.3f y=%.3f",
+            pos_x,
+            pos_y,
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
         )
         if self._backend is None:
@@ -813,54 +894,37 @@ class RuidaRPAAdapter(Driver):
                         None, client.jog_y_rel, deltas["y"]
                     )
             if "z" in deltas:
-                await loop.run_in_executor(
-                    None, client.jog_z_rel, deltas["z"]
-                )
+                await loop.run_in_executor(None, client.jog_z_rel, deltas["z"])
             if "u" in deltas:
-                await loop.run_in_executor(
-                    None, client.jog_u_rel, deltas["u"]
-                )
+                await loop.run_in_executor(None, client.jog_u_rel, deltas["u"])
         else:
             lines: List[str] = []
             delta_x = deltas.get("x")
             delta_y = deltas.get("y")
             if delta_x is not None and delta_y is not None:
+                lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
                 lines.append(
-                    f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}"
-                )
-                lines.append(
-                    f"JOG_XY Rel:CURRENT X={delta_x:.3f}mm "
-                    f"Y={delta_y:.3f}mm"
+                    f"JOG_XY Rel:CURRENT X={delta_x:.3f}mm Y={delta_y:.3f}mm"
                 )
             else:
                 if delta_x is not None:
-                    lines.append(
-                        f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}"
-                    )
+                    lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
                     lines.append(f"JOG_X Rel:CURRENT X={delta_x:.3f}mm")
                 if delta_y is not None:
-                    lines.append(
-                        f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}"
-                    )
+                    lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
                     lines.append(f"JOG_Y Rel:CURRENT Y={delta_y:.3f}mm")
             delta_z = deltas.get("z")
             if delta_z is not None:
-                lines.append(
-                    f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}"
-                )
+                lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
                 lines.append(f"JOG_Z Rel:CURRENT Z={delta_z:.3f}mm")
             delta_u = deltas.get("u")
             if delta_u is not None:
-                lines.append(
-                    f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}"
-                )
+                lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
                 lines.append(f"JOG_U Rel:CURRENT U={delta_u:.3f}mm")
             if lines:
                 logger.debug(
                     "Jogging axes: %s",
-                    ", ".join(
-                        f"{k}={v:.3f}" for k, v in deltas.items()
-                    ),
+                    ", ".join(f"{k}={v:.3f}" for k, v in deltas.items()),
                     extra=self._log_extra(
                         "TUI_RPC" if self._tui_mode else "RPA"
                     ),

@@ -2,9 +2,18 @@ import base64
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from raygeo.ops import Ops
+
+
+def _jsonify(value: Any) -> Any:
+    """Recursively convert tuples to lists for JSON-safe serialization."""
+    if isinstance(value, tuple):
+        return [_jsonify(item) for item in value]
+    if isinstance(value, list):
+        return [_jsonify(item) for item in value]
+    return value
 
 
 @dataclass
@@ -40,11 +49,16 @@ class EncodedOutput:
         op_map: Bidirectional mapping between ops indices and line numbers.
         driver_data: Optional driver-specific data (e.g., binary for Ruida).
                      Bytes values are stored as base64-encoded strings.
+        rpa_plan: Optional recorded GlueScript call plan
+                  (``[method_name, args]`` pairs) for server-side
+                  re-staging of a ruidarpa job. ``None`` when the
+                  encoder produced no plan.
     """
 
     text: str
     op_map: MachineCodeOpMap
     driver_data: Dict[str, Any] = field(default_factory=dict)
+    rpa_plan: Optional[List[Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -74,6 +88,7 @@ class EncodedOutput:
                 },
             },
             "driver_data": serialized_driver_data,
+            "rpa_plan": _jsonify(self.rpa_plan),
         }
 
     @classmethod
@@ -103,6 +118,7 @@ class EncodedOutput:
             text=data["text"],
             op_map=op_map,
             driver_data=deserialized_driver_data,
+            rpa_plan=data.get("rpa_plan"),
         )
 
     def to_json(self) -> str:

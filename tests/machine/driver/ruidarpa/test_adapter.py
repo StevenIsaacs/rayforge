@@ -29,9 +29,10 @@ import pytest_asyncio
 from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
-from rayforge.machine.driver.driver import Axis, DeviceStatus
+from rayforge.machine.driver.driver import Axis, DeviceStatus, DriverSetupError
 from rayforge.machine.driver.ruidarpa.rpa_adapter import (
     RuidaRPAAdapter,
+    _stage_plan,
     _unwrap_mm,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
@@ -317,8 +318,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_run_job_routes_to_backend_run_job(self, adapter_pair):
         """_run_job must call backend.run_job with the lines."""
@@ -329,8 +332,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_run_script_routes_to_backend_run(self, adapter_pair):
         """_run_script must call backend.run without job framing."""
@@ -341,11 +346,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
     async def test_run_stages_job_with_checksum(self, adapter_pair):
-        """run() must route the encoded text through run_job."""
+        """run() in direct mode must route the text through run_job."""
         adapter, backend = adapter_pair
         encoded = EncodedOutput(
             text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
@@ -359,8 +363,56 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_run_rpc_stages_plan_and_runs_staged_job(self, adapter_pair):
+        """run() in RPC mode must re-stage the plan server-side."""
+        adapter, client = adapter_pair
+        plan = [
+            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+            (
+                "declare_layer",
+                ("Cut", "#ff6600", "VECTOR", "NONE", 100.0, 20.0, 50.0, 50.0),
+            ),
+            ("add_layer_action", (1, ["MIN_POWER_1 Power=50.0%"])),
+            ("move_xy_to", (5.0, 5.0)),
+            ("end_job", ()),
+        ]
+        encoded = EncodedOutput(
+            text="\n".join(
+                ["REF_POINT_SET", "MOVE_NEAR_XY X=5.000mm Y=5.000mm"]
+            ),
+            op_map=MachineCodeOpMap(),
+            rpa_plan=plan,
+        )
+        await adapter.run(encoded, Doc(), Ops())
+        client.root.exposed_new_gluescript.assert_called_once_with()
+        deltas = client.root.exposed_stage_gluescript_delta
+        assert deltas.call_count == 2
+        first = deltas.call_args_list[0]
+        assert first.args[0] == 0
+        assert first.args[1] == [
+            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
+            "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
+            "100.0, 20.0, 50.0, 50.0)",
+        ]
+        assert first.kwargs["require_complete"] is False
+        client.root.exposed_add_layer_action.assert_called_once_with(
+            1, ["MIN_POWER_1 Power=50.0%"]
+        )
+        final = deltas.call_args_list[-1]
+        assert final.args[0] == 2
+        assert final.args[1] == ["move_xy_to(5.0, 5.0)", "end_job()"]
+        assert final.kwargs["require_complete"] is True
+        client.run_staged_job.assert_called_once_with()
+        client.run_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_run_raw_routes_through_run_job_with_checksum(
         self, adapter_pair
@@ -375,8 +427,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_set_hold_pause_routes_to_pause_job(self, adapter_pair):
         """set_hold(True) must run PAUSE_JOB."""
@@ -386,8 +440,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_set_hold_resume_routes_to_restore_job(self, adapter_pair):
         """set_hold(False) must run RESTORE_JOB."""
@@ -397,8 +453,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_cancel_routes_to_stop_job(self, adapter_pair):
         """cancel() must run STOP_JOB."""
@@ -408,8 +466,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_clear_alarm_routes_to_stop_job(self, adapter_pair):
         """clear_alarm() must run STOP_JOB."""
@@ -419,36 +479,38 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_set_power_routes_to_imd_power(self, adapter_pair):
         """set_power() must run an IMD_POWER_<n> command."""
         adapter, backend = adapter_pair
         head = Laser()
         await adapter.set_power(head, 0.5)
-        backend.run.assert_called_once_with(
-            ["IMD_POWER_1 Power=50.0%"], False
-        )
+        backend.run.assert_called_once_with(["IMD_POWER_1 Power=50.0%"], False)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_set_focus_power_delegates_to_set_power(self, adapter_pair):
         """set_focus_power() must behave like set_power()."""
         adapter, backend = adapter_pair
         head = Laser()
         await adapter.set_focus_power(head, 0.25)
-        backend.run.assert_called_once_with(
-            ["IMD_POWER_1 Power=25.0%"], False
-        )
+        backend.run.assert_called_once_with(["IMD_POWER_1 Power=25.0%"], False)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_select_wcs_ref0_routes_to_ref_point_1(self, adapter_pair):
         """select_wcs("REF0") must run REF_POINT_1."""
@@ -458,8 +520,10 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_select_wcs_ref1_routes_to_ref_point_2(self, adapter_pair):
         """select_wcs("REF1") must run REF_POINT_2."""
@@ -468,13 +532,152 @@ class TestRunRouting:
         backend.run.assert_called_once_with(["REF_POINT_2"], False)
 
 
+class TestRunStagedJob:
+    """The TUI RPC staged pipeline re-stages the plan server-side."""
+
+    PLAN = [
+        ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+        (
+            "declare_layer",
+            ("Cut", "#ff6600", "VECTOR", "NONE", 100.0, 20.0, 50.0, 50.0),
+        ),
+        ("add_layer_action", (1, ["MIN_POWER_1 Power=50.0%"])),
+        ("move_xy_to", (5.0, 5.0)),
+        ("end_job", ()),
+    ]
+
+    def _encoded(self, plan=PLAN):
+        return EncodedOutput(
+            text="dummy",
+            op_map=MachineCodeOpMap(),
+            rpa_plan=plan,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_run_staged_job_stages_then_runs(self, adapter_pair):
+        """_run_staged_job must replay the plan and run the staged job."""
+        adapter, client = adapter_pair
+        await adapter._run_staged_job(self._encoded())
+        client.root.exposed_new_gluescript.assert_called_once_with()
+        assert client.root.exposed_stage_gluescript_delta.call_count == 2
+        client.run_staged_job.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_run_staged_job_missing_plan_raises(self, adapter_pair):
+        """A plan-less encoded output must fail fast in RPC mode."""
+        adapter, client = adapter_pair
+        with pytest.raises(DriverSetupError, match="rpa_plan"):
+            await adapter._run_staged_job(self._encoded(plan=None))
+        client.root.exposed_new_gluescript.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_run_staged_job_raises_when_not_initialized(
+        self, adapter_pair
+    ):
+        """A missing backend must fail fast."""
+        adapter, client = adapter_pair
+        adapter._backend = None
+        with pytest.raises(DriverSetupError, match="Backend"):
+            await adapter._run_staged_job(self._encoded())
+
+
+class TestStagePlan:
+    """_stage_plan replays the recorded plan through the RPC sink."""
+
+    def test_resets_before_staging(self):
+        """The pipeline starts from a clean server-side gluescript."""
+        client = Mock(spec=RpaRpcClient)
+        _stage_plan(client, [])
+        client.root.exposed_new_gluescript.assert_called_once_with()
+        # The server-side gluescript cursor tracks the live machine
+        # position, so staging must not clobber it with a zero reset.
+        client.root.exposed_update_position.assert_not_called()
+
+    def test_single_delta_when_no_raw_actions(self):
+        """A plan without add_layer_action flushes once, complete."""
+        client = Mock(spec=RpaRpcClient)
+        plan = [
+            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+            ("end_job", ()),
+        ]
+        _stage_plan(client, plan)
+        client.root.exposed_stage_gluescript_delta.assert_called_once_with(
+            0,
+            [
+                "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
+                "end_job()",
+            ],
+            require_complete=True,
+        )
+
+    def test_raw_actions_forwarded_at_interleaved_position(self):
+        """add_layer_action lines forward in recorded order."""
+        client = Mock(spec=RpaRpcClient)
+        _stage_plan(client, TestRunStagedJob.PLAN)
+        deltas = client.root.exposed_stage_gluescript_delta
+        assert deltas.call_count == 2
+        first = deltas.call_args_list[0]
+        assert first.args[0] == 0
+        assert first.args[1][0].startswith("declare_job(")
+        assert first.kwargs["require_complete"] is False
+        client.root.exposed_add_layer_action.assert_called_once_with(
+            1, ["MIN_POWER_1 Power=50.0%"]
+        )
+        final = deltas.call_args_list[-1]
+        assert final.args[0] == 2
+        assert final.args[1] == ["move_xy_to(5.0, 5.0)", "end_job()"]
+        assert final.kwargs["require_complete"] is True
+
+    def test_failed_stage_resets_staged_state(self):
+        """A rejected replay must tear down so no stale job can run."""
+        client = Mock(spec=RpaRpcClient)
+        client.root.exposed_stage_gluescript_delta.side_effect = RuntimeError(
+            "Re-staged gluescript is missing end_job()"
+        )
+        plan = [
+            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+            ("add_layer_action", (1, ["MIN_POWER_1 Power=50.0%"])),
+        ]
+        with pytest.raises(RuntimeError, match="end_job"):
+            _stage_plan(client, plan)
+        client._reset_staged.assert_called_once_with()
+
+    def test_comment_expands_per_item(self):
+        """Multi-item comment calls mirror one transcript line per item."""
+        client = Mock(spec=RpaRpcClient)
+        plan = [
+            ("comment", (["# Ops Actions", "# Ops Section Start"],)),
+            ("end_job", ()),
+        ]
+        _stage_plan(client, plan)
+        deltas = client.root.exposed_stage_gluescript_delta
+        assert deltas.call_count == 1
+        lines = deltas.call_args_list[0].args[1]
+        assert lines == [
+            "comment(['# Ops Actions'])",
+            "comment(['# Ops Section Start'])",
+            "end_job()",
+        ]
+
+
 class TestConnectClearsHeadTail:
     """A successful connect must clear inherited head/tail framing."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_connect_clears_head_and_tail(self, adapter_pair):
         """After connect, set_head_script([])/set_tail_script([]) run."""
@@ -491,8 +694,10 @@ class TestWcsHandling:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_set_wcs_offset_raises_not_implemented(self, adapter_pair):
         """set_wcs_offset must raise NotImplementedError (fail loud)."""
@@ -694,8 +899,10 @@ class TestStatusMmFix:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_position_tuple_not_divided_by_1000(self, adapter_pair):
         """A float_mm tuple position must pass through unchanged."""
@@ -711,8 +918,10 @@ class TestStatusMmFix:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_plain_float_position_passes_through(self, adapter_pair):
         """A bare float position must pass through unchanged."""
@@ -728,15 +937,15 @@ class TestStatusMmFix:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_partial_position_keeps_other_axes(self, adapter_pair):
         """A missing axis must retain the previously reported value."""
         adapter, _backend = adapter_pair
-        adapter.state = replace(
-            adapter.state, machine_pos=(10.0, 20.0, 30.0)
-        )
+        adapter.state = replace(adapter.state, machine_pos=(10.0, 20.0, 30.0))
         adapter._on_rpa_status({"MEM_CURRENT_POSITION_X": (1.0, "X")})
         assert adapter.state.machine_pos == (1.0, 20.0, 30.0)
 
@@ -785,12 +994,12 @@ class TestReconnectListenerHygiene:
             return unregister
 
         for kind in registries:
-            getattr(backend, f"register_{kind}_listener").side_effect = (
-                _register(kind)
-            )
-            getattr(backend, f"unregister_{kind}_listener").side_effect = (
-                _unregister(kind)
-            )
+            getattr(
+                backend, f"register_{kind}_listener"
+            ).side_effect = _register(kind)
+            getattr(
+                backend, f"unregister_{kind}_listener"
+            ).side_effect = _unregister(kind)
 
         await _run_connect_cycle(
             adapter, lambda: len(registries["status"]) == 1
@@ -851,8 +1060,10 @@ class TestStringStatusEvents:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_status_connected_transitions_state(self, adapter_pair):
         """'CONNECTED' marks the adapter connected and IDLE."""
@@ -875,12 +1086,12 @@ class TestStringStatusEvents:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
-    async def test_status_disconnected_transitions_state(
-        self, adapter_pair
-    ):
+    async def test_status_disconnected_transitions_state(self, adapter_pair):
         """'DISCONNECTED' marks the adapter disconnected and UNKNOWN."""
         adapter, _backend = adapter_pair
         connection_mock = Mock()
@@ -901,8 +1112,10 @@ class TestStringStatusEvents:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_status_terminated_transitions_state(self, adapter_pair):
         """'TERMINATED' marks the adapter disconnected and UNKNOWN."""
@@ -925,12 +1138,12 @@ class TestStringStatusEvents:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
-    async def test_status_late_event_inert_after_shutdown(
-        self, adapter_pair
-    ):
+    async def test_status_late_event_inert_after_shutdown(self, adapter_pair):
         """After shutdown, late status events must be inert."""
         adapter, _backend = adapter_pair
         connection_mock = Mock()
@@ -950,8 +1163,10 @@ class TestConnectFailureBackoff:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"],
-        indirect=True
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
     )
     async def test_start_false_runs_stop_cleanup_and_survives(
         self, adapter_pair
@@ -979,9 +1194,7 @@ class TestHealthPoll:
         adapter, backend = adapter_pair
         backend.is_connected = False
         backend.is_alive.return_value = True
-        monkeypatch.setattr(
-            RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01
-        )
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
 
         adapter._keep_running = True
         await adapter._connect_implementation()
@@ -1012,12 +1225,8 @@ class TestHealthPoll:
         """A failed is_alive probe must tear down and reconnect RPC."""
         adapter, backend = adapter_pair
         backend.is_alive.return_value = False
-        monkeypatch.setattr(
-            RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01
-        )
-        monkeypatch.setattr(
-            RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01
-        )
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
 
         adapter._keep_running = True
         await adapter._connect_implementation()
@@ -1044,12 +1253,8 @@ class TestHealthPoll:
         """A direct-mode controller going down must keep reconnecting."""
         adapter, backend = adapter_pair
         backend.is_connected = False
-        monkeypatch.setattr(
-            RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01
-        )
-        monkeypatch.setattr(
-            RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01
-        )
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
 
         adapter._keep_running = True
         await adapter._connect_implementation()

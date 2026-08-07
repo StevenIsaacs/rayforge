@@ -1,7 +1,7 @@
 ---
-status: not-started
-phase: 1
-updated: 2026-06-19
+status: complete
+phase: 7
+updated: 2026-08-07
 ---
 # Implementation Plan: RuidaRPA Driver Integration
 
@@ -24,9 +24,11 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
 | Rpascript uses mm natively — no unit conversion in encoder | Rpascript parameters accept mm; RdDriver handles internal µm conversion | `rpascript-guide.md:228-234` |
 | **precheck allows both udp_host and usb_device** | RPA auto-selects available interface; requiring exactly one would be incorrect | User feedback, RPA documentation |
 
-## Phase 1: Foundation & Package Structure [PENDING]
+## Phase 1: Foundation & Package Structure [COMPLETE]
+
+_Complete as of 2026-08-07._
 - [x] **1.1 Create `rayforge/machine/driver/ruidarpa/__init__.py`** — package init, exports `RuidaRPAAdapter`, `RuidaRPAEncoder` ✅ 2026-06-19
-- [ ] **1.2 Create `rayforge/machine/driver/ruidarpa/rpa_adapter.py`** — implement `RuidaRPAAdapter(Driver)` class skeleton with:
+- [x] **1.2 Create `rayforge/machine/driver/ruidarpa/rpa_adapter.py`** — implement `RuidaRPAAdapter(Driver)` class skeleton with:
   - Class attributes: `label=_("Ruida RPA")`, `subtitle=_("Connect via Ruida Protocol Analyzer")`, `supports_settings=False`, `reports_granular_progress=False`, `uses_gcode=False`, `maturity=DriverMaturity.EXPERIMENTAL`
   - `__init__(self, context, machine)` — store mode flag (`_tui_mode: bool = False`), driver params
   - `machine_space_wcs` → `"MACHINE"`, `machine_space_wcs_display_name` → `_("Machine Coordinates")`
@@ -40,7 +42,7 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
   - `_setup_implementation(**kwargs)` — parse config into `self._config` dict, set `self._tui_mode`, instantiate appropriate backend wrapper (deferred to Phase 2/3)
   - `get_laser_capabilities(laser)` — return `PWMCapability` for non-diode lasers (matching `RuidaDriver`)
   - `create_encoder(cls, machine)` → `RuidaRPAEncoder()`
-- [ ] **1.3 Stub all remaining abstract methods** (16 total from `Driver` ABC) with appropriate defaults:
+- [x] **1.3 Stub all remaining abstract methods** (16 total from `Driver` ABC) with appropriate defaults:
   - `_connect_implementation()` — deferred to Phase 2/3
   - `run()`, `run_raw()` — deferred to Phase 2/3
   - `set_hold()`, `cancel()` — deferred to Phase 4
@@ -57,11 +59,13 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
   - `select_wcs()` — no-op
   - `get_setting_vars()` → `[VarSet(title=_("No settings"))]`
   - `cleanup()` — deferred to Phase 2/3
-- [ ] **1.4 Register driver** — import `RuidaRPAAdapter` in `rayforge/machine/driver/__init__.py`, add to `__all__`, call `register_driver(RuidaRPAAdapter)`, and append to `drivers` list
-- [ ] **1.5 Set up logger** — `logger = logging.getLogger(__name__)` in adapter module; use `_log_extra()` with category `"TUI_RPC"` or `"RPA"` for all log calls
+- [x] **1.4 Register driver** — import `RuidaRPAAdapter` in `rayforge/machine/driver/__init__.py`, add to `__all__`, call `register_driver(RuidaRPAAdapter)`, and append to `drivers` list
+- [x] **1.5 Set up logger** — `logger = logging.getLogger(__name__)` in adapter module; use `_log_extra()` with category `"TUI_RPC"` or `"RPA"` for all log calls
 
-## Phase 2: Direct Mode — RdDriver In-Process [PENDING]
-- [ ] **2.1 Create `rayforge/machine/driver/ruidarpa/rpa_direct_driver.py`** — wrapper around `RdDriver`:
+## Phase 2: Direct Mode — RdDriver In-Process [COMPLETE]
+
+_Complete as of 2026-08-07 (RpaDirectDriver)._
+- [x] **2.1 Create `rayforge/machine/driver/ruidarpa/rpa_direct_driver.py`** — wrapper around `RdDriver`:
   - `__init__` — instantiate `RdDriver()`
   - `start(udp_host, usb_device)` → `RdDriver.start()`
   - `stop()` → `RdDriver.stop()`
@@ -73,7 +77,7 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
     - Reply listener → `call_soon_threadsafe` → log at DEBUG
   - Properties: `is_connected` → `rd_driver.is_connected`, `machine_status` → `rd_driver.machine_status`
   - `resource_uri` → `f"ruidarpa://{host}"` for direct UDP or `f"ruidarpa://{usb_device}"` for USB
-- [ ] **2.2 Implement `_connect_implementation` for direct mode**:
+- [x] **2.2 Implement `_connect_implementation` for direct mode**:
   - Start background asyncio task
   - Via executor: call `direct_driver.start(udp_host=..., usb_device=...)`
   - Poll `direct_driver.is_connected` every 500ms
@@ -82,22 +86,24 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
   - On sustained failure: fire `connection_status_changed(ERROR, message)`
   - On success: fire `connection_status_changed(CONNECTED)`, set `self.state.status = DeviceStatus.IDLE`
   - Reset backoff to 1s on successful connection
-- [ ] **2.3 Implement `run()` for direct mode**:
+- [x] **2.3 Implement `run()` for direct mode**:
   - Extract rpascript lines from `encoded.text` (splitlines, strip blank lines)
   - Pass to `direct_driver.run_script(script_lines)` via executor
   - Handle `on_command_done`: iterate through `encoded.op_map.op_to_machine_code` keys
   - On completion: fire `self.job_finished`
-- [ ] **2.4 Implement `run_raw()` for direct mode**:
+- [x] **2.4 Implement `run_raw()` for direct mode**:
   - Split `machine_code` into lines, pass as single script to `direct_driver.run_script()`
-- [ ] **2.5 Implement `cleanup()` for direct mode**:
+- [x] **2.5 Implement `cleanup()` for direct mode**:
   - Mark `_keep_running = False`
   - Cancel background asyncio task
   - Via executor: call `direct_driver.stop()`
   - Fire `connection_status_changed(DISCONNECTED)`
   - Call `super().cleanup()`
 
-## Phase 3: TUI RPC Mode — RPyC Client [PENDING]
-- [ ] **3.1 Create `rayforge/machine/driver/ruidarpa/rpa_rpc_client.py`** — RPyC client wrapper:
+## Phase 3: TUI RPC Mode — RPyC Client [COMPLETE]
+
+_Complete as of 2026-08-07 (RpaRpcClient, rpyc 127.0.0.1:18812, tui config flag)._
+- [x] **3.1 Create `rayforge/machine/driver/ruidarpa/rpa_rpc_client.py`** — RPyC client wrapper:
   - `connect(host="127.0.0.1", port=18812)` → `rpyc.connect(host, port)`, return `conn.root`
   - `disconnect()` → close connection
   - Delegated API items (all via netref):
@@ -111,48 +117,52 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
     - `is_connected` property → `svc.is_connected()`
     - `machine_status` property → `svc.machine_status()`
   - Netref callback wrappers for thread-safe signal forwarding
-- [ ] **3.2 Implement `_connect_implementation` for TUI mode**:
+- [x] **3.2 Implement `_connect_implementation` for TUI mode**:
   - Connect to RPyC server via executor
   - Call `svc.start(udp_host=..., usb_device=...)`
   - Register netref callbacks, forwarding to asyncio event loop via `call_soon_threadsafe`
   - Poll `svc.is_connected()` for state tracking
   - Same exponential backoff strategy as Phase 2.2
-- [ ] **3.3 Implement `run()` for TUI mode** — extract rpascript lines, call `svc.run()` via executor
-- [ ] **3.4 Implement `run_raw()` for TUI mode** — same as direct mode, split to lines, call via RPC
-- [ ] **3.5 Implement `cleanup()` for TUI mode** — call `svc.stop()` via executor, disconnect RPyC, fire DISCONNECTED
+- [x] **3.3 Implement `run()` for TUI mode** — extract rpascript lines, call `svc.run()` via executor
+- [x] **3.4 Implement `run_raw()` for TUI mode** — same as direct mode, split to lines, call via RPC
+- [x] **3.5 Implement `cleanup()` for TUI mode** — call `svc.stop()` via executor, disconnect RPyC, fire DISCONNECTED
 
-## Phase 4: Operations Layer (shared across modes) [PENDING]
-- [ ] **4.1 WCS operations**:
+## Phase 4: Operations Layer (shared across modes) [COMPLETE]
+
+_Complete as of 2026-08-07 (head/tail/protect, home, jog, move_to, set_power, WCS handling)._
+- [x] **4.1 WCS operations**:
   - `select_wcs(wcs_slot)` → run rpascript `"REF_POINT_2"` or `"REF_POINT_1"` depending on slot
   - `set_wcs_offset(wcs_slot, x, y, z)` → run `"SET_SETTING MEM_USER_ORIGIN_X=%d MEM_USER_ORIGIN_Y=%d"` or equivalent
   - `read_wcs_offsets()` → run `GET_SETTING` queries for each ref point; fire `wcs_updated`
   - `read_parser_state()` → return `self._machine.active_wcs`
-- [ ] **4.2 Movement**:
+- [x] **4.2 Movement**:
   - `home(axes)` → `"HOME_XY"` / `"HOME_Z"`
   - `move_to(pos_x, pos_y)` → `"MOVE_ABS_XY X={pos_x}mm Y={pos_y}mm"`
   - `jog(speed, **deltas)` → `"AXIS_X_MOVE X={delta}mm"` / `"AXIS_Y_MOVE Y={delta}mm"`
-- [ ] **4.3 Job control**:
+- [x] **4.3 Job control**:
   - `set_hold(hold=True)` → `"PAUSE_PROCESS"`, `set_hold(False)` → `"RESTORE_PROCESS"`
   - `cancel()` → `"STOP_PROCESS"`
   - `clear_alarm()` → `"STOP_PROCESS"`
-- [ ] **4.4 Power/Laser**:
+- [x] **4.4 Power/Laser**:
   - `set_power(head, percent)` → `"IMD_POWER_1 Power={pct}%"` (tool_number determines 1 or 2)
   - `set_focus_power(head, percent)` → same as `set_power`
-- [ ] **4.5 Remaining stubs**:
+- [x] **4.5 Remaining stubs**:
   - `select_tool(tool_number)` → no-op
   - `read_settings()` → emit `settings_read` with empty list
   - `write_setting(key, value)` → no-op
   - `get_setting_vars()` → `[VarSet(title=_("No settings"))]`
   - `run_probe_cycle()` → return `None` (not supported)
 
-## Phase 5: RuidaRPAEncoder [PENDING]
-- [ ] **5.1 Create `rayforge/machine/driver/ruidarpa/rpa_encoder.py`** — implement `RuidaRPAEncoder(OpsEncoder)`:
+## Phase 5: RuidaRPAEncoder [COMPLETE]
+
+_Complete as of 2026-08-07 (RuidaRPAEncoder, all 23 CommandTypes)._
+- [x] **5.1 Create `rayforge/machine/driver/ruidarpa/rpa_encoder.py`** — implement `RuidaRPAEncoder(OpsEncoder)`:
   - State tracking: `power`, `cut_speed`, `travel_speed`, `current_pos`, `active_laser`, `air_assist`
   - `encode(ops, machine, doc)` → `EncodedOutput` with rpascript lines in `text`
   - Command dispatch via `_handle_command()` based on `CommandType`
   - Coordinates stay in mm (rpascript uses mm natively)
   - Power converted from normalized (0.0-1.0) to percentage (0-100%)
-- [ ] **5.2 Implement command handlers** mapping Ops to rpascript:
+- [x] **5.2 Implement command handlers** mapping Ops to rpascript:
   - `SET_POWER` → `IMD_POWER_{n} Power={percent:.1f}%`
   - `SET_CUT_SPEED` → `SPEED_LASER_{n} Speed={speed:.3f}mm/S`
   - `SET_TRAVEL_SPEED` → `SPEED_AXIS Speed={speed:.3f}mm/S`
@@ -171,26 +181,30 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
   - `LAYER_END` → `LAYER_END` + `; --- End Layer ---`
   - `WORKPIECE_START` → `; --- Workpiece {uid[:8]} ---`
   - `WORKPIECE_END` → `; --- End Workpiece ---`
-- [ ] **5.3 `_reset_state()`** — reset all state tracking between encode passes
-- [ ] **5.4 Helper methods** — `_power_to_percent(normalized)`, `_speed_format(speed)`, `_coord_format(mm)`
+- [x] **5.3 `_reset_state()`** — reset all state tracking between encode passes
+- [x] **5.4 Helper methods** — `_power_to_percent(normalized)`, `_speed_format(speed)`, `_coord_format(mm)`
 
-## Phase 6: Testing [PENDING]
-- [ ] **6.1 Write encoder unit test** — `tests/machine/driver/ruidarpa/test_encoder.py`:
+## Phase 6: Testing [COMPLETE]
+
+_Complete as of 2026-08-07 (test suite added; see testing log)._
+- [x] **6.1 Write encoder unit test** — `tests/machine/driver/ruidarpa/test_encoder.py`:
   - Verify rpascript output for each command type
   - Test coordinate formatting, power conversion
   - Test `_reset_state()` between encode calls
   - Run with: `pixi run -e ruidarpa test tests/machine/driver/ruidarpa/test_encoder.py`
-- [ ] **6.2 Write adapter unit tests** — `tests/machine/driver/ruidarpa/test_adapter.py`:
+- [x] **6.2 Write adapter unit tests** — `tests/machine/driver/ruidarpa/test_adapter.py`:
   - Mock `RdDriver`, verify lifecycle
   - Test mode switching via `tui` config flag
   - Test config parsing: host only, USB only, **both provided** (allowed), neither (expect `DriverPrecheckError`)
   - Test `get_setup_vars` VarSet structure
   - Run with: `pixi run -e ruidarpa test tests/machine/driver/ruidarpa/test_adapter.py`
-- [ ] **6.3 Verify with `pixi run lint`** — fix all flake8/pyflakes/pyright errors
-- [ ] **6.4 Verify with `pixi run -e ruidarpa test`** — ensure no regressions in existing tests
+- [x] **6.3 Verify with `pixi run lint`** — fix all flake8/pyflakes/pyright errors
+- [x] **6.4 Verify with `pixi run -e ruidarpa test`** — ensure no regressions in existing tests
 
-## Phase 7: Cleanup & Documentation [PENDING]
-- [ ] **7.1 Delete deprecated `rayforge/machine/driver/ruidatui/`** — confirmed deprecated by user
+## Phase 7: Cleanup & Documentation [PARTIAL]
+
+_Partial as of 2026-08-07 — 7.1 done (ruidatui deleted); 7.2 and 7.3 pending._
+- [x] **7.1 Delete deprecated `rayforge/machine/driver/ruidatui/`** — confirmed deprecated by user
 - [ ] **7.2 Add implementation reference in `ruidarpa/docs/`** — point to RPA integration guide and rpascript guide
 - [ ] **7.3 Final verification** — `pixi run lint`, `pixi run -e ruidarpa test` pass cleanly
 

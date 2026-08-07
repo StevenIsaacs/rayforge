@@ -331,8 +331,9 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert "AIR_ASSIST_ON" not in result.text
-        assert any("SET_COOLANT" in record.message
-                   for record in caplog.records)
+        assert any(
+            "SET_COOLANT" in record.message for record in caplog.records
+        )
 
     def test_feed_rate_emits_speed_line(self, encoder, mock_machine, doc):
         """SET_FEED_RATE should emit a SPEED_LASER_1 action line."""
@@ -427,6 +428,52 @@ class TestSettingsCommands:
         assert "LASER_DEVICE_2" in lines
         assert "LASER_DEVICE_1" in lines
         assert lines.index("LASER_DEVICE_2") < lines.index("LASER_DEVICE_1")
+
+    def test_set_head_numeric_suffix_fallback_selects_device(
+        self, encoder, mock_machine, doc
+    ):
+        """SET_HEAD with a numeric suffix derives the device number."""
+        mock_machine.heads.clear()
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.set_head("laser_2")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        # ((2 - 1) % 2) + 1 = 2; active_laser defaults to 1
+        assert "LASER_DEVICE_2" in result.text
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.set_head("laser_1")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        # ((1 - 1) % 2) + 1 = 1, no switch needed
+        assert "LASER_DEVICE_1" not in result.text
+
+    def test_set_head_char_sum_fallback_selects_device(
+        self, encoder, mock_machine, doc
+    ):
+        """SET_HEAD without a numeric suffix falls back to char sums."""
+        mock_machine.heads.clear()
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.set_head("laser-3")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        lines = result.text.split("\n")
+        # sum(ord(c) for c in "laser-3") = 631, odd -> device 2
+        assert "LASER_DEVICE_2" in lines
 
 
 class TestCurveLinearization:
@@ -566,13 +613,9 @@ class TestOpMapGeneration:
         ops.job_end()  # 11 -> LAST_LAYER/SELECTs/END_JOB/EOF
         return ops
 
-    def test_three_layer_op_map_positions(
-        self, encoder, mock_machine, doc
-    ):
+    def test_three_layer_op_map_positions(self, encoder, mock_machine, doc):
         """A 3-layer job must keep exact per-layer op_map positions."""
-        result = encoder.encode(
-            self._three_layer_job(doc), mock_machine, doc
-        )
+        result = encoder.encode(self._three_layer_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
         op_map = result.op_map.op_to_machine_code
 
@@ -587,9 +630,15 @@ class TestOpMapGeneration:
         eof = lines.index("EOF")
 
         assert (
-            attr0 < attr1 < attr2
-            < last_layer < select0 < select1 < select2
-            < end_job < eof
+            attr0
+            < attr1
+            < attr2
+            < last_layer
+            < select0
+            < select1
+            < select2
+            < end_job
+            < eof
         )
         assert eof == len(lines) - 1
 
@@ -601,17 +650,16 @@ class TestOpMapGeneration:
             lines.index("MIN_POWER_1 Power=50.0%"),
             lines.index("MAX_POWER_1 Power=50.0%"),
         ]
-        assert op_map[3] == [
-            lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")
-        ]
-        assert op_map[6] == [
-            lines.index("MOVE_NEAR_XY X=1.000mm Y=1.000mm")
-        ]
-        assert op_map[9] == [
-            lines.index("CUT_NEAR_XY X=9.000mm Y=9.000mm")
-        ]
+        assert op_map[3] == [lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")]
+        assert op_map[6] == [lines.index("MOVE_NEAR_XY X=1.000mm Y=1.000mm")]
+        assert op_map[9] == [lines.index("CUT_NEAR_XY X=9.000mm Y=9.000mm")]
         assert op_map[11] == [
-            last_layer, select0, select1, select2, end_job, eof
+            last_layer,
+            select0,
+            select1,
+            select2,
+            end_job,
+            eof,
         ]
 
 
@@ -647,16 +695,10 @@ class TestOpMapLayoutPinning:
 
         assert op_map[0] == list(range(0, attr0))
         assert op_map[1] == list(range(attr0, attr1))
-        assert op_map[2] == [
-            lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")
-        ]
+        assert op_map[2] == [lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")]
         assert op_map[4] == list(range(attr1, last_layer))
-        assert op_map[5] == [
-            lines.index("CUT_NEAR_XY X=10.000mm Y=8.000mm")
-        ]
-        assert op_map[7] == [
-            last_layer, select0, select1, end_job, eof
-        ]
+        assert op_map[5] == [lines.index("CUT_NEAR_XY X=10.000mm Y=8.000mm")]
+        assert op_map[7] == [last_layer, select0, select1, end_job, eof]
 
         for op_index, block in op_map.items():
             for line_num in block:
@@ -698,3 +740,88 @@ class TestErrorHandling:
 
         with pytest.raises(ValueError, match="LAYER_START"):
             encoder.encode(ops, mock_machine, doc)
+
+
+def _plan_job(doc):
+    """Return Ops for a small two-layer plan test job."""
+    ops = Ops()
+    ops.job_start()
+    ops.layer_start(layer_uid=doc.layers[0].uid)
+    ops.set_power(0.5)
+    ops.move_to(5.0, 5.0, 0.0)
+    ops.line_to(10.0, 8.0, 0.0)
+    ops.layer_end(layer_uid=doc.layers[0].uid)
+    ops.layer_start(layer_uid=doc.layers[1].uid)
+    ops.set_feed_rate(200)
+    ops.move_to(20.0, 20.0, 0.0)
+    ops.layer_end(layer_uid=doc.layers[1].uid)
+    ops.job_end()
+    return ops
+
+
+class TestGluescriptPlan:
+    """The encoder records its GlueScript call plan for re-staging."""
+
+    def test_encode_populates_rpa_plan(self, encoder, mock_machine, doc):
+        """encode() must attach the recorded plan to the output."""
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        assert result.rpa_plan is not None
+        assert len(result.rpa_plan) > 0
+
+    def test_empty_ops_have_no_plan(self, encoder, mock_machine, doc):
+        """An empty job produces no plan (no GlueScript calls)."""
+        result = encoder.encode(Ops(), mock_machine, doc)
+        assert result.rpa_plan is None
+
+    def test_plan_starts_with_declare_job_and_ends_with_end_job(
+        self, encoder, mock_machine, doc
+    ):
+        """The plan frames the job exactly like the driver transcript."""
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        assert result.rpa_plan[0][0] == "declare_job"
+        assert result.rpa_plan[-1] == ("end_job", ())
+
+    def test_plan_records_structural_and_raw_calls(
+        self, encoder, mock_machine, doc
+    ):
+        """Structural calls and add_layer_action raw lines are recorded."""
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        names = [name for name, _ in result.rpa_plan]
+        assert "declare_layer" in names
+        assert "move_xy_to" in names
+        assert "cut_xy_to" in names
+        assert "add_layer_action" in names
+
+    def test_plan_args_are_positional_tuples(self, encoder, mock_machine, doc):
+        """Recorded args are plain positional tuples (no kwargs)."""
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        for name, args in result.rpa_plan:
+            assert isinstance(name, str)
+            assert isinstance(args, tuple)
+
+    def test_plan_replays_without_re_recording(
+        self, encoder, mock_machine, doc
+    ):
+        """gluescript_plan() returns the same snapshot each call."""
+        encoder.encode(_plan_job(doc), mock_machine, doc)
+        first = encoder.gluescript_plan()
+        second = encoder.gluescript_plan()
+        assert first == second
+
+    def test_plan_survives_encoder_reuse(self, encoder, mock_machine, doc):
+        """A new encode replaces the plan; the old snapshot stays valid."""
+        result1 = encoder.encode(_plan_job(doc), mock_machine, doc)
+        plan1 = result1.rpa_plan
+        result2 = encoder.encode(_plan_job(doc), mock_machine, doc)
+        assert result2.rpa_plan is not None
+        assert result2.rpa_plan == plan1
+
+    def test_plan_layers_use_one_based_keys(self, encoder, mock_machine, doc):
+        """add_layer_action records the internal 1-based layer key."""
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        action_layers = {
+            args[0]
+            for name, args in result.rpa_plan
+            if name == "add_layer_action"
+        }
+        assert action_layers == {1, 2}
