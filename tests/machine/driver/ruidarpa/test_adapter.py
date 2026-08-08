@@ -909,9 +909,9 @@ class TestStatusMmFix:
         adapter, _backend = adapter_pair
         adapter._on_rpa_status(
             {
-                "MEM_CURRENT_POSITION_X": (123.456, "X"),
-                "MEM_CURRENT_POSITION_Y": (45.678, "Y"),
-                "MEM_CURRENT_POSITION_Z": (7.89, "Z"),
+                "POSITION_X": (123.456, "X"),
+                "POSITION_Y": (45.678, "Y"),
+                "POSITION_Z": (7.89, "Z"),
             }
         )
         assert adapter.state.machine_pos == (123.456, 45.678, 7.89)
@@ -928,9 +928,9 @@ class TestStatusMmFix:
         adapter, _backend = adapter_pair
         adapter._on_rpa_status(
             {
-                "MEM_CURRENT_POSITION_X": 12.5,
-                "MEM_CURRENT_POSITION_Y": 34.5,
-                "MEM_CURRENT_POSITION_Z": 56.5,
+                "POSITION_X": 12.5,
+                "POSITION_Y": 34.5,
+                "POSITION_Z": 56.5,
             }
         )
         assert adapter.state.machine_pos == (12.5, 34.5, 56.5)
@@ -946,7 +946,7 @@ class TestStatusMmFix:
         """A missing axis must retain the previously reported value."""
         adapter, _backend = adapter_pair
         adapter.state = replace(adapter.state, machine_pos=(10.0, 20.0, 30.0))
-        adapter._on_rpa_status({"MEM_CURRENT_POSITION_X": (1.0, "X")})
+        adapter._on_rpa_status({"POSITION_X": (1.0, "X")})
         assert adapter.state.machine_pos == (1.0, 20.0, 30.0)
 
     @pytest.mark.asyncio
@@ -956,7 +956,7 @@ class TestStatusMmFix:
     async def test_machine_status_dict_accepted(self, adapter_pair):
         """A machine-status-shaped dict must not raise or move the state."""
         adapter, _backend = adapter_pair
-        adapter._on_rpa_status({"MEM_MACHINE_STATUS": 1})
+        adapter._on_rpa_status({"MACHINE_STATUS": 1})
         assert adapter.state.machine_pos == (None, None, None)
 
     def test_unwrap_mm_tuple_returns_first_element(self):

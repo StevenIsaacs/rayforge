@@ -63,7 +63,7 @@ _RpaBackend = Union[RpaDirectDriver, RpaRpcClient]
 
 
 def _unwrap_mm(value: object) -> Optional[float]:
-    """Extract the mm value from a MEM_CURRENT_POSITION_* field.
+    """Extract the mm value from a POSITION_* field.
 
     StatusDict positions arrive as ``(float_mm, str_description)``
     tuples in both direct and TUI RPC modes. Accept both forms for
@@ -546,7 +546,7 @@ class RuidaRPAAdapter(Driver):
             # type handling
             event = {k: event[k] for k in event}  # type: ignore
             status_value = event.get("status") or event.get(
-                "MEM_MACHINE_STATUS"
+                "MACHINE_STATUS"
             )
             if status_value is not None:
                 logger.debug(
@@ -558,10 +558,10 @@ class RuidaRPAAdapter(Driver):
                 )
 
             # Extract current position (values in mm)
-            # MEM_CURRENT_POSITION_* values are (float_mm, str_description)
-            pos_x = _unwrap_mm(event.get("MEM_CURRENT_POSITION_X"))
-            pos_y = _unwrap_mm(event.get("MEM_CURRENT_POSITION_Y"))
-            pos_z = _unwrap_mm(event.get("MEM_CURRENT_POSITION_Z"))
+            # POSITION_* values are (float_mm, str_description)
+            pos_x = _unwrap_mm(event.get("POSITION_X"))
+            pos_y = _unwrap_mm(event.get("POSITION_Y"))
+            pos_z = _unwrap_mm(event.get("POSITION_Z"))
 
             if any(v is not None for v in (pos_x, pos_y, pos_z)):
                 current = self.state.machine_pos
