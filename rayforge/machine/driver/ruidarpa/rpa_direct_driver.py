@@ -67,8 +67,8 @@ class RpaDirectDriver:
     def stop(self) -> None:
         """Disconnect the driver.
 
-        The underlying RdDriver instance is retained so that head/tail
-        script settings and connection parameters survive a restart.
+        The underlying RdDriver instance is retained so that
+        connection parameters survive a restart.
         """
         if self._driver is not None:
             try:
@@ -87,8 +87,7 @@ class RpaDirectDriver:
             auto_checksum: bool = False) -> None:
         """Run an Rpascript.
 
-        Queues the raw script without head/tail composition. For a
-        script with automatic head/tail framing, use ``run_job()``.
+        Queues the raw script without head/tail composition.
 
         Args:
             script: List of Rpascript command strings.
@@ -154,56 +153,6 @@ class RpaDirectDriver:
         if self._driver is not None:
             self._driver.cancel_script()
 
-    # --- Head/Tail scripts ---
-
-    def set_head_script(self, script: list[str]) -> None:
-        """Set the head script executed before every job.
-
-        The head script runs automatically by ``run_job`` before the
-        job-specific commands. Pass an empty list to clear. May be
-        called before ``start()``.
-
-        Args:
-            script: List of rpascript command strings.
-        """
-        self._ensure_driver().set_head_script(script)
-
-    def get_head_script(self) -> list[str]:
-        """Return the current head script."""
-        return self._ensure_driver().get_head_script()
-
-    def set_tail_script(self, script: list[str]) -> None:
-        """Set the tail script executed after every job.
-
-        The tail script runs automatically by ``run_job`` after the
-        job-specific commands. Pass an empty list to clear. May be
-        called before ``start()``.
-
-        Args:
-            script: List of rpascript command strings.
-        """
-        self._ensure_driver().set_tail_script(script)
-
-    def get_tail_script(self) -> list[str]:
-        """Return the current tail script."""
-        return self._ensure_driver().get_tail_script()
-
-    def run_job(self, script: list[str],
-                auto_checksum: bool = False) -> None:
-        """Run a job with automatic head and tail composition.
-
-        Executes: head_script + *script* + tail_script. For a raw
-        script without head/tail, use ``run()`` instead.
-
-        Args:
-            script: Job-specific rpascript command strings.
-            auto_checksum: Whether to auto-calculate checksums.
-        """
-        if not script:
-            return
-        driver = self._require_connected()
-        driver.run_job(script, auto_checksum=auto_checksum)
-
     def set_protect(self, enabled: bool) -> None:
         """Enable or disable protect mode.
 
@@ -218,6 +167,109 @@ class RpaDirectDriver:
         if self._driver is None:
             return False
         return self._driver.protect_enabled
+
+    # --- Jog / Home ---
+
+    def home(self) -> None:
+        """Home the X and Y axes.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        home command is sent exactly once.
+        """
+        self._require_connected().home()
+
+    def home_z(self) -> None:
+        """Home the Z axis.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        home command is sent exactly once.
+        """
+        self._require_connected().home_z()
+
+    def jog_xy_to(self, x: float, y: float) -> None:
+        """Jog the XY axes to an absolute position in mm.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        jog is sent exactly once.
+        """
+        self._require_connected().jog_xy_to(x, y)
+
+    def jog_xy_rel(
+        self, x: Optional[float] = None, y: Optional[float] = None
+    ) -> None:
+        """Jog the XY axes relative to the current position in mm.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        jog is sent exactly once.
+        """
+        self._require_connected().jog_xy_rel(x, y)
+
+    def jog_x_rel(self, x: Optional[float] = None) -> None:
+        """Jog the X axis relative to the current position in mm.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        jog is sent exactly once.
+        """
+        self._require_connected().jog_x_rel(x)
+
+    def jog_y_rel(self, y: Optional[float] = None) -> None:
+        """Jog the Y axis relative to the current position in mm.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        jog is sent exactly once.
+        """
+        self._require_connected().jog_y_rel(y)
+
+    def jog_z_rel(self, z: Optional[float] = None) -> None:
+        """Jog the Z axis relative to the current position in mm.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        jog is sent exactly once.
+        """
+        self._require_connected().jog_z_rel(z)
+
+    def jog_u_rel(self, u: Optional[float] = None) -> None:
+        """Jog the U axis relative to the current position in mm.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        jog is sent exactly once.
+        """
+        self._require_connected().jog_u_rel(u)
+
+    def jog_set_xy_speed(self, speed: float) -> None:
+        """Set the XY jog speed in mm/s.
+
+        Delegates without requiring a connection: RdDriver stores the
+        jog speed as session-less state, so the setter works while
+        disconnected.
+        """
+        self._ensure_driver().jog_set_xy_speed(speed)
+
+    def jog_set_z_speed(self, speed: float) -> None:
+        """Set the Z jog speed in mm/s.
+
+        Delegates without requiring a connection: RdDriver stores the
+        jog speed as session-less state, so the setter works while
+        disconnected.
+        """
+        self._ensure_driver().jog_set_z_speed(speed)
+
+    def jog_set_u_speed(self, speed: float) -> None:
+        """Set the U jog speed in mm/s.
+
+        Delegates without requiring a connection: RdDriver stores the
+        jog speed as session-less state, so the setter works while
+        disconnected.
+        """
+        self._ensure_driver().jog_set_u_speed(speed)
 
     # --- Status ---
 

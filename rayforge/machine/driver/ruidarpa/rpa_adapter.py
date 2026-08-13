@@ -61,6 +61,11 @@ logger = logging.getLogger(__name__)
 # Type alias for the two possible backends
 _RpaBackend = Union[RpaDirectDriver, RpaRpcClient]
 
+# Default speed for move_to() absolute jogs (mm/s), used until the first
+# jog() records the GUI-configured speed. After that, move_to() reuses the
+# last jog speed so absolute moves do not fight the jog speed.
+DEFAULT_MOVE_TO_JOG_SPEED_MM_S = 600.0
+
 
 def _unwrap_mm(value: object) -> Optional[float]:
     """Extract the mm value from a POSITION_* field.
@@ -174,7 +179,7 @@ class RuidaRPAAdapter(Driver):
         self._keep_running: bool = False
         self._is_connected: bool = False
         self._shutting_down: bool = False
-        self._jog_config_initialized: bool = False
+        self._jog_speed_mm_s: Optional[float] = None
 
     # --- Properties ---
 
@@ -200,38 +205,7 @@ class RuidaRPAAdapter(Driver):
             return f"ruidarpa://{usb}"
         return None
 
-    # --- Head/Tail scripts & Protect ---
-
-    async def get_head_script(self) -> list[str]:
-        """Return the head script from the backend."""
-        if self._backend is None:
-            return []
-        if isinstance(self._backend, RpaDirectDriver):
-            return self._backend.get_head_script()
-        # TUI RPC mode doesn't expose head/tail
-        return []
-
-    async def set_head_script(self, script: list[str]) -> None:
-        """Set the head script on the backend."""
-        if self._backend is None:
-            return
-        if isinstance(self._backend, RpaDirectDriver):
-            self._backend.set_head_script(script)
-
-    async def get_tail_script(self) -> list[str]:
-        """Return the tail script from the backend."""
-        if self._backend is None:
-            return []
-        if isinstance(self._backend, RpaDirectDriver):
-            return self._backend.get_tail_script()
-        return []
-
-    async def set_tail_script(self, script: list[str]) -> None:
-        """Set the tail script on the backend."""
-        if self._backend is None:
-            return
-        if isinstance(self._backend, RpaDirectDriver):
-            self._backend.set_tail_script(script)
+    # --- Protect ---
 
     async def get_protect(self) -> bool:
         """Return whether protect mode is enabled."""
@@ -387,6 +361,16 @@ class RuidaRPAAdapter(Driver):
                             client.register_reply_listener,
                             self._on_rpa_reply,
                         )
+                        # Neutralize the server driver's default head/tail
+                        # composition: staged jobs are fully self-framed by
+                        # the encoder, and run_job(None) prepends the driver's
+                        # default head script otherwise.
+                        await loop.run_in_executor(
+                            None, client.set_head_script, []
+                        )
+                        await loop.run_in_executor(
+                            None, client.set_tail_script, []
+                        )
                 else:
                     driver: RpaDirectDriver = backend  # type: ignore
                     udp_host = self._config.get("udp_host")
@@ -413,12 +397,6 @@ class RuidaRPAAdapter(Driver):
 
                 # --- Connected successfully ---
                 delay = self.RECONNECT_BASE_DELAY
-
-                # Clear any inherited head/tail framing: staged jobs
-                # carry their own ref-point framing.
-                assert backend is not None
-                await loop.run_in_executor(None, backend.set_head_script, [])
-                await loop.run_in_executor(None, backend.set_tail_script, [])
 
                 self._is_connected = True
                 self.state.status = DeviceStatus.IDLE
@@ -654,39 +632,21 @@ class RuidaRPAAdapter(Driver):
 
     # --- Script execution ---
 
-    async def _run_job(
-        self, script_lines: List[str], auto_checksum: bool = False
-    ) -> None:
-        """Run a staged job via the backend's ``run_job``.
-
-        The backend composes head + job + tail around the job body.
-        Both direct and TUI RPC backends expose ``run_job``.
-
-        Args:
-            script_lines: Job-specific rpascript command lines.
-            auto_checksum: Whether to auto-calculate END_JOB checksum.
-        """
-        if not script_lines:
-            return
-        if self._backend is None:
-            raise DriverSetupError("Backend not initialized")
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None, self._backend.run_job, script_lines, auto_checksum
-        )
-
     async def _run_script(
         self, script_lines: List[str], auto_checksum: bool = False
     ) -> None:
         """Run raw rpascript via the backend's ``run``.
 
-        Runtime commands (pause/resume, cancel, power, WCS select)
-        bypass head/tail framing in both modes.
+        All scripts — jobs and runtime commands — are sent raw through
+        ``backend.run()``. The encoder output is already self-framed
+        (REF_POINT/SET_ABSOLUTE/START_JOB…END_JOB), so head/tail
+        composition is never used.
 
         Args:
             script_lines: Rpascript command lines to execute.
-            auto_checksum: Whether to auto-calculate END_JOB checksum.
-                Only set True for full job scripts that contain END_JOB.
+            auto_checksum: Whether to auto-calculate checksums. Passed
+                for full job scripts (the current ruida-pa runner ignores
+                this flag and patches END_JOB unconditionally).
         """
         if not script_lines:
             return
@@ -763,7 +723,7 @@ class RuidaRPAAdapter(Driver):
                 # instead of shipping the assembled rpascript text.
                 await self._run_staged_job(encoded)
         elif text_lines:
-            await self._run_job(text_lines, auto_checksum=True)
+            await self._run_script(text_lines, auto_checksum=True)
 
         self.job_finished.send(self)
 
@@ -777,7 +737,7 @@ class RuidaRPAAdapter(Driver):
                 len(lines),
                 extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
             )
-            await self._run_job(lines, auto_checksum=True)
+            await self._run_script(lines, auto_checksum=True)
         self.job_finished.send(self)
 
     async def set_hold(self, hold: bool = True) -> None:
@@ -798,22 +758,13 @@ class RuidaRPAAdapter(Driver):
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
         loop = asyncio.get_running_loop()
-        if self._tui_mode:
-            client: RpaRpcClient = self._backend  # type: ignore
-            # Live homing commands auto-run server-side; the client
-            # methods must not be followed by a run() of the result.
-            if axes is None or (axes & (Axis.X | Axis.Y)):
-                await loop.run_in_executor(None, client.home)
-            if axes is not None and (axes & Axis.Z):
-                await loop.run_in_executor(None, client.home_z)
-        else:
-            lines: List[str] = []
-            if axes is None or (axes & (Axis.X | Axis.Y)):
-                lines.append("HOME_XY")
-            if axes is not None and (axes & Axis.Z):
-                lines.append("HOME_Z")
-            if lines:
-                await loop.run_in_executor(None, self._backend.run, lines)
+        # Live homing commands auto-send server-side (and the direct
+        # backend auto-sends via the wrapped RdDriver); the returned
+        # lines must not be run() again.
+        if axes is None or (axes & (Axis.X | Axis.Y)):
+            await loop.run_in_executor(None, self._backend.home)
+        if axes is not None and (axes & Axis.Z):
+            await loop.run_in_executor(None, self._backend.home_z)
 
     async def move_to(self, pos_x: float, pos_y: float) -> None:
         # TODO: The coordinates coming from the UI are inverted. Why?
@@ -829,36 +780,21 @@ class RuidaRPAAdapter(Driver):
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
         loop = asyncio.get_running_loop()
-        if self._tui_mode:
-            client: RpaRpcClient = self._backend  # type: ignore
-            # Live jog commands auto-run server-side; the client method
-            # must not be followed by a run() of the result.
-            await loop.run_in_executor(None, client.jog_xy_to, pos_x, pos_y)
-        else:
-            lines: List[str] = [
-                "SPEED_LASER_1 Speed:600",
-                f"JOG_XY Rel:MACHINE X={pos_x:.3f}mm Y={pos_y:.3f}mm",
-            ]
-            await loop.run_in_executor(None, self._backend.run, lines)
+        speed_mm_s = (
+            self._jog_speed_mm_s
+            if self._jog_speed_mm_s is not None
+            else DEFAULT_MOVE_TO_JOG_SPEED_MM_S
+        )
+        await loop.run_in_executor(
+            None, self._backend.jog_set_xy_speed, speed_mm_s
+        )
+        # Live jog commands auto-send server-side (and the direct backend
+        # auto-sends via the wrapped RdDriver); the returned lines must
+        # not be run() again.
+        await loop.run_in_executor(None, self._backend.jog_xy_to, pos_x, pos_y)
 
     async def select_tool(self, tool_number: int) -> None:
         pass
-
-    async def _ensure_jog_config(self, speed_mm_s: float) -> None:
-        """Configure the backend jog speed before the first jog.
-
-        In TUI RPC mode the server-side XY jog speed is set once, on
-        first use. Direct mode embeds the speed in every generated jog
-        line, so no backend call is needed.
-        """
-        if self._jog_config_initialized:
-            return
-        self._jog_config_initialized = True
-        if isinstance(self._backend, RpaRpcClient):
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(
-                None, self._backend.jog_set_xy_speed, speed_mm_s
-            )
 
     async def jog(self, speed: int, **deltas: float) -> None:
         # TODO: Jog speed is in mm/min, but the RPA TUI service expects mm/s.
@@ -866,70 +802,51 @@ class RuidaRPAAdapter(Driver):
         speed_mm_per_s = speed / 60.0
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
+        self._jog_speed_mm_s = speed_mm_per_s
+        # The speed is recorded before the early return so speed-only
+        # jogs update the stored move_to() speed without touching the
+        # backend.
+        if not deltas:
+            return
         loop = asyncio.get_running_loop()
-        await self._ensure_jog_config(speed_mm_per_s)
-        if self._tui_mode:
-            client: RpaRpcClient = self._backend  # type: ignore
-            # Live jog commands auto-run server-side; the client methods
-            # must not be followed by a run() of the result.
-            if "z" in deltas:
-                await loop.run_in_executor(
-                    None, client.jog_set_z_speed, speed_mm_per_s
-                )
-            if "u" in deltas:
-                await loop.run_in_executor(
-                    None, client.jog_set_u_speed, speed_mm_per_s
-                )
-            if "x" in deltas and "y" in deltas:
-                await loop.run_in_executor(
-                    None, client.jog_xy_rel, deltas["x"], deltas["y"]
-                )
-            else:
-                if "x" in deltas:
-                    await loop.run_in_executor(
-                        None, client.jog_x_rel, deltas["x"]
-                    )
-                if "y" in deltas:
-                    await loop.run_in_executor(
-                        None, client.jog_y_rel, deltas["y"]
-                    )
-            if "z" in deltas:
-                await loop.run_in_executor(None, client.jog_z_rel, deltas["z"])
-            if "u" in deltas:
-                await loop.run_in_executor(None, client.jog_u_rel, deltas["u"])
+        # Re-assert the XY jog speed on every jog: move_to() overrides
+        # the backend speed, so a stale value would otherwise persist
+        # until the next move.
+        await loop.run_in_executor(
+            None, self._backend.jog_set_xy_speed, speed_mm_per_s
+        )
+        if "z" in deltas:
+            await loop.run_in_executor(
+                None, self._backend.jog_set_z_speed, speed_mm_per_s
+            )
+        if "u" in deltas:
+            await loop.run_in_executor(
+                None, self._backend.jog_set_u_speed, speed_mm_per_s
+            )
+        # Live jog commands auto-send server-side (and the direct backend
+        # auto-sends via the wrapped RdDriver); the returned lines must
+        # not be run() again.
+        if "x" in deltas and "y" in deltas:
+            await loop.run_in_executor(
+                None, self._backend.jog_xy_rel, deltas["x"], deltas["y"]
+            )
         else:
-            lines: List[str] = []
-            delta_x = deltas.get("x")
-            delta_y = deltas.get("y")
-            if delta_x is not None and delta_y is not None:
-                lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
-                lines.append(
-                    f"JOG_XY Rel:CURRENT X={delta_x:.3f}mm Y={delta_y:.3f}mm"
+            if "x" in deltas:
+                await loop.run_in_executor(
+                    None, self._backend.jog_x_rel, deltas["x"]
                 )
-            else:
-                if delta_x is not None:
-                    lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
-                    lines.append(f"JOG_X Rel:CURRENT X={delta_x:.3f}mm")
-                if delta_y is not None:
-                    lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
-                    lines.append(f"JOG_Y Rel:CURRENT Y={delta_y:.3f}mm")
-            delta_z = deltas.get("z")
-            if delta_z is not None:
-                lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
-                lines.append(f"JOG_Z Rel:CURRENT Z={delta_z:.3f}mm")
-            delta_u = deltas.get("u")
-            if delta_u is not None:
-                lines.append(f"SPEED_LASER_1 Speed:{speed_mm_per_s:.1f}")
-                lines.append(f"JOG_U Rel:CURRENT U={delta_u:.3f}mm")
-            if lines:
-                logger.debug(
-                    "Jogging axes: %s",
-                    ", ".join(f"{k}={v:.3f}" for k, v in deltas.items()),
-                    extra=self._log_extra(
-                        "TUI_RPC" if self._tui_mode else "RPA"
-                    ),
+            if "y" in deltas:
+                await loop.run_in_executor(
+                    None, self._backend.jog_y_rel, deltas["y"]
                 )
-                await loop.run_in_executor(None, self._backend.run, lines)
+        if "z" in deltas:
+            await loop.run_in_executor(
+                None, self._backend.jog_z_rel, deltas["z"]
+            )
+        if "u" in deltas:
+            await loop.run_in_executor(
+                None, self._backend.jog_u_rel, deltas["u"]
+            )
 
     # --- Power / Laser ---
 

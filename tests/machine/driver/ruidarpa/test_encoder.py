@@ -384,7 +384,7 @@ class TestSettingsCommands:
         assert "LASER_INTERVAL 0.050mS" in result.text
 
     def test_dwell_emits_delay_line(self, encoder, mock_machine, doc):
-        """DWELL should emit a DELAY action line in milliseconds."""
+        """DWELL should emit a delay action line in milliseconds."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -393,7 +393,7 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "DELAY 250.000ms" in result.text
+        assert "delay 250.000ms" in result.text
 
     def test_air_assist_on_off(self, encoder, mock_machine, doc):
         """Air assist toggle should emit ON then OFF lines."""

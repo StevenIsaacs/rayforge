@@ -170,7 +170,7 @@ class RuidaRPAEncoder(OpsEncoder):
         if not hasattr(GlueScript, "stage_gluescript"):
             raise RuntimeError(
                 "GlueScript.stage_gluescript() is missing — ruida-pa "
-                ">= 0.14.0 is required to use the ruidarpa driver"
+                ">= 0.15.2 is required to use the ruidarpa driver"
             )
         if ops.len() == 0:
             self.op_map = MachineCodeOpMap()
@@ -429,9 +429,9 @@ class RuidaRPAEncoder(OpsEncoder):
         self._linearize_curve(ops, idx)
 
     def _handle_dwell(self, ops: Ops, idx: int) -> None:
-        """Emit a dwell (pause) command; DELAY accepts milliseconds."""
+        """Emit a dwell (pause) command; delay accepts milliseconds."""
         duration_ms = ops.dwell_duration(idx)
-        self._add_layer_action([f"DELAY {duration_ms:.3f}ms"])
+        self._add_layer_action([f"delay {duration_ms:.3f}ms"])
 
     # -- Configuration handlers ---------------------------------------------
 

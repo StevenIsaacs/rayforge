@@ -6,12 +6,16 @@ The adapter wraps either RpaDirectDriver (direct mode) or RpaRpcClient
 the adapter's public surface:
 
 - Stop/cleanup regression: backend stop()/disconnect() must actually run
-- run_job vs run routing for staged jobs and runtime commands
-- Head/tail clearing after a successful connect
+- run routing for jobs and runtime commands
+- Jog speed tracking: move_to() reuses the last jog() speed (default 600
+  before any jog) and a speed-only jog updates the stored speed
 - Live bridge behavior per mode (no double-run in RPC mode)
+- Fail-loud: backend jog/home failures propagate through the adapter
 - set_wcs_offset failing loud while select_wcs still routes to run()
 - mm fix: status positions are not divided by 1000
 - Reconnect listener hygiene (unregister-before-register in direct mode)
+- Connect-time head/tail clearing: TUI RPC clears the server driver's
+  head/tail scripts to [] while direct mode never touches them
 - Paren-less backend property reads (``is_connected``)
 
 No real network or Ruida hardware is used; the backends are
@@ -22,7 +26,7 @@ import asyncio
 import contextlib
 from dataclasses import replace
 from typing import Callable
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 import pytest
 import pytest_asyncio
@@ -314,21 +318,7 @@ class TestIsConnectedGating:
 
 
 class TestRunRouting:
-    """Staged jobs route to run_job(); runtime commands route to run()."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair",
-        [DIRECT_MODE, RPC_MODE],
-        ids=["direct", "rpc"],
-        indirect=True,
-    )
-    async def test_run_job_routes_to_backend_run_job(self, adapter_pair):
-        """_run_job must call backend.run_job with the lines."""
-        adapter, backend = adapter_pair
-        await adapter._run_job(["START_JOB"], auto_checksum=True)
-        backend.run_job.assert_called_once_with(["START_JOB"], True)
-        backend.run.assert_not_called()
+    """Jobs and runtime commands route through backend run()."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -342,24 +332,22 @@ class TestRunRouting:
         adapter, backend = adapter_pair
         await adapter._run_script(["PAUSE_JOB"])
         backend.run.assert_called_once_with(["PAUSE_JOB"], False)
-        backend.run_job.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_run_stages_job_with_checksum(self, adapter_pair):
-        """run() in direct mode must route the text through run_job."""
+    async def test_run_direct_mode_routes_text_through_run(self, adapter_pair):
+        """run() in direct mode must route the text through backend.run."""
         adapter, backend = adapter_pair
         encoded = EncodedOutput(
             text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
             op_map=MachineCodeOpMap(),
         )
         await adapter.run(encoded, Doc(), Ops())
-        backend.run_job.assert_called_once_with(
+        backend.run.assert_called_once_with(
             ["HOME_XY", "MOVE_NEAR_XY X=1.000mm Y=1.000mm"], True
         )
-        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -405,7 +393,6 @@ class TestRunRouting:
         assert final.args[1] == ["move_xy_to(5.0, 5.0)", "end_job()"]
         assert final.kwargs["require_complete"] is True
         client.run_staged_job.assert_called_once_with()
-        client.run_job.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -414,16 +401,15 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_run_raw_routes_through_run_job_with_checksum(
+    async def test_run_raw_routes_through_run_with_checksum(
         self, adapter_pair
     ):
-        """run_raw() must route through _run_job with auto_checksum=True."""
+        """run_raw() must route through _run_script with auto_checksum=True."""
         adapter, backend = adapter_pair
         await adapter.run_raw("HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm")
-        backend.run_job.assert_called_once_with(
+        backend.run.assert_called_once_with(
             ["HOME_XY", "MOVE_NEAR_XY X=1.000mm Y=1.000mm"], True
         )
-        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -669,26 +655,6 @@ class TestStagePlan:
         ]
 
 
-class TestConnectClearsHeadTail:
-    """A successful connect must clear inherited head/tail framing."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair",
-        [DIRECT_MODE, RPC_MODE],
-        ids=["direct", "rpc"],
-        indirect=True,
-    )
-    async def test_connect_clears_head_and_tail(self, adapter_pair):
-        """After connect, set_head_script([])/set_tail_script([]) run."""
-        adapter, backend = adapter_pair
-        await _run_connect_cycle(
-            adapter, lambda: backend.set_head_script.called
-        )
-        backend.set_head_script.assert_called_once_with([])
-        backend.set_tail_script.assert_called_once_with([])
-
-
 class TestWcsHandling:
     """set_wcs_offset fails loud; select_wcs still routes to run()."""
 
@@ -747,12 +713,13 @@ class TestLiveBridgeRpc:
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_move_to_uses_client_jog_xy_to_without_run(
+    async def test_move_to_before_any_jog_uses_default_speed(
         self, adapter_pair
     ):
-        """move_to() must call client.jog_xy_to and never run() the result."""
+        """move_to() before any jog uses the default 600 mm/s speed."""
         adapter, client = adapter_pair
         await adapter.move_to(10.0, 20.0)
+        client.jog_set_xy_speed.assert_called_once_with(600.0)
         client.jog_xy_to.assert_called_once_with(-10.0, -20.0)
         client.run.assert_not_called()
 
@@ -763,7 +730,7 @@ class TestLiveBridgeRpc:
     async def test_jog_xy_uses_client_jog_xy_rel_without_run(
         self, adapter_pair
     ):
-        """jog(x,y) must set speed once and call client.jog_xy_rel."""
+        """jog(x,y) must set speed then call client.jog_xy_rel."""
         adapter, client = adapter_pair
         await adapter.jog(speed=600, x=5.0, y=5.0)
         client.jog_set_xy_speed.assert_called_once_with(10.0)
@@ -777,9 +744,10 @@ class TestLiveBridgeRpc:
     async def test_jog_z_sets_speed_and_uses_client_jog_z_rel(
         self, adapter_pair
     ):
-        """jog(z) must set the z speed and call client.jog_z_rel."""
+        """jog(z) must set the xy and z speeds and call client.jog_z_rel."""
         adapter, client = adapter_pair
         await adapter.jog(speed=600, z=3.0)
+        client.jog_set_xy_speed.assert_called_once_with(10.0)
         client.jog_set_z_speed.assert_called_once_with(10.0)
         client.jog_z_rel.assert_called_once_with(3.0)
         client.run.assert_not_called()
@@ -788,110 +756,302 @@ class TestLiveBridgeRpc:
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_jog_config_initialized_only_once(self, adapter_pair):
-        """jog_set_xy_speed must run once even across multiple jogs."""
+    async def test_jog_u_sets_speed_and_uses_client_jog_u_rel(
+        self, adapter_pair
+    ):
+        """jog(u) must set the xy and u speeds and call client.jog_u_rel."""
+        adapter, client = adapter_pair
+        await adapter.jog(speed=600, u=4.0)
+        client.jog_set_xy_speed.assert_called_once_with(10.0)
+        client.jog_set_u_speed.assert_called_once_with(10.0)
+        client.jog_u_rel.assert_called_once_with(4.0)
+        client.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_jog_reasserts_xy_speed_every_jog(self, adapter_pair):
+        """jog_set_xy_speed must re-run on every jog, not just the first."""
         adapter, client = adapter_pair
         await adapter.jog(speed=600, x=1.0)
         await adapter.jog(speed=600, y=2.0)
-        client.jog_set_xy_speed.assert_called_once_with(10.0)
+        client.jog_set_xy_speed.assert_has_calls([call(10.0), call(10.0)])
         client.jog_x_rel.assert_called_once_with(1.0)
         client.jog_y_rel.assert_called_once_with(2.0)
         client.run.assert_not_called()
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_move_to_uses_last_jog_speed(self, adapter_pair):
+        """move_to() reuses the last jog() speed instead of a hardcoded one."""
+        adapter, client = adapter_pair
+        await adapter.jog(speed=600, x=1.0)
+        await adapter.move_to(0.0, 0.0)
+        await adapter.jog(speed=600, x=2.0)
+        client.jog_set_xy_speed.assert_has_calls(
+            [call(10.0), call(10.0), call(10.0)]
+        )
+        client.jog_xy_to.assert_called_once_with(0.0, 0.0)
+        client.jog_x_rel.assert_has_calls([call(1.0), call(2.0)])
+        client.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_speed_only_jog_records_speed_without_backend(
+        self, adapter_pair
+    ):
+        """A delta-less jog must no-op on the backend but record speed."""
+        adapter, client = adapter_pair
+        await adapter.jog(speed=900)
+        client.jog_set_xy_speed.assert_not_called()
+        client.jog_xy_rel.assert_not_called()
+        client.jog_z_rel.assert_not_called()
+        client.jog_u_rel.assert_not_called()
+        await adapter.move_to(0.0, 0.0)
+        client.jog_set_xy_speed.assert_called_once_with(15.0)
+        client.jog_xy_to.assert_called_once_with(0.0, 0.0)
+
 
 class TestLiveBridgeDirect:
-    """Direct live bridge generates rpascript lines via driver.run."""
+    """Direct live bridge delegates jog/home to the backend wrapper."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_home_generates_home_xy_line(self, adapter_pair):
-        """home() must run the HOME_XY line."""
+    async def test_home_calls_backend_home_without_run(self, adapter_pair):
+        """home() must call backend.home, never backend.run."""
         adapter, backend = adapter_pair
         await adapter.home()
-        backend.run.assert_called_once_with(["HOME_XY"])
+        backend.home.assert_called_once()
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_home_z_generates_home_z_line(self, adapter_pair):
-        """home(Axis.Z) must run the HOME_Z line."""
+    async def test_home_z_calls_backend_home_z(self, adapter_pair):
+        """home(Axis.Z) must call backend.home_z only."""
         adapter, backend = adapter_pair
         await adapter.home(Axis.Z)
-        backend.run.assert_called_once_with(["HOME_Z"])
+        backend.home_z.assert_called_once()
+        backend.home.assert_not_called()
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_move_to_generates_jog_xy_line(self, adapter_pair):
-        """move_to() must run a speed plus absolute JOG_XY line."""
+    async def test_move_to_before_any_jog_uses_default_speed(
+        self, adapter_pair
+    ):
+        """move_to() before any jog uses the default 600 mm/s speed."""
         adapter, backend = adapter_pair
         await adapter.move_to(10.0, 20.0)
-        backend.run.assert_called_once_with(
-            [
-                "SPEED_LASER_1 Speed:600",
-                "JOG_XY Rel:MACHINE X=-10.000mm Y=-20.000mm",
-            ]
-        )
+        backend.jog_set_xy_speed.assert_called_once_with(600.0)
+        backend.jog_xy_to.assert_called_once_with(-10.0, -20.0)
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_jog_xy_generates_jog_lines(self, adapter_pair):
-        """jog(x,y) must run speed plus relative JOG_XY lines."""
+    async def test_move_to_uses_last_jog_speed(self, adapter_pair):
+        """move_to() reuses the last jog() speed instead of a hardcoded one."""
+        adapter, backend = adapter_pair
+        await adapter.jog(speed=600, x=1.0)
+        await adapter.move_to(0.0, 0.0)
+        await adapter.jog(speed=600, x=2.0)
+        backend.jog_set_xy_speed.assert_has_calls(
+            [call(10.0), call(10.0), call(10.0)]
+        )
+        backend.jog_xy_to.assert_called_once_with(0.0, 0.0)
+        backend.jog_x_rel.assert_has_calls([call(1.0), call(2.0)])
+        backend.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
+    )
+    async def test_jog_xy_sets_speed_and_uses_backend_jog_xy_rel(
+        self, adapter_pair
+    ):
+        """jog(x,y) must set speed then call backend.jog_xy_rel."""
         adapter, backend = adapter_pair
         await adapter.jog(speed=600, x=5.0, y=5.0)
-        backend.run.assert_called_once_with(
-            [
-                "SPEED_LASER_1 Speed:10.0",
-                "JOG_XY Rel:CURRENT X=5.000mm Y=5.000mm",
-            ]
-        )
+        backend.jog_set_xy_speed.assert_called_once_with(10.0)
+        backend.jog_xy_rel.assert_called_once_with(5.0, 5.0)
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_jog_z_generates_jog_z_line(self, adapter_pair):
-        """jog(z) must run speed plus JOG_Z lines."""
+    async def test_jog_z_sets_xy_speed_then_z_speed_and_rel(
+        self, adapter_pair
+    ):
+        """jog(z) must re-assert xy speed, then set z speed and jog_z_rel."""
         adapter, backend = adapter_pair
         await adapter.jog(speed=600, z=2.0)
-        backend.run.assert_called_once_with(
-            [
-                "SPEED_LASER_1 Speed:10.0",
-                "JOG_Z Rel:CURRENT Z=2.000mm",
-            ]
-        )
+        backend.jog_set_xy_speed.assert_called_once_with(10.0)
+        backend.jog_set_z_speed.assert_called_once_with(10.0)
+        backend.jog_z_rel.assert_called_once_with(2.0)
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_jog_x_only_generates_jog_x_line(self, adapter_pair):
-        """jog(x) without y must run speed plus JOG_X lines."""
+    async def test_jog_x_sets_xy_speed_and_uses_backend_jog_x_rel(
+        self, adapter_pair
+    ):
+        """jog(x) without y must set speed then call backend.jog_x_rel."""
         adapter, backend = adapter_pair
         await adapter.jog(speed=600, x=5.0)
-        backend.run.assert_called_once_with(
-            [
-                "SPEED_LASER_1 Speed:10.0",
-                "JOG_X Rel:CURRENT X=5.000mm",
-            ]
-        )
+        backend.jog_set_xy_speed.assert_called_once_with(10.0)
+        backend.jog_x_rel.assert_called_once_with(5.0)
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_jog_has_no_rpc_speed_surface(self, adapter_pair):
-        """Direct jog must not require RPC-only speed setters."""
+    async def test_jog_y_sets_xy_speed_and_uses_backend_jog_y_rel(
+        self, adapter_pair
+    ):
+        """jog(y) without x must set speed and call backend.jog_y_rel only."""
         adapter, backend = adapter_pair
-        await adapter.jog(speed=600, x=5.0, y=5.0)
-        assert not hasattr(backend, "jog_set_xy_speed")
-        backend.run.assert_called_once()
+        await adapter.jog(speed=600, y=5.0)
+        backend.jog_set_xy_speed.assert_called_once_with(10.0)
+        backend.jog_y_rel.assert_called_once_with(5.0)
+        backend.jog_x_rel.assert_not_called()
+        backend.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
+    )
+    async def test_jog_u_sets_speed_and_uses_backend_jog_u_rel(
+        self, adapter_pair
+    ):
+        """jog(u) must set the xy and u speeds and call backend.jog_u_rel."""
+        adapter, backend = adapter_pair
+        await adapter.jog(speed=600, u=2.0)
+        backend.jog_set_xy_speed.assert_called_once_with(10.0)
+        backend.jog_set_u_speed.assert_called_once_with(10.0)
+        backend.jog_u_rel.assert_called_once_with(2.0)
+        backend.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
+    )
+    async def test_speed_only_jog_records_speed_without_backend(
+        self, adapter_pair
+    ):
+        """A delta-less jog must no-op on the backend but record speed."""
+        adapter, backend = adapter_pair
+        await adapter.jog(speed=900)
+        backend.jog_set_xy_speed.assert_not_called()
+        backend.jog_xy_rel.assert_not_called()
+        backend.jog_z_rel.assert_not_called()
+        backend.jog_u_rel.assert_not_called()
+        await adapter.move_to(0.0, 0.0)
+        backend.jog_set_xy_speed.assert_called_once_with(15.0)
+        backend.jog_xy_to.assert_called_once_with(0.0, 0.0)
+
+
+class TestFailLoud:
+    """Backend jog/home failures must propagate through the adapter."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_jog_propagates_backend_failure(self, adapter_pair):
+        """A raising jog_set_xy_speed must surface as RuntimeError."""
+        adapter, backend = adapter_pair
+        backend.jog_set_xy_speed.side_effect = RuntimeError("jog failed")
+        with pytest.raises(RuntimeError, match="jog failed"):
+            await adapter.jog(speed=600, x=1.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_home_propagates_backend_failure(self, adapter_pair):
+        """A raising home must surface as RuntimeError."""
+        adapter, backend = adapter_pair
+        backend.home.side_effect = RuntimeError("home failed")
+        with pytest.raises(RuntimeError, match="home failed"):
+            await adapter.home()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_move_to_propagates_backend_failure(self, adapter_pair):
+        """A raising jog_xy_to must surface as RuntimeError."""
+        adapter, backend = adapter_pair
+        backend.jog_xy_to.side_effect = RuntimeError("move failed")
+        with pytest.raises(RuntimeError, match="move failed"):
+            await adapter.move_to(0.0, 0.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_jog_z_propagates_backend_failure(self, adapter_pair):
+        """A raising jog_z_rel must surface as RuntimeError."""
+        adapter, backend = adapter_pair
+        backend.jog_z_rel.side_effect = RuntimeError("z jog failed")
+        with pytest.raises(RuntimeError, match="z jog failed"):
+            await adapter.jog(speed=600, z=1.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_jog_u_propagates_backend_failure(self, adapter_pair):
+        """A raising jog_u_rel must surface as RuntimeError."""
+        adapter, backend = adapter_pair
+        backend.jog_u_rel.side_effect = RuntimeError("u jog failed")
+        with pytest.raises(RuntimeError, match="u jog failed"):
+            await adapter.jog(speed=600, u=1.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_jog_x_propagates_backend_failure(self, adapter_pair):
+        """A raising jog_x_rel must surface as RuntimeError."""
+        adapter, backend = adapter_pair
+        backend.jog_x_rel.side_effect = RuntimeError("x jog failed")
+        with pytest.raises(RuntimeError, match="x jog failed"):
+            await adapter.jog(speed=600, x=1.0)
 
 
 class TestStatusMmFix:
@@ -1033,22 +1193,22 @@ class TestReconnectListenerHygiene:
             lambda: backend.register_status_listener.call_count == 2,
         )
 
-        for call in backend.unregister_status_listener.call_args_list:
-            assert call.args[0] == adapter._on_rpa_status
-        for call in backend.unregister_error_listener.call_args_list:
-            assert call.args[0] == adapter._on_rpa_error
-        for call in backend.unregister_reply_listener.call_args_list:
-            assert call.args[0] == adapter._on_rpa_reply
+        for entry in backend.unregister_status_listener.call_args_list:
+            assert entry.args[0] == adapter._on_rpa_status
+        for entry in backend.unregister_error_listener.call_args_list:
+            assert entry.args[0] == adapter._on_rpa_error
+        for entry in backend.unregister_reply_listener.call_args_list:
+            assert entry.args[0] == adapter._on_rpa_reply
 
         unreg_indices = [
             index
-            for index, call in enumerate(backend.method_calls)
-            if call[0] == "unregister_status_listener"
+            for index, entry in enumerate(backend.method_calls)
+            if entry[0] == "unregister_status_listener"
         ]
         reg_indices = [
             index
-            for index, call in enumerate(backend.method_calls)
-            if call[0] == "register_status_listener"
+            for index, entry in enumerate(backend.method_calls)
+            if entry[0] == "register_status_listener"
         ]
         assert len(unreg_indices) == len(reg_indices) == 2
         for unreg_index, reg_index in zip(unreg_indices, reg_indices):
@@ -1178,6 +1338,36 @@ class TestConnectFailureBackoff:
         assert backend.stop.called
         assert adapter._is_connected is False
         assert adapter._backend is backend
+
+
+class TestConnectClearsServerHeadTail:
+    """Connect-time head/tail neutralization is TUI-mode only."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_rpc_connect_clears_server_head_tail(self, adapter_pair):
+        """TUI connect must clear the server driver's head/tail scripts."""
+        adapter, client = adapter_pair
+        await _run_connect_cycle(
+            adapter, lambda: client.set_head_script.called
+        )
+        client.set_head_script.assert_any_call([])
+        client.set_tail_script.assert_any_call([])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
+    )
+    async def test_direct_connect_never_clears_head_tail(self, adapter_pair):
+        """Direct mode has no head/tail surface and must not clear it."""
+        adapter, backend = adapter_pair
+        await _run_connect_cycle(
+            adapter, lambda: backend.register_status_listener.called
+        )
+        assert not hasattr(backend, "set_head_script")
+        assert not hasattr(backend, "set_tail_script")
 
 
 class TestHealthPoll:

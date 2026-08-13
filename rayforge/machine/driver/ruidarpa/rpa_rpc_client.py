@@ -173,8 +173,7 @@ class RpaRpcClient:
     def run(self, script: list[str], auto_checksum: bool = False) -> None:
         """Run an Rpascript on the remote machine.
 
-        Queues the raw script without head/tail composition. For a
-        script with automatic head/tail framing, use ``run_job()``.
+        Queues the raw script without head/tail composition.
 
         Args:
             script: List of Rpascript command strings.
@@ -184,36 +183,44 @@ class RpaRpcClient:
             return
         self._call("run", script, auto_checksum=auto_checksum)
 
-    def run_job(
-        self, job: Optional[list[str]] = None, auto_checksum: bool = False
-    ) -> None:
-        """Run a job on the remote machine.
-
-        When ``job`` is omitted (None), the rpascript most recently
-        staged server-side via ``stage_gluescript()`` is run instead —
-        the server composes head + staged rpascript + tail before
-        queuing. For a raw script without head/tail framing, use
-        ``run()`` instead.
-
-        Args:
-            job: Job-specific rpascript command strings. When None,
-                the staged rpascript is run.
-            auto_checksum: Whether to auto-calculate checksums.
-        """
-        if job is not None and not job:
-            return
-        self._call("run_job", job, auto_checksum=auto_checksum)
-
     def run_staged_job(self, auto_checksum: bool = False) -> None:
         """Run the rpascript staged server-side via ``stage_gluescript``.
 
-        The server composes head + staged rpascript + tail before
-        queuing. Raises remotely when nothing has been staged.
+        Runs the staged rpascript. Raises remotely when nothing has
+        been staged.
 
         Args:
             auto_checksum: Whether to auto-calculate checksums.
         """
         self._call("run_job", None, auto_checksum=auto_checksum)
+
+    def set_head_script(self, script: list[str]) -> None:
+        """Set the server-side head script composed into staged jobs.
+
+        The server's RdDriver starts with a non-empty default head
+        (REF_POINT_ABSOLUTE/SET_ABSOLUTE/REF_POINT_SET/
+        ENABLE_BLOCK_CUTTING State:OFF) that ``run_job(None)`` prepends
+        to every staged job. Rayforge's encoder output is fully
+        self-framed, so the head must be cleared to [] after connect to
+        prevent duplicate framing plus the block-cutting toggle reaching
+        the controller.
+
+        Args:
+            script: Rpascript command lines; pass [] to neutralize.
+        """
+        self._call("set_head_script", script)
+
+    def set_tail_script(self, script: list[str]) -> None:
+        """Set the server-side tail script composed into staged jobs.
+
+        Cleared to [] at connect alongside the head so the staged-job
+        path carries no server-side framing; the encoder's output is
+        fully self-framed already.
+
+        Args:
+            script: Rpascript command lines; pass [] to neutralize.
+        """
+        self._call("set_tail_script", script)
 
     def cancel_script(self) -> None:
         """Cancel the currently running script remotely."""
@@ -228,32 +235,6 @@ class RpaRpcClient:
         it.
         """
         self._call("new_gluescript")
-
-    # --- Head/Tail scripts ---
-
-    def set_head_script(self, script: list[str]) -> None:
-        """Set the head script executed before every job remotely.
-
-        Args:
-            script: List of rpascript command strings.
-        """
-        self._call("set_head_script", script)
-
-    def get_head_script(self) -> list[str]:
-        """Return the current head script from the remote machine."""
-        return self._call("get_head_script")
-
-    def set_tail_script(self, script: list[str]) -> None:
-        """Set the tail script executed after every job remotely.
-
-        Args:
-            script: List of rpascript command strings.
-        """
-        self._call("set_tail_script", script)
-
-    def get_tail_script(self) -> list[str]:
-        """Return the current tail script from the remote machine."""
-        return self._call("get_tail_script")
 
     # --- Live commands ---
 
