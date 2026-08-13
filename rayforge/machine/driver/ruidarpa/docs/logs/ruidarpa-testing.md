@@ -306,8 +306,8 @@ Since the last entry (2026-07-25), no tests existed for the driver — `pixi run
 - Health polling: status CONNECTED/DISCONNECTED/TERMINATED state transitions, late-event inertness after shutdown, and controller-down / transport-dead reconnect behavior for both modes.
 - Live bridge RPC vs direct comparison via the `adapter_pair` fixture.
 
-#### RPC client tests (`test_rpc_client.py`, 9 tests)
-- Config and behavior: `is_alive` when disconnected / controller down / transport error, `connect` `sync_request_timeout` passing, `root` guard, staged-job `run_job`, `reset_staged` → `new_gluescript`.
+#### RPC client tests (`test_rpc_client.py`, 11 tests)
+- Config and behavior: `is_alive` when disconnected / controller down / transport error, `connect` `sync_request_timeout` passing, `root` guard, staged-job `run_job`, `reset_staged` → `new_gluescript`, head/tail script wrappers → exposed server methods.
 
 #### Golden output (`test_golden.py`, 8 tests + `golden/staged_job.rpas`)
 - Byte-exact golden test comparing encoder output for a staged job against the checked-in `staged_job.rpas` fixture; verifies determinism, job framing, layer attribute/action blocks, and the presence of moves/cuts/arc/scan.
@@ -323,7 +323,7 @@ Since the last entry (2026-07-25), no tests existed for the driver — `pixi run
 
 - `tests/machine/driver/ruidarpa/test_encoder.py` — Encoder unit tests (47 tests)
 - `tests/machine/driver/ruidarpa/test_adapter.py` — Adapter tests (64 tests)
-- `tests/machine/driver/ruidarpa/test_rpc_client.py` — RPC client tests (9 tests)
+- `tests/machine/driver/ruidarpa/test_rpc_client.py` — RPC client tests (11 tests)
 - `tests/machine/driver/ruidarpa/test_golden.py` — Golden output tests (8 tests)
 - `tests/machine/driver/ruidarpa/golden/staged_job.rpas` — Golden output fixture (new)
 - `tests/machine/driver/ruidarpa/golden/regen_golden.py` — Golden regeneration script (new)
@@ -397,3 +397,40 @@ jog() now records each call's converted mm/s speed in _jog_speed_mm_s before any
 ### Verification
 
 Full package: pixi run -e ruidarpa test tests/machine/driver/ruidarpa/ → 191 passed (was 189; the TUI RPC connect-time head/tail clearing adds two mode-dependent tests). flake8 and pyflakes clean on the changed files. pyright clean on the changed files when resolved against the ruidarpa environment; the default-env lint retains only the pre-existing reportMissingImports for ruidadriver/rpyc plus pre-existing unrelated errors.
+
+## 2026-08-13 — move_to no longer inverts machine-frame coordinates; stale UI-inversion TODO removed
+
+### Problem
+
+`move_to()` negated `pos_x`/`pos_y` behind a stale TODO ("The coordinates
+coming from the UI are inverted. Why?"). The GUI already computes machine-frame
+coordinates (`bottom_panel._on_move_to_position` converts world→machine via
+`world_point_to_machine` with TOP_RIGHT origin handling, then subtracts WCS
+offsets before calling `driver.move_to`), `machine_pos` is reported from
+`POSITION_*` status keys with no inversion, and `jog()` passes deltas through
+unchanged. `move_to()` therefore double-inverted: it sent the head to the
+mirror-image of the requested position (e.g. a requested +X move left of home
+went right of home). The negation predated the coordinate-space origin handling
+(2026-06-23) and was the last remaining sign-flip in the driver stack — the
+jog-delta inversion had already been removed in 748e46f3 and the status-path
+negation in the GlueScript rewrite (51ee674b).
+
+### Solution
+
+Deleted the 4-line negation/TODO block from `rpa_adapter.py` `move_to()`;
+`pos_x`/`pos_y` now flow through unchanged to `backend.jog_xy_to()`. Added a
+`move_to()` docstring documenting the machine-frame contract (same frame as
+`POSITION_*` reporting; +X left of home, +Y down from home).
+`test_adapter.py`'s two default-speed tests (RPC and direct modes) updated to
+assert pass-through `jog_xy_to(10.0, 20.0)` — non-zero coordinates so a
+re-introduced negation would be caught. The still-valid mm/min→mm/s jog-speed
+TODO was left in place.
+
+### Verification
+
+Full package: `pixi run -e ruidarpa test tests/machine/driver/ruidarpa/` → 193
+passed (both updated `test_move_to_before_any_jog_uses_default_speed` variants
+pass). flake8 and pyflakes clean. pyright clean on the changed files when
+resolved against the ruidarpa environment; the default-env lint retains only
+the pre-existing reportMissingImports for ruidadriver/rpyc plus pre-existing
+unrelated errors.

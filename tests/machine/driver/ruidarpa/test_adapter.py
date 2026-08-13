@@ -720,7 +720,7 @@ class TestLiveBridgeRpc:
         adapter, client = adapter_pair
         await adapter.move_to(10.0, 20.0)
         client.jog_set_xy_speed.assert_called_once_with(600.0)
-        client.jog_xy_to.assert_called_once_with(-10.0, -20.0)
+        client.jog_xy_to.assert_called_once_with(10.0, 20.0)
         client.run.assert_not_called()
 
     @pytest.mark.asyncio
@@ -854,7 +854,7 @@ class TestLiveBridgeDirect:
         adapter, backend = adapter_pair
         await adapter.move_to(10.0, 20.0)
         backend.jog_set_xy_speed.assert_called_once_with(600.0)
-        backend.jog_xy_to.assert_called_once_with(-10.0, -20.0)
+        backend.jog_xy_to.assert_called_once_with(10.0, 20.0)
         backend.run.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1363,9 +1363,7 @@ class TestConnectClearsServerHeadTail:
     async def test_direct_connect_never_clears_head_tail(self, adapter_pair):
         """Direct mode has no head/tail surface and must not clear it."""
         adapter, backend = adapter_pair
-        await _run_connect_cycle(
-            adapter, lambda: backend.register_status_listener.called
-        )
+        await _run_connect_cycle(adapter, lambda: adapter._is_connected)
         assert not hasattr(backend, "set_head_script")
         assert not hasattr(backend, "set_tail_script")
 

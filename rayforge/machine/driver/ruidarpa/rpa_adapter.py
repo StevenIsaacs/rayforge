@@ -767,10 +767,12 @@ class RuidaRPAAdapter(Driver):
             await loop.run_in_executor(None, self._backend.home_z)
 
     async def move_to(self, pos_x: float, pos_y: float) -> None:
-        # TODO: The coordinates coming from the UI are inverted. Why?
-        # For now, invert them here to match user expectations.
-        pos_x = -pos_x
-        pos_y = -pos_y
+        """Move to an absolute position in machine-frame mm.
+
+        Coordinates are machine-frame (same frame as POSITION_* status
+        reporting: +X left of home, +Y down from home) and are passed
+        through unchanged to the backend jog_xy_to.
+        """
         logger.info(
             "move_to x=%.3f y=%.3f",
             pos_x,
