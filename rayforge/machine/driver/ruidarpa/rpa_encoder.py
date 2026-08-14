@@ -46,6 +46,25 @@ _DEFAULT_LAYER_POWER = 0.2  # fraction, i.e. 20%
 _DEFAULT_JOB_LABEL = "Rayforge Job"
 _DEFAULT_LAYER_COLOR = "#00ccff"
 
+# Maps the framework WCS slot names to the Ruida reference point strings
+# accepted by GlueScript.declare_job. The framework default WCS ("G54")
+# is deliberately absent — it maps to "MACHINE" to keep golden output
+# byte-identical.
+_WCS_TO_REF_POINT = {
+    "MACHINE": "MACHINE",
+    "ANCHOR": "ABSOLUTE",
+    "CURRENT": "CURRENT",
+    "SET_POINT": "SET_POINT",
+}
+
+# Last WCS that triggered the G54 fallback warning. Encoders are fresh
+# per encode, so dedup state lives at module level; the warning fires
+# only when the value changes (first G54, and after any real WCS).
+# Worst case under concurrent encodes: a duplicated or suppressed
+# warning — assignments are atomic under the GIL and output is
+# unaffected.
+_last_fallback_wcs: Optional[str] = None
+
 
 class _RecordedCall:
     """Callable that records an invocation into the plan, then forwards.
@@ -539,12 +558,35 @@ class RuidaRPAEncoder(OpsEncoder):
 
     def _handle_job_start(self) -> None:
         """Declare the job in GlueScript, which emits the job header."""
+        global _last_fallback_wcs
         label = (
             self.doc.name
             if self.doc is not None and self.doc.name
             else _DEFAULT_JOB_LABEL
         )
-        self._gluescript.declare_job(label, "MACHINE", None, 1, 1, 0.0, 0.0)
+        machine = self.machine
+        if machine is None:
+            ref_point = "MACHINE"
+        else:
+            wcs = machine.active_wcs
+            if wcs in _WCS_TO_REF_POINT:
+                _last_fallback_wcs = None
+                ref_point = _WCS_TO_REF_POINT[wcs]
+            elif wcs == "G54":
+                if wcs != _last_fallback_wcs:
+                    logger.warning(
+                        "Active WCS %s is the framework default — "
+                        "using the MACHINE reference point",
+                        wcs,
+                    )
+                _last_fallback_wcs = wcs
+                ref_point = "MACHINE"
+            else:
+                raise ValueError(
+                    f"Unsupported WCS for Ruida reference point: {wcs!r} "
+                    f"— valid names: {', '.join(_WCS_TO_REF_POINT)}"
+                )
+        self._gluescript.declare_job(label, ref_point, None, 1, 1, 0.0, 0.0)
 
     def _handle_layer_start(self, ops: Ops, idx: int) -> None:
         """Declare the layer with settings from its first workflow step."""

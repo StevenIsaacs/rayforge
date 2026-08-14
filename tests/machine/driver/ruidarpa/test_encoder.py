@@ -12,12 +12,15 @@ Tests cover:
 - Error handling (missing JOB_END, unknown commands, missing layer)
 """
 
+import logging
+
 import pytest
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode, CoolantMode
 
 from rayforge.core.doc import Doc
 from rayforge.core.step import Step
+from rayforge.machine.driver.ruidarpa import rpa_encoder
 from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 from rayforge.machine.models.laser import Laser
 from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
@@ -825,3 +828,84 @@ class TestGluescriptPlan:
             if name == "add_layer_action"
         }
         assert action_layers == {1, 2}
+
+
+class TestWcsToRefPoint:
+    """Active WCS names map to GlueScript declare_job reference points."""
+
+    # The default doc has no name, so the encoder uses its default label.
+    _JOB_LABEL = "Rayforge Job"
+
+    @pytest.fixture(autouse=True)
+    def _reset_fallback_wcs(self):
+        """Reset the module-level G54 fallback dedup state."""
+        rpa_encoder._last_fallback_wcs = None
+        yield
+        rpa_encoder._last_fallback_wcs = None
+
+    @pytest.mark.parametrize(
+        "wcs,expected",
+        [
+            ("MACHINE", "MACHINE"),
+            ("ANCHOR", "ABSOLUTE"),
+            ("CURRENT", "CURRENT"),
+            ("SET_POINT", "SET_POINT"),
+        ],
+    )
+    def test_declare_job_ref_point_maps_from_active_wcs(
+        self, encoder, mock_machine, doc, wcs, expected
+    ):
+        """The declare_job ref point mirrors the active framework WCS."""
+        mock_machine.active_wcs = wcs
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        assert result.rpa_plan[0] == (
+            "declare_job",
+            (self._JOB_LABEL, expected, None, 1, 1, 0.0, 0.0),
+        )
+        if wcs == "ANCHOR":
+            # ANCHOR maps to ABSOLUTE with abs_xy pinned to None.
+            assert result.rpa_plan[0][1][2] is None
+
+    def test_g54_falls_back_to_machine_ref_point(
+        self, encoder, mock_machine, doc
+    ):
+        """The framework default G54 must fall back to MACHINE."""
+        mock_machine.active_wcs = "G54"
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        assert result.rpa_plan[0] == (
+            "declare_job",
+            (self._JOB_LABEL, "MACHINE", None, 1, 1, 0.0, 0.0),
+        )
+
+    def test_machine_none_defaults_to_machine_ref_point(self, encoder, doc):
+        """machine=None must default to the MACHINE reference point."""
+        result = encoder.encode(_plan_job(doc), None, doc)
+        assert result.rpa_plan[0] == (
+            "declare_job",
+            (self._JOB_LABEL, "MACHINE", None, 1, 1, 0.0, 0.0),
+        )
+
+    def test_unknown_wcs_raises_value_error(self, encoder, mock_machine, doc):
+        """An unrecognized WCS must fail loudly."""
+        mock_machine.active_wcs = "G55"
+        with pytest.raises(ValueError, match="G55"):
+            encoder.encode(_plan_job(doc), mock_machine, doc)
+
+    def test_g54_warning_fires_only_when_changed(
+        self, encoder, mock_machine, doc, caplog
+    ):
+        """The G54 fallback warning dedups until a real WCS is used."""
+        caplog.set_level(logging.WARNING, logger=rpa_encoder.logger.name)
+        mock_machine.active_wcs = "G54"
+        encoder.encode(_plan_job(doc), mock_machine, doc)
+        encoder.encode(_plan_job(doc), mock_machine, doc)
+        mock_machine.active_wcs = "MACHINE"
+        encoder.encode(_plan_job(doc), mock_machine, doc)
+        mock_machine.active_wcs = "G54"
+        encoder.encode(_plan_job(doc), mock_machine, doc)
+        warnings = [
+            record
+            for record in caplog.records
+            if "framework default" in record.message
+        ]
+        assert len(warnings) == 2

@@ -577,13 +577,26 @@ class MachineController:
         This prevents stale WCO from status reports corrupting the
         newly-selected WCS offset.
         """
+        # Mirrors select_wcs so active_wcs is not mutated for a
+        # rejected WCS.
+        if (
+            self.machine.is_connected()
+            and wcs not in self.driver.supported_wcs
+        ):
+            raise ValueError(
+                f"Unsupported WCS {wcs!r} — valid names: "
+                f"{', '.join(self.driver.supported_wcs)}"
+            )
         self.machine.active_wcs = wcs
         self._scheduler(self.machine.changed.send, self.machine)
         self._confirmed_active_wcs = None
 
         if self.machine.is_connected():
             try:
-                await self.driver.run_raw(wcs)
+                if type(self.driver).select_wcs is not Driver.select_wcs:
+                    await self.driver.select_wcs(wcs)
+                else:
+                    await self.driver.run_raw(wcs)
                 confirmed = await self.driver.read_parser_state()
                 if confirmed == wcs:
                     self._confirmed_active_wcs = wcs

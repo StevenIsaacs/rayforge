@@ -498,11 +498,15 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_select_wcs_ref0_routes_to_ref_point_1(self, adapter_pair):
-        """select_wcs("REF0") must run REF_POINT_1."""
+    @pytest.mark.parametrize(
+        "wcs", ["MACHINE", "ANCHOR", "CURRENT", "SET_POINT"]
+    )
+    async def test_select_wcs_valid_saves_selection(self, adapter_pair, wcs):
+        """select_wcs() must record a supported WCS without sending scripts."""
         adapter, backend = adapter_pair
-        await adapter.select_wcs("REF0")
-        backend.run.assert_called_once_with(["REF_POINT_1"], False)
+        await adapter.select_wcs(wcs)
+        assert adapter._selected_wcs == wcs
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -511,11 +515,16 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_select_wcs_ref1_routes_to_ref_point_2(self, adapter_pair):
-        """select_wcs("REF1") must run REF_POINT_2."""
+    @pytest.mark.parametrize("wcs", ["REF0", "REF1", "G55"])
+    async def test_select_wcs_invalid_raises_value_error(
+        self, adapter_pair, wcs
+    ):
+        """select_wcs() must reject unknown names without mutating state."""
         adapter, backend = adapter_pair
-        await adapter.select_wcs("REF1")
-        backend.run.assert_called_once_with(["REF_POINT_2"], False)
+        with pytest.raises(ValueError, match="MACHINE"):
+            await adapter.select_wcs(wcs)
+        assert adapter._selected_wcs == "MACHINE"
+        backend.run.assert_not_called()
 
 
 class TestRunStagedJob:
@@ -656,7 +665,7 @@ class TestStagePlan:
 
 
 class TestWcsHandling:
-    """set_wcs_offset fails loud; select_wcs still routes to run()."""
+    """WCS selection and offset reads behave per the framework contract."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -669,7 +678,49 @@ class TestWcsHandling:
         """set_wcs_offset must raise NotImplementedError (fail loud)."""
         adapter, _backend = adapter_pair
         with pytest.raises(NotImplementedError):
-            await adapter.set_wcs_offset("REF0", 1.0, 2.0, 3.0)
+            await adapter.set_wcs_offset("SET_POINT", 1.0, 2.0, 3.0)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_read_wcs_offsets_returns_four_slots(self, adapter_pair):
+        """read_wcs_offsets() must return four zeroed slots and fire the
+        signal."""
+        adapter, _backend = adapter_pair
+        received = []
+
+        def _record_offsets(sender, offsets):
+            received.append(offsets)
+
+        adapter.wcs_updated.connect(_record_offsets)
+        offsets = await adapter.read_wcs_offsets()
+        assert offsets == {
+            "MACHINE": (0.0, 0.0, 0.0),
+            "ANCHOR": (0.0, 0.0, 0.0),
+            "CURRENT": (0.0, 0.0, 0.0),
+            "SET_POINT": (0.0, 0.0, 0.0),
+        }
+        assert received == [offsets]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_read_parser_state_returns_selected_wcs(self, adapter_pair):
+        """read_parser_state() mirrors the selected WCS, default MACHINE."""
+        adapter, _backend = adapter_pair
+        assert await adapter.read_parser_state() == "MACHINE"
+        await adapter.select_wcs("ANCHOR")
+        assert await adapter.read_parser_state() == "ANCHOR"
+        await adapter.select_wcs("SET_POINT")
+        assert await adapter.read_parser_state() == "SET_POINT"
 
 
 class TestLiveBridgeRpc:

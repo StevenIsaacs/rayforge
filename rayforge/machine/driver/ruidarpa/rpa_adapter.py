@@ -180,6 +180,7 @@ class RuidaRPAAdapter(Driver):
         self._is_connected: bool = False
         self._shutting_down: bool = False
         self._jog_speed_mm_s: Optional[float] = None
+        self._selected_wcs: str = "MACHINE"
 
     # --- Properties ---
 
@@ -193,7 +194,7 @@ class RuidaRPAAdapter(Driver):
 
     @property
     def supported_wcs(self) -> List[str]:
-        return ["MACHINE", "REF0", "REF1"]
+        return ["MACHINE", "ANCHOR", "CURRENT", "SET_POINT"]
 
     @property
     def resource_uri(self) -> Optional[str]:
@@ -864,10 +865,12 @@ class RuidaRPAAdapter(Driver):
     # --- WCS ---
 
     async def select_wcs(self, wcs: str) -> None:
-        if wcs == "REF0":
-            await self._run_script(["REF_POINT_1"])
-        elif wcs == "REF1":
-            await self._run_script(["REF_POINT_2"])
+        if wcs not in self.supported_wcs:
+            raise ValueError(
+                f"Unsupported WCS {wcs!r} — valid names: "
+                f"{', '.join(self.supported_wcs)}"
+            )
+        self._selected_wcs = wcs
 
     async def set_wcs_offset(
         self, wcs_slot: str, x: float, y: float, z: float
@@ -883,14 +886,15 @@ class RuidaRPAAdapter(Driver):
     async def read_wcs_offsets(self) -> Dict[str, Pos]:
         offsets: Dict[str, Pos] = {
             "MACHINE": (0.0, 0.0, 0.0),
-            "REF0": (0.0, 0.0, 0.0),
-            "REF1": (0.0, 0.0, 0.0),
+            "ANCHOR": (0.0, 0.0, 0.0),
+            "CURRENT": (0.0, 0.0, 0.0),
+            "SET_POINT": (0.0, 0.0, 0.0),
         }
         self.wcs_updated.send(self, offsets=offsets)
         return offsets
 
     async def read_parser_state(self) -> Optional[str]:
-        return None
+        return self._selected_wcs
 
     # --- Settings ---
 

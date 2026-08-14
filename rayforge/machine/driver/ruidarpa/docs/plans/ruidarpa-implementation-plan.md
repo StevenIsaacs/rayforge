@@ -14,7 +14,7 @@ Implement a `RuidaRPAAdapter(Driver)` with two modes (direct `RdDriver` in-proce
 | Two-mode architecture (tui bool flag) | Dev mode uses RPyC for isolation, production uses direct RdDriver | `RayforgeIntegration-design.md:14-16` |
 | Adapter wraps RdDriver (synchronous/threaded) | RdDriver uses daemon threads internally; Rayforge driver API is async | `ruidadriver/ruida_driver.py:95-109` |
 | Adapter bridges asyncio ↔ threaded via `asyncio.to_thread()` / `loop.run_in_executor()` | Keeps event loop responsive; RdDriver's threaded API requires it | `integration-guide.md:134-157` |
-| WCS model matches RuidaDriver ("MACHINE", "REF0", "REF1") | Consistent with existing Ruida UDP driver behavior | `ruida_driver.py:85-97` |
+| WCS model uses ruida-pa reference points ("MACHINE", "ANCHOR", "CURRENT", "SET_POINT") | REF0/REF1 dropped — REF_POINT_1/REF_POINT_2 are not rpascript mnemonics | `rpa_adapter.py:196-197` |
 | Encoder produces rpascript text in `EncodedOutput.text` | Rpascript is the native command format for RdDriver | `rpascript-guide.md`, design doc |
 | Driver registration via `register_driver()` + `drivers.append()` in `driver/__init__.py` | Auto-discovery via `isdriver()` checks `Driver` subclass; device YAML references class name | `driver/__init__.py:30-32` |
 | Maturity = EXPERIMENTAL | Design doc explicitly states "Driver maturity: EXPERIMENTAL" | `RayforgeIntegration-design.md:26` |
@@ -32,7 +32,7 @@ _Complete as of 2026-08-07._
   - Class attributes: `label=_("Ruida RPA")`, `subtitle=_("Connect via Ruida Protocol Analyzer")`, `supports_settings=False`, `reports_granular_progress=False`, `uses_gcode=False`, `maturity=DriverMaturity.EXPERIMENTAL`
   - `__init__(self, context, machine)` — store mode flag (`_tui_mode: bool = False`), driver params
   - `machine_space_wcs` → `"MACHINE"`, `machine_space_wcs_display_name` → `_("Machine Coordinates")`
-  - `supported_wcs` property: returns `["MACHINE"]` before connection, then `list(self._client.ref_points)` in direct mode, or `["MACHINE", "REF0", "REF1"]` in RPC mode
+  - `supported_wcs` property: returns `["MACHINE", "ANCHOR", "CURRENT", "SET_POINT"]` (the four ruida-pa reference points)
   - `resource_uri` property: returns `f"ruidarpa://{host_or_usb}"` for resource conflict detection
   - `get_setup_vars(cls)` → `VarSet` with:
     - `udp_host` (HostnameVar, key="udp_host", label=_("Hostname"))
@@ -131,10 +131,11 @@ _Complete as of 2026-08-07 (RpaRpcClient, rpyc 127.0.0.1:18812, tui config flag)
 
 _Complete as of 2026-08-07 (head/tail/protect, home, jog, move_to, set_power, WCS handling)._
 - [x] **4.1 WCS operations**:
-  - `select_wcs(wcs_slot)` → run rpascript `"REF_POINT_2"` or `"REF_POINT_1"` depending on slot
+  - `select_wcs(wcs)` → validate `wcs` against `supported_wcs` (raise `ValueError` listing valid names otherwise); save the selection in `self._selected_wcs`; does NOT run `REF_POINT_1`/`REF_POINT_2`
   - `set_wcs_offset(wcs_slot, x, y, z)` → run `"SET_SETTING MEM_USER_ORIGIN_X=%d MEM_USER_ORIGIN_Y=%d"` or equivalent
-  - `read_wcs_offsets()` → run `GET_SETTING` queries for each ref point; fire `wcs_updated`
-  - `read_parser_state()` → return `self._machine.active_wcs`
+  - `read_wcs_offsets()` → return all four slots (`MACHINE`, `ANCHOR`, `CURRENT`, `SET_POINT`) with `(0.0, 0.0, 0.0)`; fire `wcs_updated`
+  - `read_parser_state()` → return the saved `self._selected_wcs` (default `"MACHINE"`), not `self._machine.active_wcs`
+  - Encoder note: `_handle_job_start` derives its `declare_job` ref_point from `machine.active_wcs` via `_WCS_TO_REF_POINT`; the framework default `"G54"` warns once and falls back to `"MACHINE"`
 - [x] **4.2 Movement**:
   - `home(axes)` → `"HOME_XY"` / `"HOME_Z"`
   - `move_to(pos_x, pos_y)` → `"MOVE_ABS_XY X={pos_x}mm Y={pos_y}mm"`

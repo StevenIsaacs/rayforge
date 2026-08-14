@@ -434,3 +434,91 @@ pass). flake8 and pyflakes clean. pyright clean on the changed files when
 resolved against the ruidarpa environment; the default-env lint retains only
 the pre-existing reportMissingImports for ruidadriver/rpyc plus pre-existing
 unrelated errors.
+
+## 2026-08-14 — RuidaRPAAdapter WCS uses the four ruida-pa reference points
+
+### Problem
+
+The RuidaRPAAdapter (`rayforge/machine/driver/ruidarpa/rpa_adapter.py`) exposed
+WCS slots `["MACHINE", "REF0", "REF1"]` and `select_wcs` translated REF0/REF1
+into rpascript `REF_POINT_1`/`REF_POINT_2`. Those are not valid ruida-pa
+mnemonics: the rpascript ScriptParser mnemonic map is built from the CT command
+table and has no REF_POINT_1/2; the old REF0↔REF_POINT_CURRENT / REF1↔
+REF_POINT_ANCHOR mapping existed only in the reference-only `ruida/` prototype.
+The encoder (`rpa_encoder.py` `_handle_job_start`) also hardcoded
+`declare_job(label, "MACHINE", ...)` regardless of the machine's active WCS, so
+a user-selected reference point never reached the job framing. Finally, the UI
+WCS-switch path (`ui_gtk/doceditor/bottom_panel.py` → `machine.switch_active_wcs`
+→ `controller.switch_active_wcs`) sent the bare WCS string through
+`driver.run_raw(wcs)`, bypassing the driver's `select_wcs` method entirely — for
+ruidarpa that meant a bare "G55"-style string reached the backend with no
+validation.
+
+### Solution
+
+`rpa_adapter.py` `supported_wcs` now returns the four ruida-pa reference points
+`["MACHINE", "ANCHOR", "CURRENT", "SET_POINT"]` (the RELT names from ruida-pa's
+ruida_protocol.py). `select_wcs(wcs)` guard-validates the name (raising
+`ValueError` listing the valid names otherwise) and saves it to
+`self._selected_wcs` (initialized `"MACHINE"`); it no longer sends any script.
+`read_wcs_offsets()` returns all four slots at `(0.0, 0.0, 0.0)` and fires
+`wcs_updated` so the UI dropdown, driven by `machine.supported_wcs`, picks up
+the four names automatically. `read_parser_state()` returns `self._selected_wcs`
+(the device-committed selection) instead of None. `machine_space_wcs` stays
+`"MACHINE"` and `set_wcs_offset` still raises `NotImplementedError`.
+
+`rpa_encoder.py` `_handle_job_start` now derives the GlueScript `declare_job`
+ref_point from `machine.active_wcs` via a module-level `_WCS_TO_REF_POINT` dict:
+MACHINE→"MACHINE", ANCHOR→"ABSOLUTE" (with `abs_xy=None`, which ruida-pa's
+rd_gluescript converts to `[0.0,0.0]` — safe), CURRENT→"CURRENT", SET_POINT→
+"SET_POINT". The framework default `"G54"` (machine.py:162) falls back to the
+MACHINE reference point with a `logger.warning` that fires only when the value
+changes (module-level `_last_fallback_wcs` dedup; a fresh encoder per encode
+keeps the state module-level, and a real WCS resets it). Any other unknown WCS
+raises `ValueError` listing the valid names. This keeps the golden fixture
+byte-identical, since the golden machine carries the default `"G54"`.
+
+`rayforge/machine/models/controller.py` `switch_active_wcs` now routes to
+`driver.select_wcs(wcs)` when the driver overrides the base no-op (detected via
+`type(self.driver).select_wcs is not Driver.select_wcs`), else falls back to
+`driver.run_raw(wcs)` — so ruida/ruidarpa get validated selection while
+grbl/smoothie/marlin/octoprint/dummy keep their previous behavior. It validates
+`wcs` against `driver.supported_wcs` in the connected branch only, BEFORE
+mutating `machine.active_wcs` (comment: "Mirrors select_wcs so active_wcs is
+not mutated for a rejected WCS"), so a rejected selection raises `ValueError`
+and leaves model state untouched; the disconnected path still records
+model-only intent without raising, so a never-connected machine's G54–G59
+dropdown picks must not fail. The plan doc
+(`rayforge/machine/driver/ruidarpa/docs/plans/ruidarpa-implementation-plan.md`)
+was updated (decision-table WCS model row, `supported_wcs` description, and
+Phase 4.1 WCS ops spec).
+
+### Verification
+
+New/updated tests in test_adapter.py: `test_select_wcs_valid_saves_selection`
+(four names × direct/rpc), `test_select_wcs_invalid_raises_value_error`
+(REF0/REF1/G55 × direct/rpc, asserts `_selected_wcs` unchanged and
+`backend.run` not called), `test_read_wcs_offsets_returns_four_slots` (four
+zero slots plus `wcs_updated` fired), `test_read_parser_state_returns_selected_wcs`,
+and `test_set_wcs_offset_raises_not_implemented` slot updated to "SET_POINT".
+test_encoder.py gains `TestWcsToRefPoint` (parametrized mapping incl.
+ANCHOR→ABSOLUTE with `abs_xy=None` pinned, G54→MACHINE, G55→ValueError,
+`machine=None`→MACHINE, warn-only-when-changed with module-state reset fixture +
+caplog). `tests/machine/models/test_machine_controller.py` adds fake-driver
+routing tests (overridden `select_wcs` vs base `run_raw`), a pre-mutation guard
+(invalid raises, `machine.active_wcs` and `_confirmed_active_wcs` untouched),
+disconnected intent-recording, and a confirm-failure path.
+
+Full package: `pixi run -e ruidarpa test tests/machine/driver/ruidarpa/` → 208
+passed; the 7 remaining failures are pre-existing ruida-pa version drift
+(installed GlueScript 0.15.4 vs fixture 0.15.2: the `MOVE_NEAR_XY nearX=`
+format and the `# Generated by: GlueScript` header line) — identical before and
+after, not regressions. `pixi run test tests/machine/models/test_machine_controller.py`
+→ 8 passed. flake8 and pyflakes clean; pyright at the pre-existing 20-error
+baseline (0 new). Golden fixture byte-identical (verified via `cmp` against the
+git-stashed baseline, 12072 chars). Code review approved with no critical/major
+issues; the review follow-ups (3 SHOULD test-coverage items + 2 NITs: aligned
+`ValueError` message listing valid names, benign-race comment on
+`_last_fallback_wcs`) were all addressed and re-verified. Constraints honored:
+no changes under `rayforge/machine/driver/ruida/` (reference-only prototype) or
+`external/ruida-pa/`.
