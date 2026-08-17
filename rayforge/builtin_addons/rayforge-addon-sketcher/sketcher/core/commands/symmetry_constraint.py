@@ -1,28 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
 
 from ..types import EntityID
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass
 class SymmetryConstraintParams:
     p1_id: EntityID
     p2_id: EntityID
-    center_id: Optional[EntityID] = None
-    axis_id: Optional[EntityID] = None
+    center_id: EntityID | None = None
+    axis_id: EntityID | None = None
 
 
 class SymmetryConstraintCommand:
     @staticmethod
     def determine_constraint_params(
-        point_ids: List[EntityID],
-        entity_ids: List[EntityID],
-    ) -> Optional[SymmetryConstraintParams]:
+        point_ids: list[EntityID],
+        entity_ids: list[EntityID],
+    ) -> SymmetryConstraintParams | None:
         if len(point_ids) == 3 and not entity_ids:
             return SymmetryConstraintParams(
                 p1_id=point_ids[0],

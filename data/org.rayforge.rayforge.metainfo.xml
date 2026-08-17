@@ -20,6 +20,8 @@
   <metadata_license>MIT</metadata_license>
   <project_license>MIT</project_license>
 
+  <translation type="gettext" source_locale="en">rayforge</translation>
+
   <description>
     <p>
       Rayforge is a desktop application for laser cutting and engraving.
@@ -66,6 +68,338 @@
   </screenshots>
 
   <releases>
+    <release version="1.9.3" date="2026-08-14">
+      <description>
+        <p>New Features:</p>
+        <ul>
+          <li>The recipe editor now shows all step settings (laser,
+          raster, contour, frame, shrinkwrap, wavefront, material test,
+          and CNC), matching the step settings dialog</li>
+          <li>Layer items can now be renamed inline by double-clicking,
+          using the context menu, or pressing F2</li>
+          <li>When importing with "Map to Existing" layers, layers
+          that still carry auto-generated names (e.g. "Layer 1") are
+          renamed to the imported layer's name; manually renamed layers
+          are left untouched</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Recipe post-processing settings now use an apply toggle
+          instead of the tri-state menu</li>
+          <li>Upgrade raygeo to 1.39.1</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Shrinkwrap no longer runs once per face when the
+          workpiece has multiple faces</li>
+          <li>In the 3D preview, the toolpath and scanline trail are
+          now depth-tested against the models, so they no longer draw
+          on top of the laser head</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.2" date="2026-08-12">
+      <description>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Loading projects that store a null opsproducer_dict no
+          longer crashes (e.g. when an engrave step has no legacy
+          producer parameters)</li>
+          <li>Renaming a step now updates the step list in the main
+          window's right pane immediately</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.1" date="2026-08-12">
+      <description>
+        <p>Experimental CNC machining operations, more flexible recipes, and
+        G-code fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>New "CNC Essentials" addon with CNC machining operations:
+          adaptive clearing, flat spiral, helix plunge, inner and outer
+          profiling, ramp entry, slotting, and toroidal clearing
+          (disabled by default; enable it in the addon manager)</li>
+          <li>Pipeline progress now shows the currently running operation
+          with a friendly, translatable status label instead of an
+          internal name</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Recipes now target one or more step types instead of a
+          single capability; the recipe editor gained a searchable
+          step-type selector, and existing recipes are migrated
+          automatically</li>
+          <li>Post-processor settings (lead-in/out, multipass, overscan)
+          can now be stored per recipe and applied to the targeted
+          steps</li>
+          <li>Show a confirmation dialog when enabling experimental addons</li>
+          <li>Upgrade raygeo to 1.38.3</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Generated G-code could be wrong when axis reversal or a
+          non-bottom-left origin was combined with a WCS offset</li>
+          <li>Air assist settings in laser steps were not emitted to the
+          G-code (M8/M9)</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.0" date="2026-08-10">
+      <description>
+        <p>Faster playback speeds, improved 3D preview, and memory
+        improvements</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Playback speeds up to x64 in simulated playback</li>
+          <li>3D preview renders raster scanlines at the physical laser
+          dot width for a more accurate preview</li>
+          <li>Addon-contributed settings pages now update live when the
+          settings dialog is open</li>
+          <li>Addon manifests support a default enabled/disabled
+          state</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Upgrade raygeo to 1.37.0</li>
+          <li>Memory improvements in the pipeline: op data now uses a
+          compressed array, assembly intermediates are released between
+          builds, the final job ops are no longer cached, and a
+          kinematic mapping is only computed when a rotary module is
+          present</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>3D canvas panning now follows the mouse 1:1</li>
+          <li>Cylinder angle interpolation during rotary animation could
+          be incorrect</li>
+          <li>3D models could obscure ops in the 3D view</li>
+          <li>Raster preview artifacts when zooming out (moire) fixed
+          with max-reduction mipmaps</li>
+          <li>Toolpath and scanline trail drawn above the raster
+          texture</li>
+          <li>3D canvas not grabbing keyboard focus when clicked</li>
+          <li>Right panel could obscure the canvas overlays</li>
+          <li>3D model loading errors no longer crash the app</li>
+          <li>Machine switch config update now runs on the main
+          thread</li>
+          <li>--exit watcher is only armed after the uiscript has
+          run</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.0-beta4" date="2026-08-08">
+      <description>
+        <p>Smooth simulated playback, refined 3D interaction, and
+        rotary simulation fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Simulated playback now advances by simulated machine time
+          at (approximately) real machine speed, with a 1x-16x speed
+          multiplier: the toolpath reveal, laser head, and laser beam
+          interpolate within each command so playback is smooth instead
+          of stepping one command per frame</li>
+          <li>Step forward/backward buttons glide to the next command
+          over a short fixed duration instead of jumping; rapid clicks
+          coalesce into a single glide that covers the net number of
+          commands</li>
+          <li>Zoom and orbit now rotate around the point under the
+          cursor</li>
+          <li>Playback controls (play, step, speed, slider) shown as a
+          bar below the 3D canvas</li>
+          <li>The 2D and 3D canvas grids draw in the preferred length
+          unit</li>
+          <li>Warn when a project uses cooling methods not supported by
+          the current machine</li>
+          <li>Recipe manager shows the selected step in the recipe
+          description</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Upgrade raygeo to 1.33.0: simulated playback now runs at
+          accurate machine speed, ops no longer move slightly through
+          the cylinder during rotary simulation, and stroke-only cut
+          lines (e.g. engraved crosshairs in imported SVGs) are no
+          longer missing from the generated ops</li>
+          <li>Internal: 3D canvas refactored into a scene presenter,
+          camera controller, playback overlay, renderer registry, and
+          chunked upload controller</li>
+          <li>Updated translations</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Texture alpha no longer brightens after a layer
+          completes</li>
+          <li>Laser beam rendered over the scanline ring buffer</li>
+          <li>Scanline overlay stays visible after playback
+          completes</li>
+          <li>Legacy opsproducer step parameters migrated when loading
+          projects</li>
+          <li>Step settings refresh when a recipe is applied</li>
+          <li>Material colors applied per-widget in lists</li>
+          <li>Simple GRBL driver wakes an in-flight ping-pong on
+          cancel</li>
+          <li>3D canvas background falls back to the theme view
+          background color</li>
+          <li>Frequency and pulse width preserved in MachineState.copy</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.0-beta3" date="2026-08-06">
+      <description>
+        <p>Unit system support, unit-aware inputs, and raster fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Unit system support: metric/imperial selection in the
+          machine settings, with automatic unit-system detection for
+          GRBL (from $13) and Marlin (via M149) drivers and in the
+          configuration wizard</li>
+          <li>Length, speed, and acceleration inputs are now unit-aware:
+          they convert between the configured display unit and base
+          units, update live when the display unit changes, and show the
+          unit as a tooltip</li>
+          <li>The 2D and 3D canvas grids now follow the user's preferred
+          length unit: grid lines snap to multiples of that unit and
+          axis labels are displayed in it, updating live when the
+          preference changes</li>
+          <li>Generic service registry and settings-page hooks so addons
+          can publish key-resolved services and contribute their own
+          pages to the Settings dialog</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Addon manifest requires are now enforced at load time with
+          a topological pass so dependencies load before dependents</li>
+          <li>Bump addon API version to 18</li>
+          <li>Upgrade raygeo to 1.32.1</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Raster engraving could be rendered up to one pixel smaller
+          than the workpiece size due to pixel-count truncation (raygeo
+          1.32.1), which could be larger if the workpiece is scaled</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.0-beta2" date="2026-08-04">
+      <description>
+        <p>Unified machine wizard, SVG color layers, and raster
+        fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Unified machine configuration wizard with AI-powered
+          device spec lookup</li>
+          <li>Import SVG colors as layers</li>
+          <li>Color rules that map SVG colors to step types, with a
+          settings page to manage the rules</li>
+          <li>Recipes can now target specific step types</li>
+          <li>Assembly warnings (e.g. failed faces or regions) surfaced
+          as toast notifications</li>
+          <li>Right-click context menu on steps in the layer workflow
+          strip with a delete option</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Kerf and path offset merged into a single offset setting,
+          defaulting to half the laser head spot size</li>
+          <li>Raster power range on engrave steps renamed to min/max
+          power level so it no longer clashes with the hardware max
+          power setting</li>
+          <li>Upgrade raygeo to 1.31.2 (SVG color layer import,
+          multi-face parts, and fixed SVG defs/use traversal)</li>
+          <li>Bump pypdf to 6.14.2, GitPython to 3.1.58, and aiohttp to
+          3.14.3 to fix security vulnerabilities</li>
+          <li>Updated translations</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>3D toolpaths drawn at full brightness on first open
+          instead of power-dimmed</li>
+          <li>Raster full-sweep mode no longer engraves empty masked
+          regions at full power (raygeo 1.31.2)</li>
+          <li>Raster multi-pass mode no longer mixes Z levels when
+          optimizing, and cross-hatch now interleaves both angles per
+          pass instead of running all passes of one angle before the
+          other</li>
+          <li>CNC step attributes no longer dropped from project files
+          on save</li>
+          <li>ChArUco detection failing on some array shapes (camera
+          calibration, by trixdaddy)</li>
+          <li>Intent-rebuild hot loop on documents without workflow
+          content</li>
+          <li>Missing features dialog now reports the original step
+          type</li>
+          <li>Restored macOS Monterey-compatible bundles (by
+          pgilfernandez)</li>
+          <li>Replaced deprecated GTK CSS APIs</li>
+          <li>Icons that fell back to the system theme (which breaks on
+          some platforms) now ship with the app</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.9.0-beta1" date="2026-07-30">
+      <description>
+        <p>Array/Pattern tool, raygeo compute pipeline, 3D canvas
+        performance, and bug fixes</p>
+        <p>New Features:</p>
+        <ul>
+          <li>Array / Pattern tool with Grid, Point Rotation, and
+          Circular modes</li>
+          <li>Dot width correction for raster engraving (#316,
+          by vyvcodd)</li>
+          <li>LightBurn import: support for importing raster settings
+          (dotWidth, interval, angle, scan_angle)</li>
+          <li>Allow renaming layers and steps directly in the
+          layer/step settings dialogs</li>
+          <li>Asyncio support for parallel workpiece processing in
+          the pipeline</li>
+          <li>Configurable pipeline cache budget in settings</li>
+          <li>Error notifications for pipeline failures</li>
+        </ul>
+        <p>Improvements:</p>
+        <ul>
+          <li>Upgrade raygeo to 1.27.0 with migrated G-code encoder,
+          BidirScanOffsetTransformer, and MultiPassTransformer to
+          Rust; transformer application now uses Rust
+          apply_transformers dispatch</li>
+          <li>Replaced multiprocessing pipeline with raygeo intent
+          orchestration: compute, raster, shrinkwrap, wavefront,
+          contour, and view rendering now run in raygeo threads
+          instead of subprocesses for improved performance and
+          reliability</li>
+          <li>Rewrote 3D scene compiler to use Rust compile_scene_3d
+          with chunked GL upload for improved 3D canvas rendering
+          performance</li>
+          <li>Pipeline cache is now preserved across document and
+          machine swaps for faster rebuilds</li>
+          <li>Improved addon translation fallback: English is now used
+          when no matching locale is found</li>
+          <li>Wavefront icon and improved Gtk SVG compatibility for
+          other icons</li>
+          <li>Bump pypdf to 6.13.3</li>
+          <li>Bump GitPython to 3.1.51</li>
+        </ul>
+        <p>Bug Fixes:</p>
+        <ul>
+          <li>Blank sketcher UI text on packaged installs (#315)</li>
+          <li>Dragging of layers now works correctly</li>
+          <li>Use persistent /dev/v4l/by-id/ paths for camera
+          identification on Linux (#318)</li>
+          <li>Spinrow input field too narrow in some cases</li>
+          <li>Settings widget auto-value bugs: raster/wavefront sliders
+          showing wrong defaults, overscan Automatic Distance switch
+          permanently greyed out, and auto overscan/lead-in-out
+          distance recalculating to a smaller value on toggle
+          (#314, by vyvcodd)</li>
+          <li>Fixed job generation hangs in the pipeline</li>
+          <li>Fixed in-flight intent not cancelling on force_rebuild</li>
+          <li>Fixed 3D rotary rendering missing mapped operations</li>
+          <li>Fixed rotary module fallback not triggering pipeline
+          rebuild on machine changes</li>
+          <li>Fixed a race condition on Windows</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.8.5" date="2026-07-16">
       <description>
         <p>raygeo upgrade, group selection improvements</p>

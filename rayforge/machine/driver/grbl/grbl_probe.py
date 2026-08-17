@@ -4,17 +4,13 @@ from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Tuple,
-    Type,
     runtime_checkable,
 )
 
 from blinker import Signal
 
+from ....shared.units.system import UnitSystem
 from ...transport import TransportStatus
 from .grbl_util import (
     extract_device_name,
@@ -54,14 +50,14 @@ class _GrblProbeDriver(Protocol):
 
     async def cleanup(self) -> None: ...
 
-    async def execute_interactive_command(self, command: str) -> List[str]: ...
+    async def execute_interactive_command(self, command: str) -> list[str]: ...
 
 
 async def probe_grbl_device(
-    driver_cls: Type[_GrblProbeDriver],
+    driver_cls: type[_GrblProbeDriver],
     context: "RayforgeContext",
     **kwargs: Any,
-) -> Tuple["DeviceProfile", List[str]]:
+) -> tuple["DeviceProfile", list[str]]:
     """
     Shared probe orchestration for all Grbl drivers.
 
@@ -100,9 +96,9 @@ async def probe_grbl_device(
 
 
 def build_grbl_profile(
-    build_info: List[str],
-    settings_lines: List[str],
-) -> Tuple["DeviceProfile", List[str]]:
+    build_info: list[str],
+    settings_lines: list[str],
+) -> tuple["DeviceProfile", list[str]]:
     """
     Build a ``DeviceProfile`` from raw Grbl ``$I`` and ``$``
     response lines.
@@ -121,7 +117,7 @@ def build_grbl_profile(
         MachineConfig,
     )
 
-    rx_buffer_size: Optional[int] = None
+    rx_buffer_size: int | None = None
     compile_flags: str = ""
     for line in build_info:
         rx = parse_opt_info(line)
@@ -132,7 +128,7 @@ def build_grbl_profile(
             compile_flags = match.group(1)
 
     settings = parse_grbl_settings(settings_lines)
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     name = extract_device_name(build_info)
     axis_x = settings.get("130")
@@ -146,17 +142,17 @@ def build_grbl_profile(
     homing_enabled = settings.get("22")
     report_inches = settings.get("13")
 
-    max_speed: Optional[int] = None
+    max_speed: int | None = None
     if max_x_rate is not None and max_y_rate is not None:
         max_speed = int(min(max_x_rate, max_y_rate))
 
-    accel: Optional[int] = None
+    accel: int | None = None
     if x_accel is not None and y_accel is not None:
         accel = int(min(x_accel, y_accel))
 
     single_axis_homing = "H" in compile_flags
 
-    driver_config: Dict[str, Any] = {}
+    driver_config: dict[str, Any] = {}
     if rx_buffer_size is not None:
         driver_config["rx_buffer_size"] = rx_buffer_size
 
@@ -168,15 +164,15 @@ def build_grbl_profile(
     if arc_tol is not None:
         driver_config["arc_tolerance"] = arc_tol
 
-    extents: Optional[Tuple[float, float]] = None
+    extents: tuple[float, float] | None = None
     if axis_x is not None and axis_y is not None:
         extents = (float(axis_x), float(axis_y))
 
-    heads: Optional[List[Dict[str, Any]]] = None
+    heads: list[dict[str, Any]] | None = None
     if max_spindle is not None:
         heads = [{"max_power": int(max_spindle)}]
 
-    home_on_start: Optional[bool] = None
+    home_on_start: bool | None = None
     if homing_enabled is not None:
         home_on_start = bool(int(homing_enabled))
 
@@ -188,6 +184,10 @@ def build_grbl_profile(
                 "units."
             )
         )
+
+    detected_unit_system = UnitSystem.METRIC
+    if report_inches is not None and int(report_inches):
+        detected_unit_system = UnitSystem.IMPERIAL
 
     if laser_mode is not None and not int(laser_mode):
         warnings.append(
@@ -212,6 +212,7 @@ def build_grbl_profile(
                 acceleration=accel,
                 home_on_start=home_on_start,
                 single_axis_homing_enabled=(single_axis_homing or None),
+                unit_system=detected_unit_system,
                 heads=heads,
             ),
             dialect_config={},

@@ -1,6 +1,6 @@
 # Configurações
 
-![Configurações Gerais](/screenshots/application-general.png)
+![Configurações Gerais](/screenshots/app-settings-general.png)
 
 Personalize o Rayforge para corresponder ao seu fluxo de trabalho e
 preferências. Abra as configurações via **Editar → Configurações** ou
@@ -59,6 +59,8 @@ do aplicativo. Cada uma possui sua própria documentação:
   bibliotecas de materiais
 - [Receitas](../application-settings/recipes.md) — gerenciar receitas de
   operações salvas
+- [Regras de Cor](../application-settings/color-rules.md) — mapear cores SVG
+  para tipos de etapa
 - [Provedores de IA](../application-settings/ai-provider.md) — configurar
   provedores de IA para uso pelos addons
 - [Addons](../application-settings/addons.md) — instalar, atualizar e remover

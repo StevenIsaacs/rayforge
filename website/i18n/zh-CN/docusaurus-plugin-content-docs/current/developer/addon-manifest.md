@@ -68,7 +68,7 @@ description: "Adds support for the XYZ laser cutter."
 api_version: 9
 ```
 
-请参阅[钩子](./addon-hooks.md#api-version-history)文档了解每个版本的变更内容。
+请参阅[钩子](./addon-hooks.md#api-版本历史)文档了解每个版本的变更内容。
 
 ### `author`
 
@@ -114,6 +114,14 @@ requires:
 
 ```yaml
 version: 1.0.0
+```
+
+### `maturity`
+
+您的插件的成熟度级别。对于尚未完成且可能存在未解决问题风险的插件，请使用 `experimental`。实验性插件会在插件管理器中显示专用图标。默认值为 `stable`；对于稳定插件，请省略此字段。
+
+```yaml
+maturity: experimental
 ```
 
 ## 入口点

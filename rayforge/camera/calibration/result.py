@@ -1,9 +1,11 @@
+import logging
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import List, Optional, Tuple
+from datetime import datetime, timezone
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -11,10 +13,12 @@ class CalibrationResult:
     camera_matrix: np.ndarray
     distortion_coeffs: np.ndarray
     rms_error: float
-    image_size: Tuple[int, int]
+    image_size: tuple[int, int]
     num_frames_used: int
-    reprojection_errors: List[float] = field(default_factory=list)
-    calibration_date: datetime = field(default_factory=datetime.now)
+    reprojection_errors: list[float] = field(default_factory=list)
+    calibration_date: datetime = field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
     def __post_init__(self):
         self.camera_matrix = np.array(self.camera_matrix, dtype=np.float64)
@@ -94,6 +98,9 @@ class CalibrationResult:
 
     @classmethod
     def from_dict(cls, data: dict) -> "CalibrationResult":
+        calibration_date = datetime.fromisoformat(data["calibration_date"])
+        if calibration_date.tzinfo is None:
+            calibration_date = calibration_date.replace(tzinfo=timezone.utc)
         return cls(
             camera_matrix=np.array(data["camera_matrix"], dtype=np.float64),
             distortion_coeffs=np.array(
@@ -103,12 +110,12 @@ class CalibrationResult:
             image_size=tuple(data["image_size"]),
             num_frames_used=data["num_frames_used"],
             reprojection_errors=data.get("reprojection_errors", []),
-            calibration_date=datetime.fromisoformat(data["calibration_date"]),
+            calibration_date=calibration_date,
         )
 
     def get_undistort_maps(
-        self, image_size: Optional[Tuple[int, int]] = None
-    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        self, image_size: tuple[int, int] | None = None
+    ) -> tuple[np.ndarray, np.ndarray] | None:
         size = image_size or self.image_size
         if size[0] <= 0 or size[1] <= 0:
             return None
@@ -131,5 +138,6 @@ class CalibrationResult:
                 cv2.CV_16SC2,
             )
             return map1, map2
-        except Exception:
+        except cv2.error as e:
+            logger.error(f"Failed to compute undistort maps: {e}")
             return None

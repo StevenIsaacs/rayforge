@@ -120,9 +120,9 @@ def detect_silence(
 
     result = subprocess.run(
         cmd,
-        stderr=subprocess.PIPE,
-        stdout=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        check=False,
     )
 
     if result.returncode != 0:
@@ -199,9 +199,9 @@ def get_video_duration(input_file: str) -> float:
 
     result = subprocess.run(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        check=False,
     )
 
     if result.returncode != 0:
@@ -237,9 +237,9 @@ def has_audio_stream(input_file: str) -> bool:
 
     result = subprocess.run(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        check=False,
     )
 
     return bool(result.stdout.strip())
@@ -278,9 +278,7 @@ def extract_segment(
         output_file,
     ]
 
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    result = subprocess.run(cmd, capture_output=True, check=False)
 
     if result.returncode != 0:
         raise RuntimeError(f"Segment extraction failed: {result.stderr}")
@@ -297,8 +295,7 @@ def create_concat_file(
         output_file: Path to the concat file.
     """
     with open(output_file, "w") as f:
-        for seg_file in segment_files:
-            f.write(f"file '{seg_file}'\n")
+        f.writelines(f"file '{seg_file}'\n" for seg_file in segment_files)
 
 
 def concat_segments(
@@ -325,9 +322,7 @@ def concat_segments(
         output_file,
     ]
 
-    result = subprocess.run(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-    )
+    result = subprocess.run(cmd, capture_output=True, check=False)
 
     if result.returncode != 0:
         raise RuntimeError(f"Concatenation failed: {result.stderr}")
@@ -465,9 +460,9 @@ def has_video_stream(input_file: str) -> bool:
 
     result = subprocess.run(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
+        check=False,
     )
 
     return bool(result.stdout.strip())

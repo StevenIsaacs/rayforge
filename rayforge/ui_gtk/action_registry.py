@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set
 
 from blinker import Signal
 from gi.repository import Gio, Gtk
@@ -24,12 +23,12 @@ class ToolbarPlacement:
 class ActionInfo:
     action: Gio.SimpleAction
     action_name: str
-    label: Optional[str] = None
-    icon_name: Optional[str] = None
-    shortcut: Optional[str] = None
-    addon_name: Optional[str] = None
-    menu: Optional[MenuPlacement] = None
-    toolbar: Optional[ToolbarPlacement] = None
+    label: str | None = None
+    icon_name: str | None = None
+    shortcut: str | None = None
+    addon_name: str | None = None
+    menu: MenuPlacement | None = None
+    toolbar: ToolbarPlacement | None = None
 
 
 class ActionRegistry:
@@ -41,9 +40,9 @@ class ActionRegistry:
     """
 
     def __init__(self):
-        self._actions: Dict[str, ActionInfo] = {}
-        self._addon_actions: Dict[str, Set[str]] = {}
-        self._window: Optional[Gtk.ApplicationWindow] = None
+        self._actions: dict[str, ActionInfo] = {}
+        self._addon_actions: dict[str, set[str]] = {}
+        self._window: Gtk.ApplicationWindow | None = None
         self.changed = Signal()
 
     def set_window(self, window: Gtk.ApplicationWindow) -> None:
@@ -51,7 +50,7 @@ class ActionRegistry:
         self._window = window
 
     @property
-    def window(self) -> Optional[Gtk.ApplicationWindow]:
+    def window(self) -> Gtk.ApplicationWindow | None:
         """Get the window associated with this registry."""
         return self._window
 
@@ -59,12 +58,12 @@ class ActionRegistry:
         self,
         action_name: str,
         action: Gio.SimpleAction,
-        addon_name: Optional[str] = None,
-        label: Optional[str] = None,
-        icon_name: Optional[str] = None,
-        shortcut: Optional[str] = None,
-        menu: Optional[MenuPlacement] = None,
-        toolbar: Optional[ToolbarPlacement] = None,
+        addon_name: str | None = None,
+        label: str | None = None,
+        icon_name: str | None = None,
+        shortcut: str | None = None,
+        menu: MenuPlacement | None = None,
+        toolbar: ToolbarPlacement | None = None,
     ) -> None:
         """
         Register an action with the window and track it by addon.
@@ -167,7 +166,7 @@ class ActionRegistry:
             self.changed.send(self)
         return count
 
-    def get(self, action_name: str) -> Optional[ActionInfo]:
+    def get(self, action_name: str) -> ActionInfo | None:
         """
         Get action info by name.
 
@@ -179,7 +178,7 @@ class ActionRegistry:
         """
         return self._actions.get(action_name)
 
-    def get_menu_items(self, menu_id: str) -> List[ActionInfo]:
+    def get_menu_items(self, menu_id: str) -> list[ActionInfo]:
         """
         Get actions with menu placement for a specific menu, sorted by
         priority.
@@ -197,7 +196,7 @@ class ActionRegistry:
         ]
         return sorted(items, key=lambda x: x.menu.priority if x.menu else 100)
 
-    def get_toolbar_items(self, group: str) -> List[ActionInfo]:
+    def get_toolbar_items(self, group: str) -> list[ActionInfo]:
         """
         Get actions with toolbar placement for a specific group, sorted by
         priority.
@@ -217,7 +216,7 @@ class ActionRegistry:
             items, key=lambda x: x.toolbar.priority if x.toolbar else 100
         )
 
-    def get_all_with_shortcuts(self) -> List[ActionInfo]:
+    def get_all_with_shortcuts(self) -> list[ActionInfo]:
         """
         Get all actions that have keyboard shortcuts defined.
 

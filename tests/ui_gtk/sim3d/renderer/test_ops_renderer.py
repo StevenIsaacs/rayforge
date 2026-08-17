@@ -8,8 +8,26 @@ import numpy as np
 import pytest
 
 from rayforge.core.color import ColorSet
-from rayforge.ui_gtk.sim3d.gl_utils import RenderContext
+from rayforge.ui_gtk.sim3d.gl_utils import (
+    LINE_DEPTH_WINDOW_BIAS,
+    ShaderSet,
+)
+from rayforge.ui_gtk.sim3d.render_context import (
+    CameraContext,
+    KinematicsContext,
+    PlaybackContext,
+    RenderContext,
+    SceneVisibility,
+)
 from rayforge.ui_gtk.sim3d.renderer.ops_renderer import OpsRenderer
+
+
+class _FakePlayer:
+    def __init__(self, current_index):
+        self.current_index = current_index
+
+    def playback_progress(self):
+        return (self.current_index + 1, 0.0)
 
 
 @pytest.fixture
@@ -29,19 +47,17 @@ def colors():
     )
 
 
-def _make_ctx(colors, show_travel_moves=False):
+def _make_ctx(colors, show_travel_moves=False, op_player=None):
     return RenderContext(
-        proj_matrix=np.eye(4, dtype=np.float32),
-        view_matrix=np.eye(4, dtype=np.float32),
-        mvp_ui=np.eye(4, dtype=np.float32),
-        mvp_scene=np.eye(4, dtype=np.float32),
-        margin_shift=np.eye(4, dtype=np.float32),
-        model_matrix=np.eye(4, dtype=np.float32),
-        viewport_height=800,
-        camera_position=np.zeros(3),
-        color_set=colors,
-        show_travel_moves=show_travel_moves,
+        camera=CameraContext(color_set=colors),
+        kinematics=KinematicsContext(mvp_ui=np.eye(4, dtype=np.float32)),
+        playback=PlaybackContext(op_player=op_player),
+        visibility=SceneVisibility(show_travel_moves=show_travel_moves),
     )
+
+
+def _make_shaders(shader):
+    return ShaderSet(main=shader)
 
 
 def _init_renderer(renderer):
@@ -71,8 +87,14 @@ def test_init_gl_creates_buffers(renderer):
     ):
         renderer.init_gl()
 
-    assert mock_vbo.call_count == 5
+    assert mock_vbo.call_count == 3
     assert mock_vao.call_count == 2
+
+
+def _make_attrib(n: int) -> np.ndarray:
+    a = np.zeros((n, 4), dtype=np.float32)
+    a[:, 3] = 1.0
+    return a
 
 
 @pytest.mark.ui
@@ -80,7 +102,7 @@ def test_update_from_vertex_data_sets_counts(renderer):
     _init_renderer(renderer)
 
     powered_verts = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
-    power_values = np.array([1, 0, 0, 1, 0, 1, 0, 1], dtype=np.float32)
+    powered_attrib = _make_attrib(2)
     travel_verts = np.array([2, 2, 2, 3, 3, 3], dtype=np.float32)
 
     with (
@@ -88,7 +110,7 @@ def test_update_from_vertex_data_sets_counts(renderer):
         patch("OpenGL.GL.glBufferData"),
     ):
         renderer.update_from_vertex_data(
-            powered_verts, power_values, travel_verts
+            powered_verts, powered_attrib, travel_verts
         )
 
     assert renderer.powered_vertex_count == 2
@@ -100,7 +122,7 @@ def test_clear_resets_counts(renderer):
     _init_renderer(renderer)
 
     powered_verts = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
-    power_values = np.array([1, 0, 0, 1, 0, 1, 0, 1], dtype=np.float32)
+    powered_attrib = _make_attrib(2)
     travel_verts = np.array([2, 2, 2, 3, 3, 3], dtype=np.float32)
 
     with (
@@ -108,7 +130,7 @@ def test_clear_resets_counts(renderer):
         patch("OpenGL.GL.glBufferData"),
     ):
         renderer.update_from_vertex_data(
-            powered_verts, power_values, travel_verts
+            powered_verts, powered_attrib, travel_verts
         )
     assert renderer.powered_vertex_count == 2
 
@@ -122,11 +144,11 @@ def test_clear_resets_counts(renderer):
 
 
 @pytest.mark.ui
-def test_render_raises_on_invalid_executed_count(renderer, colors):
+def test_render_clamps_executed_count_to_vertex_count(renderer, colors):
     _init_renderer(renderer)
 
     powered_verts = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
-    power_values = np.array([1, 0, 0, 1, 0, 1, 0, 1], dtype=np.float32)
+    powered_attrib = _make_attrib(2)
     travel_verts = np.array([], dtype=np.float32)
 
     with (
@@ -134,27 +156,34 @@ def test_render_raises_on_invalid_executed_count(renderer, colors):
         patch("OpenGL.GL.glBufferData"),
     ):
         renderer.update_from_vertex_data(
-            powered_verts, power_values, travel_verts
+            powered_verts, powered_attrib, travel_verts
         )
 
     shader = MagicMock()
     mvp = np.eye(4, dtype=np.float32)
-    ctx = _make_ctx(colors, show_travel_moves=True)
+    renderer.powered_offsets = np.array([0, 999], dtype=np.int32)
+    renderer.travel_offsets = np.array([0, 999], dtype=np.int32)
+    ctx = _make_ctx(colors, show_travel_moves=True, op_player=_FakePlayer(0))
+    ctx.kinematics._mvp_ui = mvp
+    renderer.prepare(ctx)
+
+    # The fractional exec mapping clamps to the uploaded vertex count
+    # instead of overrunning the buffer.
+    assert renderer._exec_powered == 2
+    assert renderer._partial_powered_id == -1
 
     with (
         patch("OpenGL.GL.glBindVertexArray"),
         patch("OpenGL.GL.glEnable"),
         patch("OpenGL.GL.glBlendFunc"),
+        patch("OpenGL.GL.glActiveTexture"),
+        patch("OpenGL.GL.glBindTexture"),
+        patch("OpenGL.GL.glDepthFunc"),
+        patch("OpenGL.GL.glDepthMask"),
         patch("OpenGL.GL.glDrawArrays"),
         patch("rayforge.ui_gtk.sim3d.renderer.ops_renderer.set_line_width"),
     ):
-        with pytest.raises(ValueError, match="executed_vertex_count"):
-            renderer.render(
-                ctx,
-                shader,
-                mvp,
-                executed_vertex_count=999,
-            )
+        renderer.render(ctx, _make_shaders(shader))
 
 
 @pytest.mark.ui
@@ -162,7 +191,7 @@ def test_render_draws_powered_and_travel(renderer, colors):
     _init_renderer(renderer)
 
     powered_verts = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
-    power_values = np.array([1, 0, 0, 1, 0, 1, 0, 1], dtype=np.float32)
+    powered_attrib = _make_attrib(2)
     travel_verts = np.array([2, 2, 2, 3, 3, 3], dtype=np.float32)
 
     with (
@@ -170,12 +199,13 @@ def test_render_draws_powered_and_travel(renderer, colors):
         patch("OpenGL.GL.glBufferData"),
     ):
         renderer.update_from_vertex_data(
-            powered_verts, power_values, travel_verts
+            powered_verts, powered_attrib, travel_verts
         )
 
     shader = MagicMock()
     mvp = np.eye(4, dtype=np.float32)
     ctx = _make_ctx(colors, show_travel_moves=True)
+    ctx.kinematics._mvp_ui = mvp
 
     with (
         patch("OpenGL.GL.glBindVertexArray"),
@@ -183,14 +213,22 @@ def test_render_draws_powered_and_travel(renderer, colors):
         patch("OpenGL.GL.glBlendFunc"),
         patch("OpenGL.GL.glActiveTexture"),
         patch("OpenGL.GL.glBindTexture"),
+        patch("OpenGL.GL.glDepthFunc") as mock_depth_func,
+        patch("OpenGL.GL.glDepthMask"),
         patch("OpenGL.GL.glDrawArrays") as mock_draw,
         patch("rayforge.ui_gtk.sim3d.renderer.ops_renderer.set_line_width"),
     ):
-        renderer.render(ctx, shader, mvp)
+        renderer.render(ctx, _make_shaders(shader))
 
     assert mock_draw.call_count == 2
     shader.use.assert_called_once()
     shader.set_mat4.assert_called_once_with("uMVP", mvp)
+    # The toolpath must depth-test against the laser head model instead
+    # of always drawing on top; a small window-space bias keeps it
+    # above the coplanar raster texture.  0x0203 is GL.GL_LEQUAL (no GL
+    # import in tests).
+    assert mock_depth_func.call_args[0][0] == 0x0203
+    shader.set_float.assert_any_call("uFragDepthBias", LINE_DEPTH_WINDOW_BIAS)
 
 
 @pytest.mark.ui
@@ -198,7 +236,7 @@ def test_render_hides_travel_when_disabled(renderer, colors):
     _init_renderer(renderer)
 
     powered_verts = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
-    power_values = np.array([1, 0, 0, 1, 0, 1, 0, 1], dtype=np.float32)
+    powered_attrib = _make_attrib(2)
     travel_verts = np.array([2, 2, 2, 3, 3, 3], dtype=np.float32)
 
     with (
@@ -206,12 +244,13 @@ def test_render_hides_travel_when_disabled(renderer, colors):
         patch("OpenGL.GL.glBufferData"),
     ):
         renderer.update_from_vertex_data(
-            powered_verts, power_values, travel_verts
+            powered_verts, powered_attrib, travel_verts
         )
 
     shader = MagicMock()
     mvp = np.eye(4, dtype=np.float32)
     ctx = _make_ctx(colors, show_travel_moves=False)
+    ctx.kinematics._mvp_ui = mvp
 
     with (
         patch("OpenGL.GL.glBindVertexArray"),
@@ -219,10 +258,12 @@ def test_render_hides_travel_when_disabled(renderer, colors):
         patch("OpenGL.GL.glBlendFunc"),
         patch("OpenGL.GL.glActiveTexture"),
         patch("OpenGL.GL.glBindTexture"),
+        patch("OpenGL.GL.glDepthFunc"),
+        patch("OpenGL.GL.glDepthMask"),
         patch("OpenGL.GL.glDrawArrays") as mock_draw,
         patch("rayforge.ui_gtk.sim3d.renderer.ops_renderer.set_line_width"),
     ):
-        renderer.render(ctx, shader, mvp)
+        renderer.render(ctx, _make_shaders(shader))
 
     assert mock_draw.call_count == 1
 
@@ -234,14 +275,66 @@ def test_render_noop_when_empty(renderer, colors):
     shader = MagicMock()
     mvp = np.eye(4, dtype=np.float32)
     ctx = _make_ctx(colors, show_travel_moves=True)
+    ctx.kinematics._mvp_ui = mvp
 
     with (
         patch("OpenGL.GL.glBindVertexArray"),
         patch("OpenGL.GL.glEnable"),
         patch("OpenGL.GL.glBlendFunc"),
+        patch("OpenGL.GL.glDepthFunc"),
+        patch("OpenGL.GL.glDepthMask"),
         patch("OpenGL.GL.glDrawArrays") as mock_draw,
         patch("rayforge.ui_gtk.sim3d.renderer.ops_renderer.set_line_width"),
     ):
-        renderer.render(ctx, shader, mvp)
+        renderer.render(ctx, _make_shaders(shader))
 
     mock_draw.assert_not_called()
+
+
+@pytest.mark.ui
+def test_prepare_publishes_exec_counts_to_render():
+    """prepare computes powered/travel exec counts from the playhead and
+    render publishes them back into ctx for the draw."""
+    renderer = OpsRenderer()
+    _init_renderer(renderer)
+
+    powered_verts = np.array([0, 0, 0, 1, 1, 1], dtype=np.float32)
+    powered_attrib = _make_attrib(2)
+    travel_verts = np.array([2, 2, 2, 3, 3, 3], dtype=np.float32)
+    with (
+        patch("OpenGL.GL.glBindBuffer"),
+        patch("OpenGL.GL.glBufferData"),
+    ):
+        renderer.update_from_vertex_data(
+            powered_verts, powered_attrib, travel_verts
+        )
+
+    renderer.powered_offsets = np.array([0, 2, 4], dtype=np.int32)
+    renderer.travel_offsets = np.array([0, 2], dtype=np.int32)
+
+    shader = MagicMock()
+    mvp = np.eye(4, dtype=np.float32)
+    ctx = _make_ctx(
+        ColorSet(), show_travel_moves=True, op_player=_FakePlayer(0)
+    )
+    ctx.kinematics._mvp_ui = mvp
+    renderer.prepare(ctx)
+
+    assert renderer._exec_powered == 2
+    assert renderer._exec_travel == 2
+
+    with (
+        patch("OpenGL.GL.glBindVertexArray"),
+        patch("OpenGL.GL.glEnable"),
+        patch("OpenGL.GL.glBlendFunc"),
+        patch("OpenGL.GL.glActiveTexture"),
+        patch("OpenGL.GL.glBindTexture"),
+        patch("OpenGL.GL.glDepthFunc"),
+        patch("OpenGL.GL.glDepthMask"),
+        patch("OpenGL.GL.glDrawArrays"),
+        patch("rayforge.ui_gtk.sim3d.renderer.ops_renderer.set_line_width"),
+    ):
+        renderer.render(ctx, _make_shaders(shader))
+
+    assert ctx.playback.executed_vertex_count == 2
+    assert ctx.playback.executed_travel_vertex_count == 2

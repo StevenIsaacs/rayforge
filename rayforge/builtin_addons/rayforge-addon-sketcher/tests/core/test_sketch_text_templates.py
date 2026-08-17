@@ -1,10 +1,10 @@
-from datetime import date
+from datetime import datetime, timezone
 from typing import cast
 
+from raygeo.geo.shape.text import FontConfig
 from sketcher.core import Sketch
 from sketcher.core.entities.text_box import TextBoxEntity
 
-from raygeo.geo.shape.text import FontConfig
 from rayforge.core.varset import FloatVar, Var
 
 
@@ -110,7 +110,7 @@ def test_resolve_date_today():
     s.solve()
     resolved = s._resolve_text_content(box)
     assert resolved is not None
-    assert date.today().isoformat() in resolved
+    assert datetime.now(tz=timezone.utc).date().isoformat() in resolved
 
 
 def test_resolve_uuid4():
@@ -213,11 +213,11 @@ def test_uuid4_stable_with_external_cache():
     s.solve()
 
     cache_a: dict = {}
-    geo1, _ = s.get_geometry(resolved_text_cache=cache_a)
+    _geo1, _ = s.get_geometry(resolved_text_cache=cache_a)
     assert len(cache_a) == 1
 
     cache_a_copy = dict(cache_a)
-    geo2, _ = s.get_geometry(resolved_text_cache=cache_a)
+    _geo2, _ = s.get_geometry(resolved_text_cache=cache_a)
     assert cache_a == cache_a_copy
 
 

@@ -149,10 +149,12 @@ def transform_path(path_data, min_x, min_y, width, height, target_size=24):
                     and isinstance(tokens[i], float)
                     and isinstance(tokens[i + 1], float)
                 ):
-                    if cmd.isupper():
-                        x = tx(tokens[i])
-                        y = ty(tokens[i + 1])
-                    elif at_start and first_pair and cmd.lower() == "m":
+                    if (
+                        cmd.isupper()
+                        or at_start
+                        and first_pair
+                        and cmd.lower() == "m"
+                    ):
                         x = tx(tokens[i])
                         y = ty(tokens[i + 1])
                     else:
@@ -284,7 +286,7 @@ def normalize_svg(content, target_size=24):
                 path_data, min_x, min_y, width, height, target_size
             )
             return f'{indent}d="{new_path}"{rest}'
-        except Exception:
+        except (ValueError, ZeroDivisionError, IndexError):
             return match.group(0)
 
     path_pattern = r'(\n\s+)d\s*=\s*"([^"]+)"(\s*(?:/?>|\n))'
@@ -297,7 +299,7 @@ def normalize_svg(content, target_size=24):
         try:
             new_transform = transform_translate(transform_val, scale)
             return f'{indent}transform="{new_transform}"{rest}'
-        except Exception:
+        except (ValueError, ZeroDivisionError, IndexError):
             return match.group(0)
 
     transform_pattern = r'(\n\s+)transform\s*=\s*"([^"]+)"(\s*(?:/?>|\n|\s))'
@@ -406,7 +408,7 @@ def normalize_svg(content, target_size=24):
         try:
             new_style = transform_style(style_val, scale)
             return f'{indent}style="{new_style}"{rest}'
-        except Exception:
+        except (ValueError, ZeroDivisionError, IndexError):
             return match.group(0)
 
     style_pattern = r'(\n\s+)style\s*=\s*"([^"]+)"(\s*(?:/?>|\n))'
@@ -456,7 +458,7 @@ def main():
                 svg_file.write_text(new_content, encoding="utf-8")
                 print(" OK")
                 processed += 1
-        except Exception as e:
+        except (OSError, ValueError, ZeroDivisionError, IndexError) as e:
             print(f" ERROR: {e}")
             skipped += 1
 

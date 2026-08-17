@@ -1,16 +1,17 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Callable, List, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from gi.repository import Gtk
 
+from ...core.step_registry import step_registry
 from ...core.undo.list_cmd import ListItemCommand, ReorderListCommand
 from ...core.workflow import Workflow
 from ..shared.draglist import DragListBox
 from ..shared.expander import ExpanderWithButton
 from ..shared.popover_menu import PopoverMenu
 from .step_box import StepBox
-from .step_settings_dialog import StepSettingsDialog
+from .step_settings.dialog import StepSettingsDialog
 
 if TYPE_CHECKING:
     from ...doceditor.editor import DocEditor
@@ -28,12 +29,10 @@ class WorkflowView(ExpanderWithButton):
         self,
         editor: "DocEditor",
         workflow: Workflow,
-        step_factories: List[Callable],
         **kwargs,
     ):
         super().__init__(button_label=_("Add New Step..."), **kwargs)
-        self.workflow: Optional[Workflow] = None
-        self.step_factories = step_factories
+        self.workflow: Workflow | None = None
         self.editor = editor
         self.set_expanded(True)
 
@@ -45,7 +44,7 @@ class WorkflowView(ExpanderWithButton):
 
         self.set_workflow(workflow)
 
-    def set_workflow(self, workflow: Optional[Workflow]):
+    def set_workflow(self, workflow: Workflow | None):
         """Sets the view to display a different workflow."""
         if self.workflow:
             try:
@@ -55,6 +54,9 @@ class WorkflowView(ExpanderWithButton):
                     self.on_workflow_changed
                 )
                 self.workflow.descendant_removed.disconnect(
+                    self.on_workflow_changed
+                )
+                self.workflow.descendant_updated.disconnect(
                     self.on_workflow_changed
                 )
             except (TypeError, ValueError):
@@ -69,6 +71,7 @@ class WorkflowView(ExpanderWithButton):
             self.workflow.updated.connect(self.on_workflow_changed)
             self.workflow.descendant_added.connect(self.on_workflow_changed)
             self.workflow.descendant_removed.connect(self.on_workflow_changed)
+            self.workflow.descendant_updated.connect(self.on_workflow_changed)
             # Trigger initial full population and metadata update
             self.on_workflow_changed(self.workflow)
 
@@ -132,8 +135,12 @@ class WorkflowView(ExpanderWithButton):
         if not self.workflow or not self.workflow.doc:
             return
 
+        machine = self.editor.context.machine
         popup = PopoverMenu(
-            step_factories=self.step_factories, context=self.editor.context
+            step_factories=step_registry.get_factories(
+                machine.get_capabilities() if machine else None
+            ),
+            context=self.editor.context,
         )
         popup.set_parent(button)
         popup.popup()

@@ -7,16 +7,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
+from collections.abc import Callable, Coroutine, Iterator
 from multiprocessing import get_context
 from multiprocessing.managers import DictProxy
 from typing import (
     Any,
-    Callable,
-    Coroutine,
-    Dict,
-    Iterator,
-    List,
-    Optional,
     Protocol,
     runtime_checkable,
 )
@@ -39,18 +35,18 @@ class TaskManager:
     def __init__(
         self,
         main_thread_scheduler: Callable,
-        worker_initializer: Optional[Callable[..., None]] = None,
+        worker_initializer: Callable[..., None] | None = None,
         worker_initargs: tuple = (),
-        shared_state: Optional[DictProxy[str, Any]] = None,
+        shared_state: DictProxy[str, Any] | None = None,
     ) -> None:
         logger.debug("Initializing TaskManager")
-        self._tasks: Dict[Any, Task] = {}
+        self._tasks: dict[Any, Task] = {}
         # A holding area for recently replaced/cancelled tasks to
         # catch in-flight messages.
-        self._zombie_tasks: Dict[int, Task] = {}
+        self._zombie_tasks: dict[int, Task] = {}
         # Invisible tasks that don't appear in UI but still need callbacks
-        self._invisible_tasks: Dict[int, Task] = {}
-        self._progress_map: Dict[
+        self._invisible_tasks: dict[int, Task] = {}
+        self._progress_map: dict[
             Any, float
         ] = {}  # Stores progress of all current tasks
 
@@ -63,17 +59,27 @@ class TaskManager:
         self._main_thread_scheduler = main_thread_scheduler
         self._thread.start()
 
-        # TaskManager owns the persistent Manager and shared state
-        self._manager = get_context("spawn").Manager()
-        if shared_state is None:
-            shared_state = self._manager.dict()
-        self._shared_state = shared_state
-
+        # Multiprocessing pool is created lazily on first run_process call.
+        # This avoids spawning worker processes at app startup.
+        self._manager: Any = None
+        self._shared_state: Any = None
+        self._pool: Any = None
         self._pool_kwargs = {
             "initializer": worker_initializer,
             "initargs": worker_initargs,
-            "shared_state": self._shared_state,
         }
+
+    def _ensure_pool(self) -> None:
+        """
+        Lazily create the multiprocessing pool and its supporting
+        Manager and shared state on first use.
+        """
+        if self._pool is not None:
+            return
+        logger.debug("Lazily creating multiprocessing pool.")
+        self._manager = get_context("spawn").Manager()
+        self._shared_state = self._manager.dict()
+        self._pool_kwargs["shared_state"] = self._shared_state
         self._pool = WorkerPoolManager(**self._pool_kwargs)
         self._connect_pool_signals()
 
@@ -82,11 +88,12 @@ class TaskManager:
         Shuts down the current worker pool and starts a new one.
         This is necessary to apply changes like addon installation or updates
         to worker processes. The shared_state is preserved.
+        No-op if the pool has never been started (lazy init).
         """
+        if self._pool is None:
+            logger.info("Worker pool not started yet; restart is a no-op.")
+            return
         logger.info("Restarting worker pool to apply configuration changes...")
-        from rayforge.worker_init import invalidate_worker_addons_cache
-
-        invalidate_worker_addons_cache()
         with self._lock:
             self._pool.shutdown()
             self._pool = WorkerPoolManager(**self._pool_kwargs)
@@ -186,7 +193,7 @@ class TaskManager:
         self._emit_tasks_updated_unsafe()
 
     def add_task(
-        self, task: Task, when_done: Optional[Callable[[Task], None]] = None
+        self, task: Task, when_done: Callable[[Task], None] | None = None
     ) -> None:
         """Add an asyncio-based task to the manager."""
         # For asyncio tasks, the when_done is handled by the _run_task wrapper.
@@ -205,8 +212,8 @@ class TaskManager:
         self,
         coro: Callable[..., Coroutine[Any, Any, Any]],
         *args: Any,
-        key: Optional[Any] = None,
-        when_done: Optional[Callable[[Task], None]] = None,
+        key: Any | None = None,
+        when_done: Callable[[Task], None] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -228,6 +235,34 @@ class TaskManager:
         safely interact with the main thread (e.g., for UI updates).
         """
         self._main_thread_scheduler(callback, *args, **kwargs)
+
+    async def run_on_main_thread(
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
+        """
+        Runs a synchronous callable on the main thread and awaits completion.
+
+        This is for background coroutines that must perform main-thread-only
+        work (e.g., GTK widget updates) and need to wait for it to finish
+        before continuing. Returns the callable's return value and re-raises
+        any exception it raises.
+
+        Raises:
+            RuntimeError: If called outside a running event loop.
+            Exception: If *func* raised while running on the main thread.
+        """
+        loop = asyncio.get_running_loop()
+        done = loop.create_future()
+
+        def _invoke_on_main_thread():
+            try:
+                result = func(*args, **kwargs)
+                loop.call_soon_threadsafe(done.set_result, result)
+            except Exception as e:  # noqa: BLE001 - boundary for main thread
+                loop.call_soon_threadsafe(done.set_exception, e)
+
+        self._main_thread_scheduler(_invoke_on_main_thread)
+        return await done
 
     def schedule_delayed_on_main_thread(
         self,
@@ -254,7 +289,7 @@ class TaskManager:
         """
         loop = self.loop
         cancelled = False
-        timer_handle: List[Optional[asyncio.TimerHandle]] = [None]
+        timer_handle: list[asyncio.TimerHandle | None] = [None]
 
         def _execute():
             if not cancelled:
@@ -291,8 +326,8 @@ class TaskManager:
         self,
         func: Callable[..., Any],
         *args: Any,
-        key: Optional[Any] = None,
-        when_done: Optional[Callable[[Task], None]] = None,
+        key: Any | None = None,
+        when_done: Callable[[Task], None] | None = None,
         **kwargs: Any,
     ) -> Task:
         """
@@ -322,9 +357,9 @@ class TaskManager:
         self,
         func: Callable[..., Any],
         *args: Any,
-        key: Optional[Any] = None,
-        when_done: Optional[Callable[[Task], None]] = None,
-        when_event: Optional[Callable[[Task, str, dict], None]] = None,
+        key: Any | None = None,
+        when_done: Callable[[Task], None] | None = None,
+        when_event: Callable[[Task, str, dict], None] | None = None,
         visible: bool = True,
         **kwargs: Any,
     ) -> Task:
@@ -379,7 +414,8 @@ class TaskManager:
         if visible:
             task._emit_status_changed()
 
-        # Submit the actual work to the pool
+        # Submit the actual work to the pool (creates it lazily if needed)
+        self._ensure_pool()
         self._pool.submit(task.key, task.id, func, *args, **kwargs)
 
         return task
@@ -437,7 +473,7 @@ class TaskManager:
             )
             try:
                 callback_to_invoke(task_to_callback)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - user callback boundary
                 logger.debug(
                     f"when_done callback for cancelled task '{key}' "
                     f"raised {type(e).__name__}: {e}. This may occur "
@@ -468,28 +504,19 @@ class TaskManager:
                     task.when_done_callback = None
                     try:
                         callback(task)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001 - callback boundary
                         logger.debug(
                             f"when_done callback for cancelled task "
                             f"'{task.key}' raised {type(e).__name__}: {e}"
                         )
 
-    def get_task(self, key: Any) -> Optional[Task]:
+    def get_task(self, key: Any) -> Task | None:
         """Retrieves a task by its key."""
         with self._lock:
             return self._tasks.get(key)
 
-    def get_shared_state(self) -> Any:
-        """
-        Return the shared state dict for worker initialization.
-
-        This provides a generic mechanism for passing data to worker
-        processes. The dict is managed by the TaskManager and persists.
-        """
-        return self._shared_state
-
     async def _run_task(
-        self, task: Task, when_done: Optional[Callable[[Task], None]]
+        self, task: Task, when_done: Callable[[Task], None] | None
     ) -> None:
         """Run an asyncio task and clean up when done."""
         context = ExecutionContext(
@@ -502,9 +529,8 @@ class TaskManager:
             await task.run(context)
         except Exception:
             # This is the master error handler for all background tasks.
-            logger.error(
-                f"Unhandled exception in managed task '{task.key}':",
-                exc_info=True,
+            logger.exception(
+                f"Unhandled exception in managed task '{task.key}'"
             )
         finally:
             context.flush()
@@ -608,8 +634,8 @@ class TaskManager:
         self,
         key: Any,
         task_id: int,
-        progress: Optional[float] = None,
-        message: Optional[str] = None,
+        progress: float | None = None,
+        message: str | None = None,
     ):
         """Updates a Task object from the main thread."""
         with self._lock:
@@ -677,7 +703,7 @@ class TaskManager:
         task_id: int,
         status: str,
         result: Any = None,
-        error: Optional[str] = None,
+        error: str | None = None,
     ):
         """
         Finalizes a pooled task from the main thread. This is the single
@@ -864,10 +890,11 @@ class TaskManager:
                 )
                 self.cancel_task(task.key)
 
-            # Shut down the worker pool. This will wait for workers to exit.
-            self._pool.shutdown()
-
-            self._manager.shutdown()
+            # Shut down the worker pool (only if it was ever started).
+            if self._pool is not None:
+                self._pool.shutdown()
+            if self._manager is not None:
+                self._manager.shutdown()
 
             logger.info("Stopping asyncio event loop...")
             # Stop the asyncio loop
@@ -883,7 +910,6 @@ class TaskManager:
                 "TaskManager shutdown interrupted by user. "
                 "Suppressing traceback."
             )
-            pass
 
     def wait_until_settled(self, timeout: int) -> bool:
         """
@@ -922,12 +948,18 @@ class TaskManager:
 
         # Wait for the event to be set by the callback, polling periodically
         # to handle cases where the signal dispatch might be blocked.
+        # The timeout is measured against wall-clock time because
+        # Event.wait(timeout) can oversleep on some platforms (especially
+        # Windows under load), which would otherwise stretch the wait far
+        # beyond the requested timeout.
         poll_interval = 0.01
-        total_waited = 0.0
+        deadline = time.monotonic() + timeout_seconds
         event_was_set = False
 
-        while total_waited < timeout_seconds:
-            remaining = timeout_seconds - total_waited
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
             wait_time = min(poll_interval, remaining)
 
             if settled_event.wait(timeout=wait_time):
@@ -936,8 +968,6 @@ class TaskManager:
 
             if not self.has_tasks():
                 break
-
-            total_waited += wait_time
 
         # Always try to disconnect in case of a timeout to prevent leaks.
         self.tasks_updated.disconnect(on_update)
@@ -958,9 +988,9 @@ class TaskManagerProxy:
     """
 
     def __init__(self):
-        self._instance: Optional[TaskManager] = None
+        self._instance: TaskManager | None = None
         self._lock = threading.Lock()
-        self._init_kwargs: Dict[str, Any] = {}
+        self._init_kwargs: dict[str, Any] = {}
 
     def initialize(self, **kwargs: Any) -> None:
         """

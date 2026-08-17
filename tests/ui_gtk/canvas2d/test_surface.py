@@ -1,9 +1,11 @@
 from unittest.mock import MagicMock
 
 import pytest
+from blinker import Signal
 
+from rayforge.machine.models.coordspace import MachineSpace
 from rayforge.machine.models.machine import Machine, Origin
-from rayforge.pipeline.coordspace import MachineSpace
+from rayforge.machine.models.machine_panel import PanelOrientation
 
 
 @pytest.fixture
@@ -40,6 +42,74 @@ def surface(mock_work_origin):
     s.editor.doc.active_layer = active_layer
 
     return s
+
+
+@pytest.mark.parametrize(
+    "orientation, delta, expected",
+    [
+        (PanelOrientation.NATIVE, (1.0, 0.0), (1.0, 0.0)),
+        (PanelOrientation.NATIVE, (0.0, 1.0), (0.0, 1.0)),
+        (PanelOrientation.ROTATED_RIGHT, (1.0, 0.0), (0.0, 1.0)),
+        (PanelOrientation.ROTATED_RIGHT, (0.0, 1.0), (-1.0, 0.0)),
+        (PanelOrientation.ROTATED_LEFT, (1.0, 0.0), (0.0, -1.0)),
+        (PanelOrientation.ROTATED_LEFT, (0.0, 1.0), (1.0, 0.0)),
+    ],
+)
+@pytest.mark.ui
+def test_arrow_key_nudge_unrotates_panel_delta(
+    surface, orientation, delta, expected
+):
+    """
+    Arrow-key nudging must rotate the presented (PANEL) movement vector
+    into WORLD space before applying it, so items move in the on-screen
+    direction under a rotated panel.
+    """
+    from gi.repository import Gdk
+
+    from rayforge.core.item import DocItem
+    from rayforge.machine.models.coordspace import (
+        AxisDirection,
+        MachineSpace,
+        OriginCorner,
+    )
+    from rayforge.machine.models.machine import Machine
+    from rayforge.machine.models.machine_panel import MachinePanel
+
+    surface._space_pressed = False
+    surface.transform_initiated = Signal()
+
+    item = MagicMock(spec=DocItem)
+    elem = MagicMock()
+    elem.data = item
+    surface.get_selected_elements = MagicMock(return_value=[elem])
+
+    space = MachineSpace(
+        origin=OriginCorner.BOTTOM_LEFT,
+        x_positive_direction=AxisDirection.POSITIVE_RIGHT,
+        y_positive_direction=AxisDirection.POSITIVE_UP,
+        extents=(400.0, 300.0),
+        reverse_x=False,
+        reverse_y=False,
+    )
+    machine = MagicMock(spec=Machine)
+    machine.changed = Signal()
+    machine.axis_extents = (400.0, 300.0)
+    machine.get_coordinate_space.return_value = space
+    panel = MachinePanel(machine)
+    panel._orientation = orientation
+    machine.panel = panel
+    surface.machine = machine
+
+    keyval = {1.0: Gdk.KEY_Right, -1.0: Gdk.KEY_Left}.get(delta[0])
+    if keyval is None:
+        keyval = {1.0: Gdk.KEY_Up, -1.0: Gdk.KEY_Down}[delta[1]]
+
+    handled = surface.on_key_pressed(None, keyval, 0, 0)
+
+    assert handled is True
+    surface.editor.transform.nudge_items.assert_called_once_with(
+        [item], *expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -119,6 +189,7 @@ def test_wcs_visual_marker_location(surface, scenario):
     (0,0) at the Bottom-Left.
     """
     machine = MagicMock(spec=Machine)
+    machine.changed = Signal()
     machine.axis_extents = (100.0, 100.0)
     machine.origin = scenario["origin"]
     machine.reverse_x_axis = scenario["reverse_x"]
@@ -137,14 +208,15 @@ def test_wcs_visual_marker_location(surface, scenario):
     )
 
     machine.get_active_wcs_offset.return_value = scenario["wcs"]
-    machine.get_visual_wcs_offset.return_value = (
-        -scenario["wcs"][0] if scenario["reverse_x"] else scenario["wcs"][0],
-        -scenario["wcs"][1] if scenario["reverse_y"] else scenario["wcs"][1],
-    )
 
     # Create a real MachineSpace from the mock machine
     space = MachineSpace.from_machine(machine)
     machine.get_coordinate_space.return_value = space
+
+    # Wire the panel to delegate to the real space
+    from rayforge.machine.models.machine_panel import MachinePanel
+
+    machine.panel = MachinePanel(machine)
 
     # Attach machine to surface
     surface.machine = machine
@@ -156,3 +228,29 @@ def test_wcs_visual_marker_location(surface, scenario):
     surface._work_origin_element.set_pos.assert_called_with(
         *scenario["expected"]
     )
+
+
+@pytest.mark.ui
+def test_set_stock_visible(surface):
+    """The view toggle propagates to every stock element."""
+    surface._stock_visible = True
+    stock_elem = MagicMock()
+    surface.find_by_type = MagicMock(return_value=[stock_elem])
+
+    surface.set_stock_visible(False)
+    stock_elem.set_view_visible.assert_called_once_with(False)
+    assert surface._stock_visible is False
+
+    surface.set_stock_visible(True)
+    stock_elem.set_view_visible.assert_called_with(True)
+    assert surface._stock_visible is True
+
+
+@pytest.mark.ui
+def test_set_stock_visible_noop_when_unchanged(surface):
+    """Calling the toggle with the current state is a no-op."""
+    surface._stock_visible = False
+    surface.find_by_type = MagicMock()
+
+    surface.set_stock_visible(False)
+    surface.find_by_type.assert_not_called()

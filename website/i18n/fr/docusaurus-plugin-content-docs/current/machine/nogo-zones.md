@@ -4,7 +4,7 @@ Les zones interdites définissent des zones restreintes sur la surface de travai
 doit pas traverser. Lorsqu'elles sont activées, elles sont vérifiées dans le cadre des
 [vérifications de cohérence du travail](../features/sanity-checks.md) avant l'exécution ou l'exportation.
 
-![Zones Interdites](/screenshots/machine-nogo-zones.png)
+![Zones Interdites](/screenshots/machine-settings-nogo-zones.png)
 
 ## Ajouter une Zone Interdite
 
@@ -23,8 +23,9 @@ Chaque zone a les paramètres suivants :
 
 Les zones interdites sont affichées sur le canevas 2D et 3D comme des superpositions
 semi-transparentes. Utilise le bouton de bascule des zones interdites dans la superposition
-du canevas pour les afficher ou les masquer. Le paramètre de visibilité est mémorisé entre
-les sessions.
+du canevas pour les afficher ou les masquer. La bascule n'est affichée que
+lorsqu'au moins une zone interdite est configurée. Le paramètre de
+visibilité est mémorisé entre les sessions.
 
 ---
 

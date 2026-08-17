@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-Screenshot: Add Machine dialog.
+Screenshot: Add Machine dialog (Unified Wizard, Step 1).
 
 Usage: pixi run screenshot app-settings:machines:add
 """
@@ -9,9 +8,11 @@ import logging
 import time
 
 from utils import (
+    get_target,
     run_on_main_thread,
     set_window_size,
     take_screenshot,
+    target_to_filename,
     wait_for_settled,
 )
 
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
+    target = get_target("app-settings:machines:add")
     set_window_size(win, 1400, 1000)
 
     logger.info("Waiting for document to settle...")
@@ -29,12 +31,10 @@ def main():
         app.quit_idle()
         return
 
-    from rayforge.ui_gtk.machine.profile_selector import (
-        MachineProfileSelectorDialog,
-    )
+    from rayforge.ui_gtk.machine.unified_wizard import UnifiedWizard
 
     def open_dialog():
-        dialog = MachineProfileSelectorDialog(transient_for=win)
+        dialog = UnifiedWizard(transient_for=win)
         dialog.present()
         return dialog
 
@@ -43,7 +43,7 @@ def main():
     time.sleep(1.0)
 
     logger.info("Taking screenshot: app-settings-machines-add.png")
-    take_screenshot("app-settings-machines-add.png")
+    take_screenshot(target_to_filename(target))
 
     time.sleep(0.25)
 

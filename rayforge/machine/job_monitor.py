@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from blinker import Signal
 from raygeo.geo.types import Point3D
@@ -25,7 +25,7 @@ class JobMonitor:
     with detailed metrics whenever the progress changes.
     """
 
-    def __init__(self, ops: "Ops"):
+    def __init__(self, ops: Ops):
         """
         Initializes the JobMonitor.
 
@@ -38,8 +38,8 @@ class JobMonitor:
         self.start_time = time.monotonic()
 
         # Create a map from op_index to the distance of that op
-        self._distance_map: Dict[int, float] = {}
-        last_point: Optional[Point3D] = None
+        self._distance_map: dict[int, float] = {}
+        last_point: Point3D | None = None
         for i in range(ops.len()):
             dist = ops.distance_at(i, last_point)
             self._distance_map[i] = dist
@@ -55,7 +55,7 @@ class JobMonitor:
         self.progress_updated = Signal()
 
     @property
-    def metrics(self) -> Dict[str, Any]:
+    def metrics(self) -> dict[str, Any]:
         """Returns the current progress metrics as a dictionary."""
         progress_fraction = (
             self.traveled_distance / self.total_distance
@@ -103,8 +103,9 @@ class JobMonitor:
         self.traveled_distance += distance_for_op
 
         # Clamp to ensure we don't exceed total_distance due to float errors
-        if self.traveled_distance > self.total_distance:
-            self.traveled_distance = self.total_distance
+        self.traveled_distance = min(
+            self.traveled_distance, self.total_distance
+        )
 
         # Only add a sample for ETA calculation if there's actual distance
         if distance_for_op > 0.0:

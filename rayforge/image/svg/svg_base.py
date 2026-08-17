@@ -3,12 +3,13 @@ from __future__ import annotations
 import logging
 from gettext import gettext as _
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 from xml.etree import ElementTree as ET
 
 from raygeo.geo import Geometry, Matrix
 from raygeo.geo.types import Rect
-from raygeo.svg import extract_svg_metadata, svg_string_to_geometry
+from raygeo.svg import svg_string_to_geometry
+from raygeo.svg.metadata import extract_svg_metadata
 
 from ...core.source_asset import SourceAsset
 from ...core.vectorization_spec import PassthroughSpec
@@ -23,8 +24,10 @@ from ..structures import (
 from .renderer import SVG_RENDERER
 from .svgutil import (
     PPI,
+    extract_color_manifest,
     extract_layer_manifest,
     get_natural_size,
+    hex_color_to_rgb,
     is_unitless_svg,
 )
 
@@ -40,9 +43,9 @@ class SvgImporterBase(Importer):
     - Converting SVG paths to Geometry (for bounds/trimming)
     """
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self.trimmed_data: Optional[bytes] = None
+        self.trimmed_data: bytes | None = None
 
     def _get_ppi(self) -> float:
         if self._vectorization_spec and hasattr(
@@ -54,6 +57,7 @@ class SvgImporterBase(Importer):
     def scan(self) -> ImportManifest:
         """Shared scan logic."""
         layers = []
+        color_layers = []
         size_mm = None
         try:
             # Check for basic XML validity first to ensure we can catch
@@ -73,20 +77,33 @@ class SvgImporterBase(Importer):
                 )
                 for layer in layer_data
             ]
+            color_data = extract_color_manifest(self.raw_data)
+            color_layers = [
+                LayerInfo(
+                    id=layer["id"],
+                    name=layer["name"],
+                    color=(
+                        hex_color_to_rgb(layer["color"])
+                        if layer["color"] is not None
+                        else None
+                    ),
+                    feature_count=layer.get("count"),
+                )
+                for layer in color_data
+            ]
         except ET.ParseError as e:
             logger.warning(f"SVG scan failed for {self.source_file.name}: {e}")
             self.add_error(f"Could not parse SVG. File may be corrupt: {e}")
         except Exception as e:
-            logger.error(
-                f"Unexpected error during SVG scan for "
-                f"{self.source_file.name}: {e}",
-                exc_info=True,
+            logger.exception(
+                f"Unexpected error during SVG scan for {self.source_file.name}"
             )
             self.add_error(f"Unexpected error while scanning SVG: {e}")
 
         return ImportManifest(
             title=self.source_file.name,
             layers=layers,
+            color_layers=color_layers,
             natural_size_mm=size_mm,
             warnings=self._warnings,
             errors=self._errors,
@@ -122,7 +139,7 @@ class SvgImporterBase(Importer):
         source.width_mm = w_native * parse_result.native_unit_to_mm
         source.height_mm = h_native * parse_result.native_unit_to_mm
 
-        metadata: Dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         try:
             ppi = self._get_ppi()
             untrimmed_size = get_natural_size(source.original_data, ppi=ppi)
@@ -156,14 +173,7 @@ class SvgImporterBase(Importer):
 
     def _calculate_parsing_basics(
         self,
-    ) -> Optional[
-        Tuple[
-            Rect,
-            float,
-            Optional[Rect],
-            Rect,
-        ]
-    ]:
+    ) -> tuple[Rect, float, Rect | None, Rect] | None:
         """
         Common parsing logic. Returns:
         (document_bounds, unit_to_mm, untrimmed_document_bounds,
@@ -222,7 +232,7 @@ class SvgImporterBase(Importer):
             unit_to_mm = final_dims_mm[0] / width_px if width_px > 0 else 1.0
 
         # Calculate untrimmed bounds in the same Native Units
-        untrimmed_document_bounds: Optional[Rect] = None
+        untrimmed_document_bounds: Rect | None = None
 
         # First, try to get the authoritative untrimmed viewbox by parsing
         # the original, untrimmed SVG data. This is the correct frame of
@@ -358,7 +368,7 @@ class SvgImporterBase(Importer):
 
     def _get_svg_parsing_facts(
         self, data: bytes
-    ) -> Optional[Tuple[float, float, Optional[Rect]]]:
+    ) -> tuple[float, float, Rect | None] | None:
         try:
             meta = extract_svg_metadata(data.decode())
         except ValueError:

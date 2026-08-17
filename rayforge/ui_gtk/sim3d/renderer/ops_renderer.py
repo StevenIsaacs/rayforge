@@ -2,31 +2,106 @@
 A renderer for visualizing toolpath operations (Ops) in 3D.
 """
 
-from typing import Optional
+import logging
+from dataclasses import dataclass
 
 import numpy as np
 from OpenGL import GL
 
-from ..gl_utils import BaseRenderer, RenderContext, Shader, set_line_width
+from ....simulator.scene3d import VertexLayer
+from ...shared.color_lut_provider import ColorLutProvider
+from ..gl_utils import (
+    LINE_DEPTH_WINDOW_BIAS,
+    ShaderSet,
+    set_line_width,
+)
+from ..render_context import RenderContext
+from .base import BaseRenderer
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OpsUploadPayload:
+    """Pre-built vertex arrays ready for GL upload.
+
+    Constructed off the main thread by ``prepare_vertex_layer`` so the
+    main thread only performs the actual ``glBufferData`` uploads.
+    """
+
+    powered_vertices: np.ndarray
+    powered_attrib: np.ndarray
+    travel_vertices: np.ndarray
+
+
+def prepare_vertex_layer(
+    vl: VertexLayer, show_travel_moves: bool
+) -> OpsUploadPayload:
+    """Decompresses and concatenates a vertex layer without touching GL.
+
+    Runs in a worker thread; the returned payload is uploaded with GL
+    calls on the main thread.
+    """
+    powered_verts = vl.powered_verts.to_numpy()
+    powered_attrib = vl.powered_attrib.to_numpy()
+    travel_verts = vl.travel_verts.to_numpy()
+    zero_power_verts = vl.zero_power_verts.to_numpy()
+
+    if show_travel_moves:
+        pv_final = np.concatenate((powered_verts, zero_power_verts))
+        zero_count = zero_power_verts.size // 3
+        zero_attrib = np.zeros(zero_count * 4, dtype=np.float32)
+        zero_attrib[3::4] = 1.0
+        attrib = np.concatenate((powered_attrib.ravel(), zero_attrib))
+        tv_final = travel_verts
+    else:
+        pv_final = powered_verts
+        attrib = powered_attrib
+        tv_final = np.array([], dtype=np.float32)
+
+    logger.debug(
+        f"[UPLOAD] is_rotary={vl.is_rotary} "
+        f"powered={powered_verts.size // 3} "
+        f"zero_power={zero_power_verts.size // 3} "
+        f"total={pv_final.size // 3} "
+        f"travel={tv_final.size // 3} "
+        f"show_travel={show_travel_moves}"
+    )
+
+    return OpsUploadPayload(
+        powered_vertices=np.ascontiguousarray(pv_final, dtype=np.float32),
+        powered_attrib=np.ascontiguousarray(attrib, dtype=np.float32),
+        travel_vertices=np.ascontiguousarray(tv_final, dtype=np.float32),
+    )
 
 
 class OpsRenderer(BaseRenderer):
     """Renders toolpath operations (cuts and travels) as colored lines."""
 
-    def __init__(self):
+    def __init__(self, is_rotary: bool = False):
         """Initializes the OpsRenderer."""
         super().__init__()
+        self.is_rotary = is_rotary
         self.powered_vao: int = 0
         self.travel_vao: int = 0
 
         self.powered_vbo: int = 0
         self.powered_powers_vbo: int = 0
-        self.powered_index_vbo: int = 0
         self.travel_vbo: int = 0
-        self.travel_index_vbo: int = 0
 
         self.powered_vertex_count: int = 0
         self.travel_vertex_count: int = 0
+
+        self.powered_offsets: np.ndarray = np.array([], dtype=np.int32)
+        self.travel_offsets: np.ndarray = np.array([], dtype=np.int32)
+        self._powered_positions: np.ndarray = np.array([], dtype=np.float32)
+        self._travel_positions: np.ndarray = np.array([], dtype=np.float32)
+        self._exec_powered = -1
+        self._exec_travel = -1
+        self._partial_powered_id = -1
+        self._partial_powered_end = np.zeros(3, dtype=np.float32)
+        self._partial_travel_id = -1
+        self._partial_travel_end = np.zeros(3, dtype=np.float32)
 
         self._color_lut_texture: int = 0
         self._num_laser_luts: int = 1
@@ -34,9 +109,7 @@ class OpsRenderer(BaseRenderer):
     def init_gl(self):
         self.powered_vbo = self._create_vbo()
         self.powered_powers_vbo = self._create_vbo()
-        self.powered_index_vbo = self._create_vbo()
         self.travel_vbo = self._create_vbo()
-        self.travel_index_vbo = self._create_vbo()
         self._color_lut_texture = self._create_texture()
 
         self.powered_vao = self._create_vao()
@@ -47,18 +120,12 @@ class OpsRenderer(BaseRenderer):
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.powered_powers_vbo)
         GL.glVertexAttribPointer(1, 4, GL.GL_FLOAT, GL.GL_FALSE, 0, None)
         GL.glEnableVertexAttribArray(1)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.powered_index_vbo)
-        GL.glVertexAttribPointer(3, 1, GL.GL_FLOAT, GL.GL_FALSE, 0, None)
-        GL.glEnableVertexAttribArray(3)
 
         self.travel_vao = self._create_vao()
         GL.glBindVertexArray(self.travel_vao)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.travel_vbo)
         GL.glVertexAttribPointer(0, 3, GL.GL_FLOAT, GL.GL_FALSE, 0, None)
         GL.glEnableVertexAttribArray(0)
-        GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.travel_index_vbo)
-        GL.glVertexAttribPointer(3, 1, GL.GL_FLOAT, GL.GL_FALSE, 0, None)
-        GL.glEnableVertexAttribArray(3)
 
         GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
@@ -71,34 +138,42 @@ class OpsRenderer(BaseRenderer):
             np.array([], dtype=np.float32),
         )
 
+    def update_from_vertex_layer(
+        self, vl: VertexLayer, show_travel_moves: bool
+    ):
+        """Uploads a compiled vertex layer into the renderer's buffers.
+
+        Prepares and uploads synchronously.  The chunked upload path
+        prepares the payload in a worker thread and only calls
+        ``update_from_vertex_data`` from the main thread.
+        """
+        payload = prepare_vertex_layer(vl, show_travel_moves)
+        self.update_from_vertex_data(
+            payload.powered_vertices,
+            payload.powered_attrib,
+            payload.travel_vertices,
+        )
+
     def update_from_vertex_data(
         self,
         powered_vertices: np.ndarray,
-        power_values: np.ndarray,
+        powered_attrib: np.ndarray,
         travel_vertices: np.ndarray,
-        laser_indices: Optional[np.ndarray] = None,
     ):
         self.powered_vertex_count = powered_vertices.size // 3
+        self._powered_positions = np.ascontiguousarray(
+            powered_vertices, dtype=np.float32
+        )
         self._load_buffer_data(self.powered_vbo, powered_vertices)
-        pv_flat = np.ascontiguousarray(power_values, dtype=np.float32).ravel()
-        n = pv_flat.size
-        if laser_indices is not None and laser_indices.size > 0:
-            li_flat = np.ascontiguousarray(
-                laser_indices, dtype=np.float32
-            ).ravel()
-        else:
-            li_flat = np.zeros(n, dtype=np.float32)
-        power_vec4 = np.zeros(n * 4, dtype=np.float32)
-        power_vec4[0::4] = pv_flat
-        power_vec4[1::4] = li_flat
-        power_vec4[3::4] = 1.0
-        self._load_buffer_data(self.powered_powers_vbo, power_vec4)
-        indices = np.arange(self.powered_vertex_count, dtype=np.float32)
-        self._load_buffer_data(self.powered_index_vbo, indices)
+        self._load_buffer_data(
+            self.powered_powers_vbo,
+            np.ascontiguousarray(powered_attrib, dtype=np.float32),
+        )
         self.travel_vertex_count = travel_vertices.size // 3
+        self._travel_positions = np.ascontiguousarray(
+            travel_vertices, dtype=np.float32
+        )
         self._load_buffer_data(self.travel_vbo, travel_vertices)
-        travel_indices = np.arange(self.travel_vertex_count, dtype=np.float32)
-        self._load_buffer_data(self.travel_index_vbo, travel_indices)
 
     def update_color_lut(self, lut_data: np.ndarray, num_lasers: int = 1):
         if not self._color_lut_texture:
@@ -135,33 +210,130 @@ class OpsRenderer(BaseRenderer):
         )
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
 
-    def render(
-        self,
-        ctx: RenderContext,
-        shader: Shader,
-        mvp_matrix: np.ndarray,
-        executed_vertex_count: int = -1,
-        alpha_pending: float = 0.2,
-        executed_travel_vertex_count: int = -1,
-    ) -> None:
+    def update_color_lut_from(self, provider: ColorLutProvider):
+        """Updates the colour LUT from a shared ColorLutProvider."""
+        self.update_color_lut(provider.cut_lut(), provider.num_lasers)
+
+    def prepare(self, ctx: RenderContext) -> None:
+        """
+        Computes the executed-vertex counts for this frame.
+
+        Reads the playhead from ``ctx.playback.op_player`` and maps it
+        through the renderer's command offsets, stashing the resulting
+        counts so ``render`` can publish them back into ``ctx``.  When
+        the playhead falls inside a command, a fractional executed count
+        is split into an int count plus a partial boundary segment (the
+        moved end vertex + interpolated endpoint) for a smooth reveal.
+        """
+        exec_powered = -1
+        exec_travel = -1
+        self._partial_powered_id = -1
+        self._partial_powered_end = np.zeros(3, dtype=np.float32)
+        self._partial_travel_id = -1
+        self._partial_travel_end = np.zeros(3, dtype=np.float32)
+        op_player = ctx.playback.op_player
+        if op_player:
+            p, frac = op_player.playback_progress()
+            (
+                exec_powered,
+                self._partial_powered_id,
+                self._partial_powered_end,
+            ) = self._fractional_exec_count(
+                self.powered_offsets,
+                self._powered_positions,
+                p,
+                frac,
+            )
+            exec_travel, self._partial_travel_id, self._partial_travel_end = (
+                self._fractional_exec_count(
+                    self.travel_offsets,
+                    self._travel_positions,
+                    p,
+                    frac,
+                )
+            )
+        self._exec_powered = exec_powered
+        self._exec_travel = exec_travel
+
+    @staticmethod
+    def _fractional_exec_count(
+        offsets: np.ndarray,
+        positions: np.ndarray,
+        p: int,
+        frac: float,
+    ):
+        """Map ``(in_progress_command, fraction)`` to executed vertices.
+
+        Returns ``(executed_count, partial_vertex_id, partial_end)``.
+        ``executed_count`` is the int uniform value (fully drawn
+        vertices plus the boundary segment); ``partial_vertex_id`` is
+        the end vertex of the boundary segment that ``render`` moves to
+        ``partial_end`` (or -1 when no partial segment exists).
+        """
+        if len(offsets) == 0:
+            return -1, -1, np.zeros(3, dtype=np.float32)
+        total = positions.size // 3 if positions is not None else 0
+        if len(offsets) < 2:
+            return total, -1, np.zeros(3, dtype=np.float32)
+        if p + 1 >= len(offsets):
+            p = len(offsets) - 2
+            frac = 1.0
+        p = max(p, 0)
+        base = int(offsets[p])
+        span = int(offsets[p + 1]) - base
+        exec_f = base + frac * span
+        zero = np.zeros(3, dtype=np.float32)
+        if total == 0:
+            # No vertices uploaded for this pass, so there is nothing
+            # to reveal; return 0 (never a non-zero executed count,
+            # which would crash the draw with "executed > vertex_count").
+            return 0, -1, zero
+        if exec_f >= total:
+            return total, -1, zero
+        if exec_f <= 0:
+            return 0, -1, zero
+        seg = int(exec_f) // 2
+        f_in_seg = exec_f - 2 * seg
+        if f_in_seg <= 1e-9:
+            return 2 * seg, -1, zero
+        if positions is None or 2 * seg + 1 >= total:
+            return 2 * seg + 2, -1, zero
+        v0 = positions[2 * seg * 3 : 2 * seg * 3 + 3]
+        v1 = positions[(2 * seg + 1) * 3 : (2 * seg + 1) * 3 + 3]
+        partial_end = (v0 + (v1 - v0) * (f_in_seg / 2.0)).astype(np.float32)
+        return 2 * seg + 2, 2 * seg + 1, partial_end
+
+    def render(self, ctx: RenderContext, shaders: ShaderSet, **kwargs) -> None:
         """
         Renders the toolpaths. The vertices are assumed to be in world space.
 
+        Publishes the executed-vertex counts computed in ``prepare`` into
+        ``ctx``, then pulls the MVP and pending alpha from it.
+
         Args:
             ctx: The current render context (carries color set, line width,
-              and travel-move visibility).
-            shader: The shader program to use for rendering lines.
-            mvp_matrix: The combined Model-View-Projection matrix.
-            executed_vertex_count: Powered vertices drawn at full alpha.
-                -1 means all vertices at full alpha (IDLE mode).
-            alpha_pending: Alpha multiplier for pending vertices (0..1).
-            executed_travel_vertex_count: Travel vertices drawn at full
-                alpha during simulation. -1 means use ctx.show_travel_moves
-                instead.
+              travel-move visibility, and per-frame execution state).
+            shaders: The shader set; the ``main`` program is used.
         """
-        colors = ctx.color_set
-        show_travel_moves = ctx.show_travel_moves
-        line_width = ctx.line_width
+        ctx.playback.executed_vertex_count = self._exec_powered
+        ctx.playback.executed_travel_vertex_count = self._exec_travel
+
+        shader = shaders.main_lines or shaders.main
+        if shader is None:
+            return
+
+        mvp = ctx.kinematics.mvp_for(self.is_rotary)
+        if mvp is None:
+            return
+
+        colors = ctx.camera.color_set
+        show_travel_moves = ctx.visibility.show_travel_moves
+        line_width = ctx.camera.line_width
+        executed_vertex_count = ctx.playback.executed_vertex_count
+        executed_travel_vertex_count = (
+            ctx.playback.executed_travel_vertex_count
+        )
+        alpha_pending = ctx.playback.alpha_pending
 
         if executed_vertex_count > self.powered_vertex_count:
             raise ValueError(
@@ -172,12 +344,27 @@ class OpsRenderer(BaseRenderer):
         shader.use()
         GL.glEnable(GL.GL_BLEND)
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
-        shader.set_mat4("uMVP", mvp_matrix)
+        GL.glDepthMask(GL.GL_FALSE)
+        GL.glDepthFunc(GL.GL_LEQUAL)
+        # The toolpath draws on top of the raster texture; bias its
+        # window-space depth a few LSBs toward the camera so it always
+        # wins against the coplanar surface (which would split lines on
+        # a cylinder's curved face) while the laser head model still
+        # occludes it.  Depth writes stay off so the trail/ring drawn
+        # afterwards is unaffected.
+        shader.set_float("uFragDepthBias", LINE_DEPTH_WINDOW_BIAS)
+        shader.set_mat4("uMVP", mvp)
         shader.set_float("uHasNormals", 0.0)
 
         shader.set_int("uExecutedVertexCount", executed_vertex_count)
         shader.set_float("uAlphaPending", alpha_pending)
         shader.set_float("uEmissive", 1.0)
+        if self._partial_powered_id >= 0:
+            shader.set_int("uPartialVertexID", self._partial_powered_id)
+            shader.set_vec3("uPartialEnd", self._partial_powered_end)
+        else:
+            shader.set_int("uPartialVertexID", -1)
+            shader.set_vec3("uPartialEnd", (0.0, 0.0, 0.0))
 
         if self.powered_vertex_count > 0:
             set_line_width(line_width)
@@ -189,9 +376,6 @@ class OpsRenderer(BaseRenderer):
             shader.set_int("uColorLUT", 1)
             GL.glBindVertexArray(self.powered_vao)
             GL.glDrawArrays(GL.GL_LINES, 0, self.powered_vertex_count)
-            GL.glActiveTexture(GL.GL_TEXTURE1)
-            GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-            GL.glActiveTexture(GL.GL_TEXTURE0)
 
         should_draw_travel = self.travel_vertex_count > 0 and (
             executed_travel_vertex_count >= 0 or show_travel_moves
@@ -200,19 +384,19 @@ class OpsRenderer(BaseRenderer):
             set_line_width(line_width)
             shader.set_float("uUsePowerLUT", 0.0)
             shader.set_float("uUseVertexColor", 0.0)
+            shader.set_float("uEmissive", 0.0)
             shader.set_int(
                 "uExecutedVertexCount", executed_travel_vertex_count
             )
+            if self._partial_travel_id >= 0:
+                shader.set_int("uPartialVertexID", self._partial_travel_id)
+                shader.set_vec3("uPartialEnd", self._partial_travel_end)
+            else:
+                shader.set_int("uPartialVertexID", -1)
+                shader.set_vec3("uPartialEnd", (0.0, 0.0, 0.0))
             shader.set_vec4("uColor", colors.get_rgba("travel"))
             GL.glBindVertexArray(self.travel_vao)
             GL.glDrawArrays(GL.GL_LINES, 0, self.travel_vertex_count)
-
-        set_line_width(1.0)
-        shader.set_float("uUsePowerLUT", 0.0)
-        shader.set_float("uUseVertexColor", 0.0)
-        shader.set_int("uExecutedVertexCount", -1)
-        shader.set_float("uEmissive", 0.0)
-        GL.glBindVertexArray(0)
 
     def _load_buffer_data(self, vbo: int, data: np.ndarray):
         """Loads vertex data into a VBO."""

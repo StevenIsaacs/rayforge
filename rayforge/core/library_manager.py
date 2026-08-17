@@ -4,7 +4,6 @@ import logging
 import shutil
 import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from blinker import Signal
 
@@ -33,9 +32,9 @@ class LibraryManager:
         self.user_dir = user_dir
         self.libraries_changed = Signal()
 
-        self._libraries: Dict[str, MaterialLibrary] = {}
+        self._libraries: dict[str, MaterialLibrary] = {}
         # Track which addon registered each library (library_id -> addon_name)
-        self._library_addons: Dict[str, str] = {}
+        self._library_addons: dict[str, str] = {}
 
         self.user_dir.mkdir(parents=True, exist_ok=True)
 
@@ -53,7 +52,7 @@ class LibraryManager:
 
         logger.info(f"Loaded {len(self._libraries)} material libraries")
 
-    def create_user_library(self, display_name: str) -> Optional[str]:
+    def create_user_library(self, display_name: str) -> str | None:
         """
         Creates a new user library and returns its ID.
 
@@ -121,7 +120,7 @@ class LibraryManager:
         library = self._libraries[library_id]
         return library.save()
 
-    def get_library(self, library_id: str) -> Optional[MaterialLibrary]:
+    def get_library(self, library_id: str) -> MaterialLibrary | None:
         """
         Get a library by ID.
 
@@ -136,7 +135,7 @@ class LibraryManager:
 
         return self._libraries.get(library_id)
 
-    def get_libraries(self) -> List[MaterialLibrary]:
+    def get_libraries(self) -> list[MaterialLibrary]:
         """
         Get all libraries.
 
@@ -148,7 +147,7 @@ class LibraryManager:
 
         return list(self._libraries.values())
 
-    def get_material(self, uid: str) -> Optional[Material]:
+    def get_material(self, uid: str) -> Material | None:
         """
         Get a material by UID, searching all libraries.
 
@@ -177,7 +176,7 @@ class LibraryManager:
 
         return None
 
-    def get_material_or_none(self, uid: str) -> Optional[Material]:
+    def get_material_or_none(self, uid: str) -> Material | None:
         """
         Get a material by UID with graceful fallback.
 
@@ -192,11 +191,11 @@ class LibraryManager:
         """
         try:
             return self.get_material(uid)
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"Error getting material {uid}: {e}")
             return None
 
-    def resolve_material(self, uid: str) -> Optional[Material]:
+    def resolve_material(self, uid: str) -> Material | None:
         """
         Resolve a material reference with fallback handling.
 
@@ -258,7 +257,7 @@ class LibraryManager:
         library = self._libraries[library_id]
         return library.remove_material(uid)
 
-    def get_all_materials(self) -> List[Material]:
+    def get_all_materials(self) -> list[Material]:
         """
         Get all materials from all libraries.
 
@@ -287,7 +286,7 @@ class LibraryManager:
         self.libraries_changed.send(self)
         logger.info("Reloaded all material libraries")
 
-    def get_library_ids(self) -> List[str]:
+    def get_library_ids(self) -> list[str]:
         """
         Get the IDs of all libraries.
 
@@ -302,7 +301,7 @@ class LibraryManager:
     def add_library(
         self,
         library: MaterialLibrary,
-        addon_name: Optional[str] = None,
+        addon_name: str | None = None,
         allow_overwrite: bool = False,
     ) -> bool:
         """
@@ -333,8 +332,8 @@ class LibraryManager:
         self,
         path: Path,
         read_only: bool = True,
-        addon_name: Optional[str] = None,
-    ) -> Optional[str]:
+        addon_name: str | None = None,
+    ) -> str | None:
         """
         Create and add a MaterialLibrary from a directory path.
 

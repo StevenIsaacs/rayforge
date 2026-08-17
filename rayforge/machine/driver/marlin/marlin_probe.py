@@ -4,19 +4,16 @@ from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Tuple,
-    Type,
     runtime_checkable,
 )
 
 from blinker import Signal
 
+from ....shared.units.system import UnitSystem
 from ...transport import TransportStatus
 from .marlin_util import (
+    detect_unit_system_from_m149,
     extract_marlin_device_name,
     parse_m115_firmware_info,
     parse_m211_endstops,
@@ -53,17 +50,17 @@ class _MarlinProbeDriver(Protocol):
 
     async def cleanup(self) -> None: ...
 
-    async def execute_interactive_command(self, command: str) -> List[str]: ...
+    async def execute_interactive_command(self, command: str) -> list[str]: ...
 
     @property
-    def boot_lines(self) -> List[str]: ...
+    def boot_lines(self) -> list[str]: ...
 
 
 async def probe_marlin_device(
-    driver_cls: Type[_MarlinProbeDriver],
+    driver_cls: type[_MarlinProbeDriver],
     context: "RayforgeContext",
     **kwargs: Any,
-) -> Tuple["DeviceProfile", List[str]]:
+) -> tuple["DeviceProfile", list[str]]:
     """
     Shared probe orchestration for all Marlin drivers.
 
@@ -90,6 +87,7 @@ async def probe_marlin_device(
         m115_lines = await driver.execute_interactive_command("M115")
         m211_lines = await driver.execute_interactive_command("M211")
         m503_lines = await driver.execute_interactive_command("M503")
+        m149_lines = await driver.execute_interactive_command("M149")
     finally:
         driver.connection_status_changed.disconnect(_on_status)
         await driver.cleanup()
@@ -98,7 +96,7 @@ async def probe_marlin_device(
         )
 
     profile, warnings = build_marlin_profile(
-        m115_lines, m211_lines, m503_lines, driver.boot_lines
+        m115_lines, m211_lines, m503_lines, m149_lines, driver.boot_lines
     )
     profile.machine_config.driver = driver_cls.__name__
     profile.machine_config.driver_args = kwargs
@@ -106,14 +104,15 @@ async def probe_marlin_device(
 
 
 def build_marlin_profile(
-    m115_lines: List[str],
-    m211_lines: List[str],
-    m503_lines: List[str],
-    boot_lines: Optional[List[str]] = None,
-) -> Tuple["DeviceProfile", List[str]]:
+    m115_lines: list[str],
+    m211_lines: list[str],
+    m503_lines: list[str],
+    m149_lines: list[str],
+    boot_lines: list[str] | None = None,
+) -> tuple["DeviceProfile", list[str]]:
     """
-    Build a ``DeviceProfile`` from raw Marlin M115, M211, and M503
-    response lines.
+    Build a ``DeviceProfile`` from raw Marlin M115, M211, M503, and
+    M149 response lines.
 
     This is a pure data-transformation function with no I/O.
     The caller is responsible for communicating with the device
@@ -130,12 +129,12 @@ def build_marlin_profile(
     )
 
     boot = boot_lines or []
-    warnings: List[str] = []
+    warnings: list[str] = []
 
     name = extract_marlin_device_name(m115_lines, boot)
 
     fw_info = parse_m115_firmware_info(m115_lines)
-    driver_config: Dict[str, Any] = {}
+    driver_config: dict[str, Any] = {}
     fw_name = fw_info.get("firmware_name", "")
     if fw_name:
         for line in boot:
@@ -145,7 +144,7 @@ def build_marlin_profile(
                 break
         driver_config["firmware_version"] = fw_name
 
-    extents: Optional[Tuple[float, float]] = None
+    extents: tuple[float, float] | None = None
     endstops = parse_m211_endstops(m211_lines)
     if endstops is not None:
         x_max, y_max = endstops
@@ -154,17 +153,22 @@ def build_marlin_profile(
 
     m503 = parse_m503_settings(m503_lines)
 
-    max_speed: Optional[int] = None
+    max_speed: int | None = None
     max_feed_x = m503.get("max_feedrate_x")
     max_feed_y = m503.get("max_feedrate_y")
     if max_feed_x is not None and max_feed_y is not None:
         max_speed_mm_s = min(max_feed_x, max_feed_y)
         max_speed = int(max_speed_mm_s * 60)
 
-    accel: Optional[int] = None
+    accel: int | None = None
     accel_val = m503.get("acceleration")
     if accel_val is not None:
         accel = int(accel_val)
+
+    detected = detect_unit_system_from_m149(m149_lines)
+    detected_unit_system = (
+        detected if detected is not None else UnitSystem.METRIC
+    )
 
     return (
         DeviceProfile(
@@ -181,6 +185,7 @@ def build_marlin_profile(
                 home_on_start=None,
                 single_axis_homing_enabled=True,
                 supports_arcs=True,
+                unit_system=detected_unit_system,
                 heads=None,
             ),
             dialect_config={},

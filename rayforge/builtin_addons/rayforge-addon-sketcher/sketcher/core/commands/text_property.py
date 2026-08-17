@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
-
-from raygeo.geo.types import Point as GeoPoint
+from typing import TYPE_CHECKING, Any
 
 from raygeo.geo.shape.text import FontConfig
+from raygeo.geo.types import Point as GeoPoint
 
 from ..constraints import (
     AspectRatioConstraint,
@@ -36,19 +35,19 @@ class ModifyTextPropertyCommand(SketchChangeCommand):
         self.new_content = new_content
         self.new_font_config = new_font_config
         self.old_content = ""
-        self.old_font_config: Optional[FontConfig] = None
-        self.old_point_positions: Dict[EntityID, GeoPoint] = {}
-        self.old_aspect_ratio: Optional[float] = None
-        self.aspect_ratio_constraint_idx: Optional[int] = None
-        self._added_constraints: List[Constraint] = []
+        self.old_font_config: FontConfig | None = None
+        self.old_point_positions: dict[EntityID, GeoPoint] = {}
+        self.old_aspect_ratio: float | None = None
+        self.aspect_ratio_constraint_idx: int | None = None
+        self._added_constraints: list[Constraint] = []
 
         self._entity_was_removed = False
-        self._removed_entity: Optional[TextBoxEntity] = None
-        self._removed_points: List[Point] = []
-        self._removed_entities: List[Any] = []
-        self._removed_constraints: List[Constraint] = []
-        self._modified_equal_length_constraints: List[
-            Tuple[EntityID, List[EntityID]]
+        self._removed_entity: TextBoxEntity | None = None
+        self._removed_points: list[Point] = []
+        self._removed_entities: list[Any] = []
+        self._removed_constraints: list[Constraint] = []
+        self._modified_equal_length_constraints: list[
+            tuple[EntityID, list[EntityID]]
         ] = []
 
     def _shed_size_constraints(self, text_entity: TextBoxEntity) -> None:
@@ -116,16 +115,16 @@ class ModifyTextPropertyCommand(SketchChangeCommand):
             }
             # Find and store the old aspect ratio constraint
             for idx, constr in enumerate(self.sketch.constraints or []):
-                if isinstance(constr, AspectRatioConstraint):
-                    if (
-                        constr.p1 == text_entity.origin_id
-                        and constr.p2 == text_entity.width_id
-                        and constr.p3 == text_entity.origin_id
-                        and constr.p4 == text_entity.height_id
-                    ):
-                        self.aspect_ratio_constraint_idx = idx
-                        self.old_aspect_ratio = constr.ratio
-                        break
+                if (
+                    isinstance(constr, AspectRatioConstraint)
+                    and constr.p1 == text_entity.origin_id
+                    and constr.p2 == text_entity.width_id
+                    and constr.p3 == text_entity.origin_id
+                    and constr.p4 == text_entity.height_id
+                ):
+                    self.aspect_ratio_constraint_idx = idx
+                    self.old_aspect_ratio = constr.ratio
+                    break
 
         # Update the entity's content first.
         text_entity.content = self.new_content
@@ -171,10 +170,9 @@ class ModifyTextPropertyCommand(SketchChangeCommand):
 
         # If the AR constraint exists, update its ratio. The solver will handle
         # the height automatically. If not, the height remains unconstrained.
-        if active_ar_constraint:
-            if natural_height > 1e-9:
-                new_ratio = natural_width / natural_height
-                active_ar_constraint.ratio = new_ratio
+        if active_ar_constraint and natural_height > 1e-9:
+            new_ratio = natural_width / natural_height
+            active_ar_constraint.ratio = new_ratio
 
     def _remove_text_entity(self, text_entity: TextBoxEntity) -> None:
         """Removes the text entity and its associated points/constraints."""
@@ -205,9 +203,11 @@ class ModifyTextPropertyCommand(SketchChangeCommand):
         point_ids = {pt.id for pt in self._removed_points}
 
         for constr in self.sketch.constraints:
-            if constr not in self._removed_constraints:
-                if constr.depends_on_points(point_ids):
-                    self._removed_constraints.append(constr)
+            if (
+                constr not in self._removed_constraints
+                and constr.depends_on_points(point_ids)
+            ):
+                self._removed_constraints.append(constr)
 
         registry.entities = [
             e for e in registry.entities if e.id != text_entity.id
@@ -263,9 +263,11 @@ class ModifyTextPropertyCommand(SketchChangeCommand):
         point_ids = {pt.id for pt in self._removed_points}
 
         for constr in self.sketch.constraints:
-            if constr not in self._removed_constraints:
-                if constr.depends_on_points(point_ids):
-                    self._removed_constraints.append(constr)
+            if (
+                constr not in self._removed_constraints
+                and constr.depends_on_points(point_ids)
+            ):
+                self._removed_constraints.append(constr)
 
         registry.entities = [
             e for e in registry.entities if e.id != text_entity.id
@@ -314,13 +316,10 @@ class ModifyTextPropertyCommand(SketchChangeCommand):
         if (
             self.aspect_ratio_constraint_idx is not None
             and self.old_aspect_ratio is not None
-        ):
-            if self.aspect_ratio_constraint_idx < len(self.sketch.constraints):
-                constr = self.sketch.constraints[
-                    self.aspect_ratio_constraint_idx
-                ]
-                if isinstance(constr, AspectRatioConstraint):
-                    constr.ratio = self.old_aspect_ratio
+        ) and self.aspect_ratio_constraint_idx < len(self.sketch.constraints):
+            constr = self.sketch.constraints[self.aspect_ratio_constraint_idx]
+            if isinstance(constr, AspectRatioConstraint):
+                constr.ratio = self.old_aspect_ratio
 
         # Remove constraints added by this command
         for c in self._added_constraints:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 from raygeo.geo.types import Point as GeoPoint
 
@@ -33,13 +33,13 @@ class TextBoxCommand(SketchChangeCommand):
         self.origin = origin
         self.width = width
         self.height = height
-        self.add_cmd: Optional[AddItemsCommand] = None
-        self.text_box_id: Optional[int] = None
+        self.add_cmd: AddItemsCommand | None = None
+        self.text_box_id: int | None = None
 
     @staticmethod
     def calculate_geometry(
         origin: GeoPoint, width: float, height: float
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Calculates all points, entities, and constraints for a text box."""
         mx, my = origin
 

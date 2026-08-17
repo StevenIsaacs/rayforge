@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 from rayforge.core.undo import ChangePropertyCommand
 from rayforge.core.workpiece import WorkPiece
@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 class SketchCmd:
     """Handles commands related to sketch-based workpieces."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
 
     def set_workpiece_parameters(
-        self, workpieces: List[WorkPiece], new_params: Dict[str, Any]
+        self, workpieces: list[WorkPiece], new_params: dict[str, Any]
     ):
         """
         Updates the sketch parameters for one or more workpiece instances

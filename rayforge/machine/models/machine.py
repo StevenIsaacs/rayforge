@@ -5,38 +5,41 @@ import uuid
 from enum import Enum
 from gettext import gettext as _
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Optional,
+)
 
-import numpy as np
 from blinker import Signal
 from raygeo.geo.types import Point3D, Rect
-from raygeo.ops import Ops
 from raygeo.ops.axis import Axis
 
 from ...camera.models.camera import Camera
+from ...camera.v4l import migrate_camera_data
 from ...context import RayforgeContext, get_context
+from ...core.capability import MachineCapability
 from ...core.layer import Layer
 from ...core.model import Model
-from ...pipeline.coordspace import MachineSpace
-from ...pipeline.encoder.base import EncodedOutput
 from ...shared.tasker import task_mgr
+from ...shared.units.system import UnitSystem
 from ..assembly import Assembly
 from ..driver import get_driver_cls
-from ..driver.driver import DeviceState, Pos
-from ..kinematic_mapping import KinematicMapping
+from ..driver.driver import DeviceState, Pos, PWMParams, pwm_varset
 from ..kinematics import HeadSpec, Kinematics, build_assembly
 from ..models.axis import AxisConfig, AxisDirection, AxisSet, AxisType
 from ..transport import TransportStatus
+from .coordspace import MachineSpace
 from .dialect import GcodeDialect
-from .laser import Laser
+from .head import Head, head_from_dict
+from .laser import Laser, LaserHead, effective_focal_distance
 from .machine_hours import MachineHours
+from .machine_panel import MachinePanel, PanelOrientation
 from .macro import Macro, MacroTrigger
 from .rotary_module import RotaryMode, RotaryModule
 from .zone import Zone
 
 if TYPE_CHECKING:
-    from ...core.capability import Capability
-    from ...core.doc import Doc
     from ...core.varset import VarSet
     from ..driver.driver import Driver
     from .controller import MachineController
@@ -64,6 +67,19 @@ class JogDirection(Enum):
 logger = logging.getLogger(__name__)
 
 MACHINE_SPACE_WCS = "MACHINE"
+
+_MARGIN_EPSILON = 0.1  # mm — minimum work-area dimension after clamping
+
+
+def _clamp_margins(margins: Rect, extents: tuple[float, float]) -> Rect:
+    """Clamp margins so work-area dimensions stay >= _MARGIN_EPSILON."""
+    ml, mt, mr, mb = margins
+    w, h = extents
+    ml = min(ml, w - _MARGIN_EPSILON)
+    mr = min(mr, w - ml - _MARGIN_EPSILON)
+    mt = min(mt, h - _MARGIN_EPSILON)
+    mb = min(mb, h - mt - _MARGIN_EPSILON)
+    return (ml, mt, mr, mb)
 
 
 def _raise_error(*args, **kwargs):
@@ -98,26 +114,28 @@ class Machine:
         self.connection_status: TransportStatus = TransportStatus.DISCONNECTED
         self.device_state: DeviceState = DeviceState()
 
-        self.driver_name: Optional[str] = None
-        self.driver_args: Dict[str, Any] = {}
-        self.driver_config: Dict[str, Any] = {}
-        self.precheck_error: Optional[str] = None
+        self.driver_name: str | None = None
+        self.driver_args: dict[str, Any] = {}
+        self.driver_config: dict[str, Any] = {}
+        self.precheck_error: str | None = None
 
         self.auto_connect: bool = True
         self.home_on_start: bool = False
         self.clear_alarm_on_connect: bool = False
         self.single_axis_homing_enabled: bool = True
-        self.dialect_uid: Optional[str] = "grbl"
+        self.dialect_uid: str | None = "grbl"
         self.dialect_migrated: bool = False
-        self._hydrated_dialect: Optional[GcodeDialect] = None
+        self._hydrated_dialect: GcodeDialect | None = None
         self.gcode_precision: int = 3
         self.supports_arcs: bool = True
         self.supports_curves: bool = False
         self.arc_tolerance: float = 0.03
-        self.hookmacros: Dict[MacroTrigger, Macro] = {}
-        self.macros: Dict[str, Macro] = {}
-        self.heads: List[Laser] = []
-        self.cameras: List[Camera] = []
+        self.unit_system: UnitSystem = UnitSystem.METRIC
+        self.hookmacros: dict[MacroTrigger, Macro] = {}
+        self.macros: dict[str, Macro] = {}
+        self.heads: list[Head] = []
+        self._explicit_capabilities: frozenset[MachineCapability] | None = None
+        self.cameras: list[Camera] = []
         self.max_travel_speed: int = 3000  # in mm/min
         self.max_cut_speed: int = 1000  # in mm/min
         self.acceleration: int = 1000  # in mm/s²
@@ -140,16 +158,20 @@ class Machine:
                 ),
             ]
         )
+        # Stashed Z config kept when the user disables the Z axis so
+        # re-enabling restores the previous extents/direction.
+        self._stashed_z_config: AxisConfig | None = None
         self._work_margins: Rect = (
             0.0,
             0.0,
             0.0,
             0.0,
         )
-        self._soft_limits: Optional[Rect] = None
+        self._soft_limits: Rect | None = None
         self.origin: Origin = Origin.BOTTOM_LEFT
+        self.panel = MachinePanel(self)
         self.rotary_enabled_default: bool = False
-        self.default_rotary_module_uid: Optional[str] = None
+        self.default_rotary_module_uid: str | None = None
         self.soft_limits_enabled: bool = True
         self.wcs_origin_is_workarea_origin: bool = False
         self._settings_lock = asyncio.Lock()
@@ -160,7 +182,7 @@ class Machine:
         # Any key NOT in wcs_offsets is considered an immutable/absolute system
         # with (0,0,0) offset.
         self.active_wcs: str = "G54"
-        self.coordinate_systems: Dict[str, CoordinateSystem] = (
+        self.coordinate_systems: dict[str, CoordinateSystem] = (
             CoordinateSystem.defaults()
         )
 
@@ -172,14 +194,14 @@ class Machine:
             self._on_dialects_changed
         )
 
-        self.add_head(Laser())
+        self.add_head(LaserHead())
 
-        self.rotary_modules: Dict[str, RotaryModule] = {}
-        self.nogo_zones: Dict[str, Zone] = {}
+        self.rotary_modules: dict[str, RotaryModule] = {}
+        self.nogo_zones: dict[str, Zone] = {}
 
-        self._assembly: Optional["Assembly"] = None
+        self._assembly: Assembly | None = None
         self._assembly_dirty: bool = True
-        self._mounted_rotaries: List[RotaryModule] = []
+        self._mounted_rotaries: list[RotaryModule] = []
         self._layer_configured: bool = False
 
     @property
@@ -205,12 +227,63 @@ class Machine:
         """Property to access the driver through the controller."""
         return self.controller.driver
 
-    def get_laser_capabilities(self, laser: Laser) -> Tuple["Capability", ...]:
+    def supports_pwm(self, head: Head | None = None) -> bool:
+        """Whether the machine's driver supports PWM for the given head."""
+        if head is None:
+            if not self.heads:
+                return False
+            head = self.heads[0]
+        return bool(self.driver.supports_pwm(head))
+
+    def get_pwm_params(self, head: Head | None = None) -> PWMParams | None:
         """
-        Returns the capabilities contributed by the driver for the given
-        laser head. Delegates to the driver's get_laser_capabilities().
+        Returns the driver-reported PWM parameters for the given head, or
+        None when the driver reports no PWM support.
         """
-        return self.driver.get_laser_capabilities(laser)
+        if head is None:
+            if not self.heads:
+                return None
+            head = self.heads[0]
+        return self.driver.get_pwm_params(head)
+
+    def get_pwm_settings(self, head: Head | None = None) -> Optional["VarSet"]:
+        """
+        Returns the PWM settings VarSet for the given head, or None when
+        the driver reports no PWM support.
+        """
+        params = self.get_pwm_params(head)
+        if params is None:
+            return None
+        return pwm_varset(params)
+
+    def get_capabilities(self) -> frozenset[MachineCapability]:
+        """
+        Returns the machine capabilities as the union of the explicitly
+        declared capabilities, the capabilities inferred from the
+        configured heads (e.g. a LaserHead implies LASER), and the
+        capabilities inferred from the driver (e.g. PWM on Ruida CO2
+        lasers).
+        """
+        caps: set = set(self._explicit_capabilities or ())
+        for head in self.heads:
+            if head.machine_capability:
+                caps.add(head.machine_capability)
+        if self.supports_pwm():
+            caps.add(MachineCapability.PWM)
+        if self.rotary_modules:
+            caps.add(MachineCapability.ROTARY)
+        return frozenset(caps)
+
+    def set_explicit_capabilities(
+        self, capabilities: frozenset[MachineCapability] | None
+    ):
+        """
+        Sets the explicitly declared capabilities. ``None`` means
+        "not set", so capabilities are inferred from the heads.
+        """
+        if self._explicit_capabilities != capabilities:
+            self._explicit_capabilities = capabilities
+            self.changed.send(self)
 
     def _connect_controller_signals(self, controller: "MachineController"):
         """
@@ -234,15 +307,25 @@ class Machine:
     def set_connection_status(self, status: TransportStatus):
         self.connection_status = status
 
-    def set_precheck_error(self, error: Optional[str]):
+    def set_precheck_error(self, error: str | None):
         self.precheck_error = error
+
+    def set_unit_system(self, unit_system: UnitSystem) -> None:
+        """
+        Updates the machine's unit system and emits ``changed`` when
+        it actually changed. Set by the probe wizard during device
+        setup or by the user from the machine settings.
+        """
+        if self.unit_system != unit_system:
+            self.unit_system = unit_system
+            self.changed.send(self)
 
     def update_wcs_offset(self, slot: str, offset: Point3D):
         cs = self.coordinate_systems.get(slot)
         if cs:
             cs.offset = offset
 
-    def update_wcs_offsets_batch(self, offsets: Dict[str, Point3D]) -> bool:
+    def update_wcs_offsets_batch(self, offsets: dict[str, Point3D]) -> bool:
         new_systems = {
             name: CoordinateSystem(name=name, label="", offset=offset)
             for name, offset in offsets.items()
@@ -261,13 +344,13 @@ class Machine:
         return cs.offset if cs else (0.0, 0.0, 0.0)
 
     @property
-    def supported_wcs(self) -> List[str]:
+    def supported_wcs(self) -> list[str]:
         """
         Returns the list of supported Work Coordinate Systems from the driver.
         """
-        return sorted(list(self.coordinate_systems.keys()))
+        return sorted(self.coordinate_systems.keys())
 
-    def get_wcs_list(self) -> List[CoordinateSystem]:
+    def get_wcs_list(self) -> list[CoordinateSystem]:
         """Returns a sorted list of CoordinateSystem objects."""
         return [self.coordinate_systems[k] for k in self.supported_wcs]
 
@@ -299,9 +382,9 @@ class Machine:
         self._assembly_dirty = True
 
     def configure_for_layer(self, layer: Optional["Layer"]) -> None:
-        required_rotaries: List[RotaryModule] = []
-        if layer and layer.rotary_enabled and layer.rotary_module_uid:
-            module = self.rotary_modules.get(layer.rotary_module_uid)
+        required_rotaries: list[RotaryModule] = []
+        if layer and layer.rotary_enabled:
+            module = self.get_rotary_module_for_layer(layer)
             if module:
                 required_rotaries.append(module)
         if self._assembly_needs_rebuild(required_rotaries):
@@ -311,7 +394,7 @@ class Machine:
 
     def _assembly_needs_rebuild(
         self,
-        rotaries: List[RotaryModule],
+        rotaries: list[RotaryModule],
     ) -> bool:
         if self._assembly_dirty:
             return True
@@ -319,32 +402,52 @@ class Machine:
             return True
         current_uids = {r.uid for r in self._mounted_rotaries}
         new_uids = {r.uid for r in rotaries}
-        if current_uids != new_uids:
-            return True
-        return False
+        return current_uids != new_uids
+
+    def get_head_specs(self) -> list[HeadSpec]:
+        """Return the head specs used to build an assembly.
+
+        Does not build or mutate anything.  Each spec is a ``(model,
+        transform)`` pair with the focal distance folded into the
+        transform's Z translation.  The same effective focal distance
+        drives the beam renderer, so the head model always sits with
+        its nozzle exactly on top of the laser beam.
+        """
+        head_specs: list[HeadSpec] = []
+        for h in self.heads:
+            t = h.transform.copy()
+            t[2, 3] += effective_focal_distance(h)
+            model = (
+                Model.from_path(Path(h.model_path)) if h.model_path else None
+            )
+            head_specs.append((model, t))
+        return head_specs
+
+    def build_assembly_for_rotary(
+        self,
+        rotary_modules: dict[str, RotaryModule] | None = None,
+    ) -> Assembly:
+        """Build a throwaway assembly for the given rotary modules.
+
+        Unlike ``configure_for_layer`` + ``assembly``, this never mutates
+        machine state.  When *rotary_modules* is None or empty, a flat
+        assembly (no rotary) is built.
+        """
+        return build_assembly(
+            axis_set=self.axes,
+            head_specs=self.get_head_specs(),
+            rotary_modules=rotary_modules or None,
+        )
 
     def _build_assembly(self) -> Assembly:
         rotaries = self._mounted_rotaries
         if not rotaries and not self._layer_configured and self.rotary_modules:
             rotaries = list(self.rotary_modules.values())[:1]
-        head_specs: List[HeadSpec] = []
-        for h in self.heads:
-            t = h.transform.copy()
-            if h.focal_distance > 0:
-                t[2, 3] += h.focal_distance
-            model = (
-                Model.from_path(Path(h.model_path)) if h.model_path else None
-            )
-            head_specs.append((model, t))
-        rotary_modules_for_build: Dict[str, RotaryModule] = {}
+        rotary_modules_for_build: dict[str, RotaryModule] = {}
         if rotaries:
             for r in rotaries:
                 rotary_modules_for_build[r.uid] = r
-        return build_assembly(
-            axis_set=self.axes,
-            head_specs=head_specs,
-            rotary_modules=rotary_modules_for_build or None,
-        )
+        return self.build_assembly_for_rotary(rotary_modules_for_build or None)
 
     @property
     def machine_space_wcs(self) -> str:
@@ -384,7 +487,7 @@ class Machine:
             # If we are shutting down a specific machine instance:
             if self.id in self.context.machine_mgr.controllers:
                 await self.controller.shutdown()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - best-effort shutdown cleanup
             logger.warning(f"Error shutting down controller: {e}")
 
         self.context.dialect_mgr.dialects_changed.disconnect(
@@ -416,7 +519,7 @@ class Machine:
         self.name = str(name)
         self.changed.send(self)
 
-    def set_driver(self, driver_cls: Type["Driver"], args=None):
+    def set_driver(self, driver_cls: type["Driver"], args=None):
         new_driver_name = driver_cls.__name__
         new_args = args or {}
         if (
@@ -482,7 +585,7 @@ class Machine:
             self.dialect_uid = "grbl"
             self._hydrated_dialect = self.context.dialect_mgr.get("grbl")
 
-    def set_dialect_uid(self, dialect_uid: Optional[str]):
+    def set_dialect_uid(self, dialect_uid: str | None):
         if self.dialect_uid == dialect_uid:
             return
         self.dialect_uid = dialect_uid
@@ -550,7 +653,7 @@ class Machine:
         self.changed.send(self)
 
     @property
-    def axis_extents(self) -> Tuple[float, float]:
+    def axis_extents(self) -> tuple[float, float]:
         """The full range of machine axis movement (width, height)."""
         x_cfg = self.axes.get(Axis.X)
         y_cfg = self.axes.get(Axis.Y)
@@ -573,6 +676,28 @@ class Machine:
     def reverse_z_axis(self) -> bool:
         cfg = self.axes.get(Axis.Z)
         return cfg.direction == AxisDirection.REVERSED if cfg else False
+
+    @property
+    def has_z_axis(self) -> bool:
+        """Whether this machine has a configured Z axis.
+
+        Modelled by the presence of ``Axis.Z`` in :attr:`axes`; a
+        2-axis laser simply omits it.  Drives G-code Z emission, the
+        jog/home/zero UI, and 3D Z-layering.
+        """
+        return self.axes.get(Axis.Z) is not None
+
+    @property
+    def available_axes(self) -> Axis:
+        """Bitmask of configured axes (X | Y, plus Z when present).
+
+        Used by jog / home / zero callers so a no-Z machine never
+        targets Z.
+        """
+        axes = Axis.X | Axis.Y
+        if self.has_z_axis:
+            axes |= Axis.Z
+        return axes
 
     def _clamp_soft_limits(self):
         """Clamp soft limits to axis extents. Returns True if clamped."""
@@ -600,12 +725,14 @@ class Machine:
             x_cfg.extents = (0, width)
         if y_cfg:
             y_cfg.extents = (0, height)
-        ml, mt, mr, mb = self._work_margins
-        ml = min(ml, width - 1)
-        mr = min(mr, width - ml - 1)
-        mt = min(mt, height - 1)
-        mb = min(mb, height - mt - 1)
-        self._work_margins = (ml, mt, mr, mb)
+        clamped = _clamp_margins(self._work_margins, (width, height))
+        if clamped != self._work_margins:
+            logger.warning(
+                "Work margins exceed new bed extents (%.0f x %.0f); clamped.",
+                width,
+                height,
+            )
+            self._work_margins = clamped
         self._clamp_soft_limits()
         self.changed.send(self)
 
@@ -623,7 +750,18 @@ class Machine:
         new_margins = (left, top, right, bottom)
         if self._work_margins == new_margins:
             return
-        self._work_margins = new_margins
+        clamped = _clamp_margins(new_margins, self.axis_extents)
+        if clamped != new_margins:
+            logger.warning(
+                "Work margins (%.1f, %.1f, %.1f, %.1f) exceed bed "
+                "extents (%.0f x %.0f); clamped.",
+                left,
+                top,
+                right,
+                bottom,
+                *self.axis_extents,
+            )
+        self._work_margins = clamped
         self._soft_limits = None
         self.changed.send(self)
 
@@ -635,10 +773,10 @@ class Machine:
         """
         ml, mt, mr, mb = self._work_margins
         w, h = self.axis_extents
-        return (ml, mt, max(1.0, w - ml - mr), max(1.0, h - mt - mb))
+        return (ml, mt, w - ml - mr, h - mt - mb)
 
     @property
-    def soft_limits(self) -> Optional[Rect]:
+    def soft_limits(self) -> Rect | None:
         """
         Configurable safety bounds for jogging (x_min, y_min, x_max, y_max).
         None means use work_area bounds.
@@ -672,6 +810,18 @@ class Machine:
         self.origin = origin
         self.changed.send(self)
 
+    @property
+    def panel_orientation(self) -> PanelOrientation:
+        """How the native bed is presented on screen."""
+        return self.panel.orientation
+
+    def set_panel_orientation(self, orientation: PanelOrientation) -> None:
+        """Set how the native bed is presented on screen.
+
+        See :meth:`MachinePanel.set_orientation` for details.
+        """
+        self.panel.set_orientation(orientation)
+
     def set_reverse_x_axis(self, is_reversed: bool):
         """Sets if the X-axis coordinate display is inverted."""
         if self.reverse_x_axis == is_reversed:
@@ -694,8 +844,35 @@ class Machine:
             )
         self.changed.send(self)
 
+    def set_has_z_axis(self, enabled: bool) -> None:
+        """Enable or disable the Z axis on this machine.
+
+        Disabling stashes the current Z :class:`AxisConfig` and removes
+        it from :attr:`axes`; re-enabling restores the stashed config, or
+        adds a default linear ``(-50, 50)`` Z when none was stashed.
+        Emits :attr:`changed` so the assembly and UI rebuild.
+        """
+        if enabled == self.has_z_axis:
+            return
+        if enabled:
+            cfg = self._stashed_z_config or AxisConfig(
+                letter=Axis.Z,
+                axis_type=AxisType.LINEAR,
+                extents=(-50, 50),
+            )
+            self.axes.add_config(cfg)
+            self._stashed_z_config = None
+        else:
+            cfg = self.axes.get(Axis.Z)
+            if cfg is not None:
+                self._stashed_z_config = cfg
+                self.axes.remove_config(Axis.Z)
+        self.changed.send(self)
+
     def set_reverse_z_axis(self, is_reversed: bool):
         """Sets if the Z-axis direction is reversed."""
+        if not self.has_z_axis:
+            return
         if self.reverse_z_axis == is_reversed:
             return
         cfg = self.axes.get(Axis.Z)
@@ -711,7 +888,7 @@ class Machine:
         self.rotary_enabled_default = enabled
         self.changed.send(self)
 
-    def set_default_rotary_module_uid(self, uid: Optional[str]):
+    def set_default_rotary_module_uid(self, uid: str | None):
         if self.default_rotary_module_uid == uid:
             return
         self.default_rotary_module_uid = uid
@@ -884,7 +1061,7 @@ class Machine:
         """Check if the machine's driver reports granular progress."""
         return self.controller.reports_granular_progress
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         """Check if the machine's driver supports homing for the given axis."""
         return self.controller.can_home(axis)
 
@@ -892,7 +1069,7 @@ class Machine:
         """Homes the specified axes or all axes if none specified."""
         await self.controller.home(axes)
 
-    async def jog(self, deltas: Dict[Axis, float], speed: int):
+    async def jog(self, deltas: dict[Axis, float], speed: int):
         """
         Jogs the machine along specified axes.
 
@@ -906,29 +1083,36 @@ class Machine:
         """Executes a raw G-code string on the machine."""
         await self.controller.run_raw(gcode)
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         """Check if machine's supports jogging for the given axis."""
         return self.controller.can_jog(axis)
 
-    def add_head(self, head: Laser):
+    def add_head(self, head: Head):
         self.heads.append(head)
         head.changed.connect(self._on_head_changed)
         self.invalidate_assembly()
         self.changed.send(self)
 
-    def get_head_by_uid(self, uid: str) -> Optional[Laser]:
+    def get_head_by_uid(self, uid: str) -> Head | None:
         for head in self.heads:
             if head.uid == uid:
                 return head
         return None
 
-    def get_default_head(self) -> Laser:
-        """Returns the first laser head, or raises an error if none exist."""
+    def get_default_head(self) -> Head:
+        """Returns the first head, or raises an error if none exist."""
         if not self.heads:
-            raise ValueError("Machine has no laser heads configured.")
+            raise ValueError("Machine has no heads configured.")
         return self.heads[0]
 
-    def remove_head(self, head: Laser):
+    def get_default_laser_head(self) -> LaserHead | None:
+        """Returns the first laser head, or None if none exist."""
+        for head in self.heads:
+            if isinstance(head, LaserHead):
+                return head
+        return None
+
+    def remove_head(self, head: Head):
         head.changed.disconnect(self._on_head_changed)
         self.heads.remove(head)
         self.invalidate_assembly()
@@ -958,20 +1142,45 @@ class Machine:
         self.invalidate_assembly()
         self.changed.send(self)
 
-    def get_rotary_module_by_uid(self, uid: str) -> Optional[RotaryModule]:
+    def get_rotary_module_by_uid(self, uid: str) -> RotaryModule | None:
         return self.rotary_modules.get(uid)
 
-    def get_default_rotary_module(self) -> Optional[RotaryModule]:
+    def get_default_rotary_module(self) -> RotaryModule | None:
         if self.default_rotary_module_uid:
             return self.get_rotary_module_by_uid(
                 self.default_rotary_module_uid
             )
         return None
 
-    def get_rotary_axis_for_layer(self, layer: "Layer") -> Optional[Axis]:
-        if not layer.rotary_enabled or not layer.rotary_module_uid:
+    def get_rotary_module_for_layer(
+        self, layer: "Layer"
+    ) -> RotaryModule | None:
+        """Resolve the effective rotary module for *layer*.
+
+        Returns the module referenced by
+        :attr:`layer.rotary_module_uid` when it exists on this
+        machine.  When the layer has rotary enabled but its module
+        UID is missing or invalid, falls back to the machine's
+        default module (or the first available module when no
+        default is set) so that rotary mapping is still applied.
+        """
+        if not layer.rotary_enabled:
             return None
-        module = self.rotary_modules.get(layer.rotary_module_uid)
+        if layer.rotary_module_uid:
+            module = self.rotary_modules.get(layer.rotary_module_uid)
+            if module is not None:
+                return module
+        default = self.get_default_rotary_module()
+        if default is not None:
+            return default
+        if self.rotary_modules:
+            return next(iter(self.rotary_modules.values()))
+        return None
+
+    def get_rotary_axis_for_layer(self, layer: "Layer") -> Axis | None:
+        if not layer.rotary_enabled:
+            return None
+        module = self.get_rotary_module_for_layer(layer)
         return module.axis if module else None
 
     def remove_rotary_module(self, module: RotaryModule):
@@ -1035,7 +1244,7 @@ class Machine:
         zone.changed.connect(self._on_nogo_zone_changed)
         self.changed.send(self)
 
-    def get_nogo_zone_by_uid(self, uid: str) -> Optional[Zone]:
+    def get_nogo_zone_by_uid(self, uid: str) -> Zone | None:
         return self.nogo_zones.get(uid)
 
     def remove_nogo_zone(self, zone: Zone):
@@ -1081,18 +1290,20 @@ class Machine:
         self.changed.send(self)
 
     def can_frame(self):
-        for head in self.heads:
-            if head.frame_power_percent:
-                return True
-        return False
+        return any(
+            h.frame_power_percent
+            for h in self.heads
+            if isinstance(h, LaserHead)
+        )
 
     def can_focus(self):
-        for head in self.heads:
-            if head.focus_power_percent:
-                return True
-        return False
+        return any(
+            h.focus_power_percent
+            for h in self.heads
+            if isinstance(h, LaserHead)
+        )
 
-    def validate_driver_setup(self) -> Tuple[bool, Optional[str]]:
+    def validate_driver_setup(self) -> tuple[bool, str | None]:
         """
         Validates the machine's driver arguments against the driver's setup
         VarSet. Delegates to the controller.
@@ -1135,7 +1346,7 @@ class Machine:
         cs = self.coordinate_systems.get(self.active_wcs)
         return cs.offset if cs else (0.0, 0.0, 0.0)
 
-    def get_workarea_origin_offset(self) -> Tuple[float, float]:
+    def get_workarea_origin_offset(self) -> tuple[float, float]:
         """
         Returns the position of the workarea origin in WORLD space.
 
@@ -1176,39 +1387,6 @@ class Machine:
             return (x, y, 0.0)
         else:
             return self.get_active_wcs_offset()
-
-    def get_reference_position_world(self) -> Tuple[float, float]:
-        """
-        Returns the reference origin position in WORLD coordinates.
-
-        This is used for positioning items in world space at the reference
-        origin (either workarea origin or WCS origin, depending on settings).
-
-        Returns:
-            Tuple of (x, y) in WORLD space.
-        """
-        offset_x, offset_y, _ = self.get_reference_offset()
-        machine_space = MachineSpace.from_machine(self)
-        return machine_space.machine_point_to_world(offset_x, offset_y)
-
-    def get_visual_wcs_offset(self) -> Tuple[float, float]:
-        """
-        Returns the WCS offset transformed to visual coordinates.
-
-        Applies axis reversal to the WCS offset. The caller (UI layer)
-        handles origin corner transformation based on canvas dimensions.
-
-        Returns:
-            Tuple of (x, y) with axis reversal applied.
-        """
-        wcs_x, wcs_y, _ = self.get_active_wcs_offset()
-
-        if self.reverse_x_axis:
-            wcs_x = -wcs_x
-        if self.reverse_y_axis:
-            wcs_y = -wcs_y
-
-        return (wcs_x, wcs_y)
 
     def get_visual_extent_frame(self) -> Rect:
         """
@@ -1257,7 +1435,7 @@ class Machine:
         await self.controller.switch_active_wcs(wcs)
 
     async def set_work_origin(
-        self, x: float, y: float, z: float, wcs_slot: Optional[str] = None
+        self, x: float, y: float, z: float, wcs_slot: str | None = None
     ):
         """
         Sets the work origin at the specified machine coordinates.
@@ -1271,7 +1449,7 @@ class Machine:
         await self.controller.set_work_origin(x, y, z, wcs_slot)
 
     async def set_work_origin_here(
-        self, axes: Axis, wcs_slot: Optional[str] = None
+        self, axes: Axis, wcs_slot: str | None = None
     ):
         """
         Sets the work origin for the specified axes to the current machine
@@ -1291,198 +1469,6 @@ class Machine:
         """Queries the device for its active WCS and updates state."""
         await self.controller.sync_active_wcs_from_device()
 
-    def _prepare_ops_for_encoding(
-        self,
-        ops: "Ops",
-        doc: Optional["Doc"] = None,
-        _pre_prepared: bool = False,
-    ) -> "Ops":
-        """
-        Prepares an Ops object for encoding by applying machine-specific
-        coordinate transformations.
-
-        The pipeline produces ops in world coordinates. This method converts
-        them to machine coordinates, and then to command coordinates for the
-        G-code output.
-
-        When doc is provided, per-layer WCS offsets are applied by reading
-        the layer's wcs attribute at LayerStartCommand boundaries. When doc
-        is None, the machine's active WCS offset is applied uniformly.
-
-        Args:
-            ops: The Ops object to prepare.
-            doc: Optional Doc for per-layer WCS lookup.
-            _pre_prepared: If True, the caller has already copied and
-                linearized the ops. Used internally by encode_ops() when
-                axis mapping runs before this step.
-
-        Returns:
-            A transformed Ops object ready for encoding.
-        """
-        if _pre_prepared:
-            ops_for_encoder = ops
-        else:
-            ops_for_encoder = ops.copy()
-
-            if not self.supports_curves:
-                ops_for_encoder.linearize_curves()
-
-        space = self.get_coordinate_space()
-
-        combined = np.identity(4)
-
-        transform = space.get_world_to_machine_matrix()
-        if not np.allclose(transform, np.identity(4)):
-            combined = transform @ combined
-
-        if doc is not None:
-            self._apply_per_layer_wcs_offset(ops_for_encoder, space, doc)
-        else:
-            wcs_offset = self.get_active_wcs_offset()
-            x_offset, y_offset, z_offset = space.get_command_offset(
-                wcs_offset=wcs_offset,
-                wcs_is_workarea_origin=self.wcs_origin_is_workarea_origin,
-            )
-            if x_offset != 0.0 or y_offset != 0.0 or z_offset != 0.0:
-                offset_matrix = np.identity(4)
-                offset_matrix[0, 3] = -x_offset
-                offset_matrix[1, 3] = -y_offset
-                offset_matrix[2, 3] = -z_offset
-                combined = offset_matrix @ combined
-
-        if self.reverse_z_axis:
-            z_flip = np.diag([1.0, 1.0, -1.0, 1.0])
-            combined = z_flip @ combined
-
-        if not np.allclose(combined, np.identity(4)):
-            ops_for_encoder.transform(combined)
-
-        return ops_for_encoder
-
-    def _apply_per_layer_wcs_offset(
-        self, ops: "Ops", space: "MachineSpace", doc: "Doc"
-    ) -> None:
-        """Apply per-layer WCS offsets."""
-        default_offset = self.get_active_wcs_offset()
-        default_cmd_offset = space.get_command_offset(
-            wcs_offset=default_offset,
-            wcs_is_workarea_origin=self.wcs_origin_is_workarea_origin,
-        )
-
-        layer_offsets: Dict[str, Tuple[float, float, float]] = {}
-        for layer in doc.layers:
-            effective_wcs = layer.get_effective_wcs(self)
-            wcs_off = self.get_wcs_offset(effective_wcs)
-            layer_cmd_offset = space.get_command_offset(
-                wcs_offset=wcs_off,
-                wcs_is_workarea_origin=self.wcs_origin_is_workarea_origin,
-            )
-            layer_offsets[layer.uid] = layer_cmd_offset
-
-        ops.translate_layers(default_cmd_offset, layer_offsets)
-
-    def _apply_replacement_downstream(self, ops: "Ops", doc: "Doc") -> None:
-        """Run degrees→scaled-mu downstream pass for AXIS_REPLACEMENT layers.
-
-        This is called after world→machine + WCS has been applied, so that
-        the scaled-mu values are placed into already-transformed commands.
-        """
-
-        def _on_layer(layer_uid: str, layer_ops: Ops) -> None:
-            descendant = doc.find_descendant_by_uid(layer_uid)
-            if not isinstance(descendant, Layer):
-                return
-            if (
-                not descendant.rotary_module_uid
-                or not descendant.rotary_enabled
-            ):
-                return
-            module = self.rotary_modules.get(descendant.rotary_module_uid)
-            if module is None:
-                return
-            if module.mode != RotaryMode.AXIS_REPLACEMENT:
-                return
-            KinematicMapping.degrees_to_scaled_mu_pass(
-                layer_ops,
-                module.mu_per_rotation,
-                target_axis=module.axis,
-            )
-
-        ops.transform_layers(_on_layer)
-
-    def encode_ops(
-        self,
-        ops: "Ops",
-        doc: "Doc",
-    ) -> EncodedOutput:
-        """
-        Encodes an Ops object into machine code and a corresponding
-        operation map. This method is safe to run in a worker process as it
-        uses static driver instantiation to get the encoder.
-
-        The encoding pipeline applies transforms in this order:
-        1. Copy + linearize curves (if machine doesn't support curves)
-        2. Rotary axis mapping (world-space Y→degrees)
-        3. World→machine + WCS offset + Z-flip
-        4. Degrees→scaled-mu downstream pass (AXIS_REPLACEMENT only)
-        5. G-code encoding via driver
-
-        Args:
-            ops: The Ops object to encode (world-space, unmapped).
-            doc: The document context for the job.
-
-        Returns:
-            An EncodedOutput object containing the machine code text,
-            operation map, and any driver-specific data.
-        """
-        # 1. Copy ops and linearize curves if needed (world-space).
-        ops_work = ops.copy()
-        if not self.supports_curves:
-            ops_work.linearize_curves()
-
-        # 2. Apply rotary axis mapping per-layer on world-space ops.
-        #    The mapper converts Y→degrees on MovingCommands including
-        #    bezier control points and arc center offsets, so native
-        #    curve support (e.g. G5) is preserved.
-        #    The scaled-mu pass is deferred until after world→machine
-        #    for AXIS_REPLACEMENT layers.
-        if doc:
-            KinematicMapping.apply_to_job_ops(ops_work, doc, self)
-
-        # 3. Apply world→machine + WCS + Z-flip (no copy, no linearize).
-        ops_for_encoder = self._prepare_ops_for_encoding(
-            ops_work, doc, _pre_prepared=True
-        )
-
-        # 4. Downstream pass: convert degrees→scaled-mu for
-        #    AXIS_REPLACEMENT layers. This must happen after world→machine
-        #    so the scaled values land in machine-coordinate commands.
-        if doc:
-            self._apply_replacement_downstream(ops_for_encoder, doc)
-
-        # 5. Instantiate the correct encoder via the driver factory
-        from ...pipeline.encoder.base import EncodedOutput
-        from ..driver import get_driver_cls
-        from ..driver.dummy import NoDeviceDriver
-
-        if self.driver_name:
-            try:
-                driver_cls = get_driver_cls(self.driver_name)
-            except (ValueError, ImportError):
-                driver_cls = NoDeviceDriver
-        else:
-            driver_cls = NoDeviceDriver
-
-        encoder = driver_cls.create_encoder(self)
-
-        # 6. Perform encoding
-        result = encoder.encode(ops_for_encoder, self, doc)
-        if not isinstance(result, EncodedOutput):
-            raise TypeError(
-                f"Encoder must return EncodedOutput, got {type(result)}"
-            )
-        return result
-
     def refresh_settings(self):
         """Public API for the UI to request a settings refresh."""
         task_mgr.add_coroutine(
@@ -1501,14 +1487,14 @@ class Machine:
             ),  # Key includes setting key for uniqueness
         )
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         """
         Gets the setting definitions from the machine's active driver
         as a VarSet.
         """
         return self.controller.get_setting_vars()
 
-    def to_dict(self, include_frozen_dialect: bool = True) -> Dict[str, Any]:
+    def to_dict(self, include_frozen_dialect: bool = True) -> dict[str, Any]:
         data = {
             "machine": {
                 "name": self.name,
@@ -1534,6 +1520,7 @@ class Machine:
                 if self._soft_limits
                 else None,
                 "origin": self.origin.value,
+                "panel_orientation": self.panel.orientation.value,
                 "reverse_x_axis": self.reverse_x_axis,
                 "reverse_y_axis": self.reverse_y_axis,
                 "reverse_z_axis": self.reverse_z_axis,
@@ -1548,6 +1535,16 @@ class Machine:
                     rm.to_dict() for rm in self.rotary_modules.values()
                 ],
                 "nogo_zones": [z.to_dict() for z in self.nogo_zones.values()],
+                "capabilities": (
+                    [
+                        c.value
+                        for c in sorted(
+                            self._explicit_capabilities, key=lambda c: c.value
+                        )
+                    ]
+                    if self._explicit_capabilities
+                    else None
+                ),
                 "hookmacros": {
                     trigger.name: macro.to_dict()
                     for trigger, macro in self.hookmacros.items()
@@ -1563,6 +1560,9 @@ class Machine:
                 "gcode": {
                     "gcode_precision": self.gcode_precision,
                 },
+                "units": {
+                    "unit_system": self.unit_system.value,
+                },
                 "machine_hours": self.machine_hours.to_dict(),
             }
         }
@@ -1574,11 +1574,11 @@ class Machine:
 
     @staticmethod
     def _migrate_legacy_hooks_to_dialect(
-        hook_data: Dict[str, Any],
-        current_dialect_uid: Optional[str],
+        hook_data: dict[str, Any],
+        current_dialect_uid: str | None,
         machine_name: str,
         context: RayforgeContext,
-    ) -> Tuple[Optional[str], Dict[str, Any]]:
+    ) -> tuple[str | None, dict[str, Any]]:
         """
         Checks for legacy JOB_START/JOB_END hooks and migrates them to a
         new custom dialect.
@@ -1633,10 +1633,29 @@ class Machine:
         # Return the new dialect's UID and the cleaned hook data
         return new_dialect.uid, new_hook_data
 
+    @staticmethod
+    def _parse_capabilities(
+        raw: list[Any] | None,
+    ) -> frozenset[MachineCapability] | None:
+        """
+        Parses a list of capability strings into a frozenset of
+        MachineCapability. Returns None when the list is absent,
+        and skips unknown values with a warning.
+        """
+        if raw is None:
+            return None
+        caps = set()
+        for value in raw:
+            try:
+                caps.add(MachineCapability(value))
+            except ValueError:
+                logger.warning(f"Unknown machine capability '{value}'")
+        return frozenset(caps)
+
     @classmethod
     def from_dict(
         cls,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         context: Optional["RayforgeContext"] = None,
     ) -> "Machine":
         if context is None:
@@ -1743,6 +1762,18 @@ class Machine:
         )
         ma.default_rotary_module_uid = ma_data.get("default_rotary_module_uid")
 
+        orientation_value = ma_data.get(
+            "panel_orientation", PanelOrientation.NATIVE.value
+        )
+        try:
+            ma.panel._orientation = PanelOrientation(orientation_value)
+        except ValueError:
+            logger.warning(
+                "Unknown panel orientation '%s'; using native",
+                orientation_value,
+            )
+            ma.panel._orientation = PanelOrientation.NATIVE
+
         ma.soft_limits_enabled = ma_data.get(
             "soft_limits_enabled", ma.soft_limits_enabled
         )
@@ -1761,17 +1792,20 @@ class Machine:
                     f"Skipping unknown hook trigger '{trigger_name}'"
                 )
 
-        macro_data = ma_data.get("macros", {})
-        for uid, macro_data in macro_data.items():
+        macros_data = ma_data.get("macros", {})
+        for uid, macro_data in macros_data.items():
             macro_data["uid"] = uid  # Ensure UID is consistent with key
             ma.macros[uid] = Macro.from_dict(macro_data)
 
         ma.heads = []
         for obj in ma_data.get("heads", {}):
-            ma.add_head(Laser.from_dict(obj))
+            ma.add_head(head_from_dict(obj))
+        ma._explicit_capabilities = cls._parse_capabilities(
+            ma_data.get("capabilities")
+        )
         ma.cameras = []
         for obj in ma_data.get("cameras", {}):
-            ma.add_camera(Camera.from_dict(obj))
+            ma.add_camera(Camera.from_dict(migrate_camera_data(obj)))
         for obj in ma_data.get("rotary_modules", []):
             ma.add_rotary_module(RotaryModule.from_dict(obj))
         for obj in ma_data.get("nogo_zones", []):
@@ -1787,6 +1821,17 @@ class Machine:
         ma.supports_arcs = ma_data.get("supports_arcs", ma.supports_arcs)
         ma.supports_curves = ma_data.get("supports_curves", ma.supports_curves)
         ma.arc_tolerance = ma_data.get("arc_tolerance", ma.arc_tolerance)
+
+        units = ma_data.get("units", {})
+        unit_system_value = units.get("unit_system", "metric")
+        try:
+            ma.unit_system = UnitSystem(unit_system_value)
+        except ValueError:
+            logger.warning(
+                f"Unknown unit_system '{unit_system_value}' in "
+                f"machine config. Defaulting to metric."
+            )
+            ma.unit_system = UnitSystem.METRIC
 
         hours_data = ma_data.get("machine_hours", {})
         ma.machine_hours = MachineHours.from_dict(hours_data)

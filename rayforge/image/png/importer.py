@@ -2,7 +2,7 @@ import logging
 import warnings
 from gettext import gettext as _
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
@@ -34,11 +34,11 @@ class PngImporter(Importer):
     label = "PNG files"
     mime_types = ("image/png",)
     extensions = (".png",)
-    features = {ImporterFeature.BITMAP_TRACING}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.BITMAP_TRACING}
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._image: Optional[pyvips.Image] = None
+        self._image: pyvips.Image | None = None
 
     def scan(self) -> ImportManifest:
         """
@@ -57,7 +57,7 @@ class PngImporter(Importer):
             )
         except pyvips.Error as e:
             logger.warning(f"PNG scan failed for {self.source_file.name}: {e}")
-            self.add_error(_(f"Failed to scan PNG file: {e}"))
+            self.add_error(_("Failed to scan PNG file: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
@@ -113,17 +113,15 @@ class PngImporter(Importer):
             source_parse_result=parse_result,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         """Phase 2: Parse the PNG into a vips image and extract facts."""
         try:
             image = pyvips.Image.pngload_buffer(
                 self.raw_data, access=pyvips.Access.RANDOM
             )
         except pyvips.Error as e:
-            logger.error(
-                f"pyvips failed to load PNG buffer: {e}", exc_info=True
-            )
-            self.add_error(_(f"Image load failed: {e}"))
+            logger.exception("pyvips failed to load PNG buffer")
+            self.add_error(_("Image load failed: {}").format(e))
             self._image = None
             return None
 
@@ -140,7 +138,7 @@ class PngImporter(Importer):
             default_dpi = 96.0
             native_unit_to_mm = 25.4 / default_dpi
 
-        x, y, w, h = document_bounds
+        x, _y, w, h = document_bounds
         world_frame = (
             x * native_unit_to_mm,
             0.0,

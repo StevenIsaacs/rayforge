@@ -1,5 +1,5 @@
 from gettext import gettext as _
-from typing import Dict, Tuple, cast
+from typing import cast
 
 from gi.repository import Adw, Gtk
 
@@ -19,8 +19,8 @@ class HookList(Adw.PreferencesGroup):
         super().__init__(title=_("G-code Hooks"), **kwargs)
         self.machine = machine
         # Store references to the rows and their widgets to update them later
-        self.trigger_widgets: Dict[
-            MacroTrigger, Tuple[Adw.ActionRow, Gtk.Button, Gtk.Switch]
+        self.trigger_widgets: dict[
+            MacroTrigger, tuple[Adw.ActionRow, Gtk.Button, Gtk.Switch]
         ] = {}
         self._setup_ui()
         # Connect to machine changes to update row state if a macro is
@@ -87,7 +87,7 @@ class HookList(Adw.PreferencesGroup):
 
     def _on_machine_changed(self, sender: Machine, **kwargs):
         """Update all row styles when the machine model changes."""
-        for trigger in self.trigger_widgets.keys():
+        for trigger in self.trigger_widgets:
             self._update_row_state(trigger)
 
     def _on_enable_toggled(self, switch: Gtk.Switch, _, trigger: MacroTrigger):

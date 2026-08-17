@@ -1,6 +1,6 @@
 # Einstellungen
 
-![Allgemeine Einstellungen](/screenshots/application-general.png)
+![Allgemeine Einstellungen](/screenshots/app-settings-general.png)
 
 Passe Rayforge an deinen Workflow und deine Vorlieben an. Öffne die
 Einstellungen über **Bearbeiten → Einstellungen** oder drücke
@@ -60,6 +60,8 @@ Teile der Anwendung. Jede verfügt über eine eigene Dokumentation:
   verwalten
 - [Rezepte](../application-settings/recipes.md) — gespeicherte
   Operationsrezepte verwalten
+- [Farbregeln](../application-settings/color-rules.md) — SVG-Farben
+  Schritttypen zuordnen
 - [KI-Anbieter](../application-settings/ai-provider.md) — KI-Anbieter für
   die Nutzung durch Addons konfigurieren
 - [Addons](../application-settings/addons.md) — Erweiterungs-Addons

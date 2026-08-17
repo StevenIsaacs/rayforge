@@ -1,10 +1,11 @@
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Optional
+from typing import Any
 
 from .var import ValidationError, Var
 
 
-def serial_port_validator(port: Optional[str]):
+def serial_port_validator(port: str | None):
     """Raises ValidationError if the serial port is not specified."""
     if not port:
         raise ValidationError(_("Serial port cannot be empty."))
@@ -19,9 +20,11 @@ class SerialPortVar(Var[str]):
         self,
         key: str,
         label: str,
-        description: Optional[str] = None,
-        default: Optional[str] = None,
-        value: Optional[str] = None,
+        description: str | None = None,
+        default: str | None = None,
+        value: str | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
         super().__init__(
             key=key,
@@ -31,4 +34,5 @@ class SerialPortVar(Var[str]):
             default=default,
             value=value,
             validator=serial_port_validator,
+            visible_when=visible_when,
         )

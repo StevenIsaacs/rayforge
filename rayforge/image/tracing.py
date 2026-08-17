@@ -2,7 +2,6 @@ import logging
 import sys
 import threading
 from enum import Enum
-from typing import List, Optional, Tuple
 
 import cairo
 import cv2
@@ -38,7 +37,7 @@ class ColorMode(Enum):
     COLOR = "color"
 
 
-def _remove_border_offset(geometries: List[Geometry]) -> None:
+def _remove_border_offset(geometries: list[Geometry]) -> None:
     """Remove the BORDER_SIZE offset added to vtracer input."""
     m = np.eye(4, dtype=np.float64)
     m[0, 3] = -BORDER_SIZE
@@ -49,7 +48,7 @@ def _remove_border_offset(geometries: List[Geometry]) -> None:
 
 def _get_image_from_surface(
     surface: cairo.ImageSurface,
-) -> Tuple[np.ndarray, int]:
+) -> tuple[np.ndarray, int]:
     """Extracts image data from a Cairo surface."""
     logger.debug("Entering _get_image_from_surface")
     surface_format = surface.get_format()
@@ -87,7 +86,7 @@ def _get_image_from_surface(
 def _get_boolean_image_from_color(
     img: np.ndarray,
     channels: int,
-    vectorization_spec: Optional[VectorizationSpec] = None,
+    vectorization_spec: VectorizationSpec | None = None,
 ) -> np.ndarray:
     """
     Creates a boolean image from color channels, adding a white border and
@@ -133,7 +132,7 @@ def _get_boolean_image_from_color(
 
 def prepare_surface(
     surface: cairo.ImageSurface,
-    vectorization_spec: Optional[VectorizationSpec] = None,
+    vectorization_spec: VectorizationSpec | None = None,
 ) -> np.ndarray:
     """
     Prepares a Cairo surface for tracing.
@@ -184,7 +183,7 @@ def _fallback_to_enclosing_hull(
     pixels_per_mm_x: float,
     pixels_per_mm_y: float,
     surface_height: int,
-) -> List[Geometry]:
+) -> list[Geometry]:
     """Generates an enclosing hull as a fallback."""
     logger.debug("Entering _fallback_to_enclosing_hull")
     geo = get_enclosing_hull(
@@ -199,7 +198,7 @@ def _fallback_to_enclosing_hull(
 
 def _encode_image_to_buffer(
     cleaned_boolean_image: np.ndarray,
-) -> Tuple[bool, bytes, str]:
+) -> tuple[bool, bytes, str]:
     """Encodes a boolean image to BMP bytes (robust format for vtracer)."""
     logger.debug("Entering _encode_image_to_buffer")
     img_uint8 = (~cleaned_boolean_image * 255).astype(np.uint8)
@@ -276,7 +275,7 @@ def _convert_buffer_to_svg_with_vtracer(
             def thread_target():
                 try:
                     result[0] = _call_native()
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - native call boundary
                     error[0] = e
 
             # 8MB stack size (matching typical Linux default)
@@ -292,7 +291,7 @@ def _convert_buffer_to_svg_with_vtracer(
                 # Restore immediately
                 threading.stack_size(old_stack)
                 t.join()
-            except Exception as e:
+            except (ValueError, OSError, RuntimeError) as e:
                 # If stack adjustment fails (e.g. platform doesn't support it),
                 # try direct call and hope for the best.
                 logger.warning(f"Could not adjust stack size for vtracer: {e}")
@@ -320,7 +319,7 @@ def _extract_svg_from_raw_output(raw_output: str) -> str:
 def _fallback_to_hulls_from_image(
     cleaned_boolean_image: np.ndarray,
     surface_height: int,
-) -> List[Geometry]:
+) -> list[Geometry]:
     """Generates convex hulls from an image as a fallback."""
     logger.debug("Entering _fallback_to_hulls_from_image")
     return get_hulls_from_image(
@@ -334,7 +333,7 @@ def _fallback_to_hulls_from_image(
 
 def _handle_oversized_image(
     image: np.ndarray, original_width: int, original_height: int
-) -> Tuple[np.ndarray, float, float, int]:
+) -> tuple[np.ndarray, float, float, int]:
     """
     Checks if an image exceeds the pixel limit and, if so, downscales it,
     returning the new image, upscaling factors, and new content height.
@@ -348,38 +347,58 @@ def _handle_oversized_image(
     if h_bordered * w_bordered <= pixel_limit:
         return image, 1.0, 1.0, original_height
 
-    scale = (pixel_limit / (h_bordered * w_bordered)) ** 0.5
-    new_w = max(1, int(w_bordered * scale))
-    new_h = max(1, int(h_bordered * scale))
+    # Strip the preprocessing border and resize only the content.  If
+    # the whole bordered image were resized instead, the interpolation
+    # would blend the white border into the content, widening the
+    # traced contours after upscaling.  A fresh border is re-added so
+    # the traced geometry keeps the exact [0, content] extent.
+    content = image[
+        BORDER_SIZE : h_bordered - BORDER_SIZE,
+        BORDER_SIZE : w_bordered - BORDER_SIZE,
+    ]
+    content_h, content_w = content.shape
 
-    # Ensure dimensions are multiples of 4 for better memory alignment
-    new_w = (new_w // 4) * 4
-    new_h = (new_h // 4) * 4
-    new_w = max(4, new_w)
-    new_h = max(4, new_h)
+    scale = (pixel_limit / (h_bordered * w_bordered)) ** 0.5
+    new_content_w = max(1, int(content_w * scale))
+    new_content_h = max(1, int(content_h * scale))
+
+    # Ensure bordered dimensions are multiples of 4 for better memory
+    # alignment.
+    new_w = max(
+        2 * BORDER_SIZE + 4,
+        ((new_content_w + 2 * BORDER_SIZE) // 4) * 4,
+    )
+    new_h = max(
+        2 * BORDER_SIZE + 4,
+        ((new_content_h + 2 * BORDER_SIZE) // 4) * 4,
+    )
+    new_content_w = new_w - (2 * BORDER_SIZE)
+    new_content_h = new_h - (2 * BORDER_SIZE)
 
     logger.warning(
         f"Image is too large for vtracer ({w_bordered}x{h_bordered}px). "
         f"Downscaling to {new_w}x{new_h}px to prevent overflow."
     )
 
-    img_uint8 = image.astype(np.uint8) * 255
-    resized_img = resize_linear_nd(img_uint8, (new_w, new_h))
-    image_to_trace = resized_img > 127
+    content_uint8 = content.astype(np.uint8) * 255
+    resized_img = resize_linear_nd(
+        content_uint8, (new_content_w, new_content_h)
+    )
+    image_to_trace = np.pad(
+        resized_img > 127,
+        BORDER_SIZE,
+        constant_values=False,
+    )
 
-    upscale_x, upscale_y = 1.0, 1.0
-    new_content_w = new_w - (2 * BORDER_SIZE)
-    new_content_h = new_h - (2 * BORDER_SIZE)
-    if new_content_w > 0 and new_content_h > 0:
-        upscale_x = original_width / new_content_w
-        upscale_y = original_height / new_content_h
+    upscale_x = content_w / new_content_w
+    upscale_y = content_h / new_content_h
 
     return image_to_trace, upscale_x, upscale_y, new_content_h
 
 
 def _get_geometries_from_image(
     image_to_trace: np.ndarray, processing_surface_height: int
-) -> List[Geometry]:
+) -> list[Geometry]:
     """
     Performs the core vectorization of a boolean image using vtracer,
     including complexity checks and fallbacks to hull generation.
@@ -396,7 +415,7 @@ def _get_geometries_from_image(
     try:
         raw_output = _convert_buffer_to_svg_with_vtracer(img_bytes, img_fmt)
         svg_str = _extract_svg_from_raw_output(raw_output)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - native call boundary
         logger.error(f"vtracer failed: {e}")
         return _fallback_to_enclosing_hull(
             image_to_trace,
@@ -428,8 +447,8 @@ def _get_geometries_from_image(
 
 
 def _apply_upscaling(
-    geometries: List[Geometry], upscale_x: float, upscale_y: float
-) -> List[Geometry]:
+    geometries: list[Geometry], upscale_x: float, upscale_y: float
+) -> list[Geometry]:
     """Applies an upscaling transform to a list of geometries if needed."""
     if upscale_x != 1.0 or upscale_y != 1.0:
         logger.debug(f"Upscaling traced geometry by {upscale_x}, {upscale_y}")
@@ -441,7 +460,7 @@ def _apply_upscaling(
 
 def _encode_color_to_buffer(
     color_image: np.ndarray,
-) -> Tuple[bool, bytes, str]:
+) -> tuple[bool, bytes, str]:
     """Encodes a BGR color image to BMP bytes for vtracer."""
     logger.debug("Entering _encode_color_to_buffer")
     if color_image.dtype != np.uint8:
@@ -456,7 +475,7 @@ def _encode_color_to_buffer(
 
 def _get_geometries_from_color(
     color_image: np.ndarray, processing_surface_height: int
-) -> List[Geometry]:
+) -> list[Geometry]:
     """
     Performs vectorization of a color image using vtracer in color mode.
     """
@@ -469,7 +488,7 @@ def _get_geometries_from_color(
             img_bytes, img_fmt, colormode=ColorMode.COLOR
         )
         svg_str = _extract_svg_from_raw_output(raw_output)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - native call boundary
         logger.error(f"vtracer color failed: {e}")
         return []
 
@@ -487,8 +506,8 @@ def _get_geometries_from_color(
 
 
 def trace_color_image(
-    color_image: Optional[np.ndarray],
-) -> List[Geometry]:
+    color_image: np.ndarray | None,
+) -> list[Geometry]:
     """
     Traces a BGR color image and returns a list of Geometry objects.
 
@@ -566,8 +585,8 @@ def trace_color_image(
 
 def trace_surface(
     surface: cairo.ImageSurface,
-    vectorization_spec: Optional[VectorizationSpec] = None,
-) -> List[Geometry]:
+    vectorization_spec: VectorizationSpec | None = None,
+) -> list[Geometry]:
     """
     Traces a Cairo surface and returns a list of Geometry objects. It uses
     vtracer for high-quality vectorization, includes an adaptive pre-processing

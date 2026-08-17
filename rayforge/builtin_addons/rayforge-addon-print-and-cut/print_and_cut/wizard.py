@@ -1,7 +1,6 @@
 import logging
 import math
 from gettext import gettext as _
-from typing import Optional, Tuple, Union
 
 from gi.repository import Adw, Gtk
 from raygeo.geo import Matrix
@@ -13,10 +12,10 @@ from rayforge.machine.cmd import MachineCmd
 from rayforge.machine.models.machine import Machine
 from rayforge.ui_gtk.icons import get_icon
 from rayforge.ui_gtk.machine.jog_widget import JogWidget
-from rayforge.ui_gtk.shared.adwfix import get_spinrow_float
 from rayforge.ui_gtk.shared.patched_dialog_window import (
     PatchedDialogWindow,
 )
+from rayforge.ui_gtk.shared.pref_rows import LengthSpinRow
 
 from .pick_surface import PickSurface
 
@@ -28,10 +27,10 @@ _session_state: dict = {}
 
 
 def calculate_alignment_transform(
-    d1: Tuple[float, float],
-    d2: Tuple[float, float],
-    p1: Tuple[float, float],
-    p2: Tuple[float, float],
+    d1: tuple[float, float],
+    d2: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
     allow_scale: bool = False,
 ) -> Matrix:
     angle_d = math.atan2(d2[1] - d1[1], d2[0] - d1[0])
@@ -54,7 +53,7 @@ class PrintAndCutWizard(PatchedDialogWindow):
     def __init__(
         self,
         parent,
-        item: Union[WorkPiece, Group],
+        item: WorkPiece | Group,
         machine: Machine,
         machine_cmd: MachineCmd,
         editor: DocEditor,
@@ -73,11 +72,11 @@ class PrintAndCutWizard(PatchedDialogWindow):
         self._machine_cmd = machine_cmd
         self._editor = editor
 
-        self._design_point1: Optional[Tuple[float, float]] = None
-        self._design_point2: Optional[Tuple[float, float]] = None
+        self._design_point1: tuple[float, float] | None = None
+        self._design_point2: tuple[float, float] | None = None
 
-        self._physical_point1: Optional[Tuple[float, float]] = None
-        self._physical_point2: Optional[Tuple[float, float]] = None
+        self._physical_point1: tuple[float, float] | None = None
+        self._physical_point2: tuple[float, float] | None = None
 
         self._allow_scale: bool = False
 
@@ -272,16 +271,14 @@ class PrintAndCutWizard(PatchedDialogWindow):
         controls_group = Adw.PreferencesGroup()
         box.append(controls_group)
 
-        distance_adjustment = Gtk.Adjustment(
-            value=10.0, lower=0.1, upper=1000, step_increment=1
+        self._distance_row = LengthSpinRow(
+            _("Jog Distance"),
+            _("Distance"),
+            lower=0.1,
+            upper=1000.0,
+            value_in_base=10.0,
         )
-        self._distance_row = Adw.SpinRow(
-            title=_("Jog Distance"),
-            subtitle=_("Distance in machine units"),
-            adjustment=distance_adjustment,
-            digits=1,
-        )
-        self._distance_row.connect("changed", self._on_distance_changed)
+        self._distance_row.value_changed.connect(self._on_distance_changed)
         controls_group.add(self._distance_row)
 
         presets_row = Adw.ActionRow(title=_("Distance Presets"))
@@ -306,7 +303,9 @@ class PrintAndCutWizard(PatchedDialogWindow):
         self._focus_row.add_suffix(self._focus_btn)
         controls_group.add(self._focus_row)
 
-        head = self._machine.get_default_head() if self._machine else None
+        head = (
+            self._machine.get_default_laser_head() if self._machine else None
+        )
         if head:
             head.changed.connect(self._on_head_changed)
         self._update_focus_sensitivity()
@@ -608,17 +607,17 @@ class PrintAndCutWizard(PatchedDialogWindow):
             if x_val is not None and y_val is not None:
                 self._laser_row.set_subtitle(f"X: {x_val:.2f}  Y: {y_val:.2f}")
 
-    def _on_distance_changed(self, spin_row):
-        self._jog_widget.jog_distance = get_spinrow_float(spin_row)
+    def _on_distance_changed(self, row):
+        self._jog_widget.jog_distance = row.get_value_in_base_units()
 
     def _on_preset_clicked(self, button, value):
-        self._distance_row.get_adjustment().set_value(value)
-        self._on_distance_changed(self._distance_row)
+        self._distance_row.set_value_in_base_units(value)
+        self._jog_widget.jog_distance = value
 
     def _on_focus_toggled(self, button):
         if not self._machine or not self._machine_cmd:
             return
-        head = self._machine.get_default_head()
+        head = self._machine.get_default_laser_head()
         if not head:
             return
         self._focus_active = button.get_active()
@@ -631,7 +630,7 @@ class PrintAndCutWizard(PatchedDialogWindow):
 
     def _disable_focus(self):
         if self._focus_active and self._machine and self._machine_cmd:
-            head = self._machine.get_default_head()
+            head = self._machine.get_default_laser_head()
             if head:
                 self._machine_cmd.set_focus_power(head, 0)
                 self._focus_active = False
@@ -642,7 +641,9 @@ class PrintAndCutWizard(PatchedDialogWindow):
         self._update_focus_sensitivity()
 
     def _update_focus_sensitivity(self):
-        head = self._machine.get_default_head() if self._machine else None
+        head = (
+            self._machine.get_default_laser_head() if self._machine else None
+        )
         if head and head.focus_power_percent > 0:
             self._focus_btn.set_sensitive(True)
             self._focus_row.set_subtitle(
@@ -662,15 +663,16 @@ class PrintAndCutWizard(PatchedDialogWindow):
 
     def _local_to_world(
         self, norm_x: float, norm_y: float
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         return self._item.get_world_transform().transform_point(
             (norm_x, norm_y)
         )
 
-    def _machine_to_world(self, wx: float, wy: float) -> Tuple[float, float]:
-        space = self._machine.get_coordinate_space()
+    def _machine_to_world(self, wx: float, wy: float) -> tuple[float, float]:
         wcs_x, wcs_y, _wcs_z = self._machine.get_active_wcs_offset()
-        return space.machine_point_to_world(wx + wcs_x, wy + wcs_y)
+        return self._machine.panel.machine_point_to_world(
+            wx + wcs_x, wy + wcs_y
+        )
 
     def _get_world_design_points(self):
         assert self._design_point1 is not None

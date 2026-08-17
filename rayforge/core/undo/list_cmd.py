@@ -1,4 +1,5 @@
-from typing import Any, Callable, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 from .command import Command
 
@@ -12,8 +13,8 @@ class ListItemCommand(Command):
         item: Any,
         undo_command: str,
         redo_command: str,
-        on_change_callback: Optional[Callable[[], None]] = None,
-        name: Optional[str] = None,
+        on_change_callback: Callable[[], None] | None = None,
+        name: str | None = None,
     ):
         super().__init__(name, on_change_callback)
         self.owner_obj = owner_obj
@@ -41,10 +42,10 @@ class ReorderListCommand(Command):
         self,
         target_obj: Any,
         list_property_name: str,
-        new_list: List[Any],
-        setter_method_name: Optional[str] = None,
-        on_change_callback: Optional[Callable[[], None]] = None,
-        name: Optional[str] = None,
+        new_list: list[Any],
+        setter_method_name: str | None = None,
+        on_change_callback: Callable[[], None] | None = None,
+        name: str | None = None,
     ):
         super().__init__(name, on_change_callback)
         self.target_obj = target_obj
@@ -53,7 +54,7 @@ class ReorderListCommand(Command):
         self.setter_method_name = setter_method_name
         self.old_list = list(getattr(target_obj, list_property_name))
 
-    def _set_list(self, new_order: List[Any]):
+    def _set_list(self, new_order: list[Any]):
         if self.setter_method_name:
             setter_func = getattr(self.target_obj, self.setter_method_name)
             setter_func(new_order)

@@ -2,12 +2,12 @@ import logging
 import webbrowser
 from gettext import gettext as _
 from pathlib import Path
-from typing import Optional
 
 from gi.repository import Adw, Gdk, GLib, Gtk
 
 from ... import const
 from ...camera.models import Camera
+from ...camera.v4l import display_name
 from ...context import get_context
 from ...machine.driver import (
     DRIVER_MATURITY_LABELS,
@@ -20,12 +20,13 @@ from ..icons import get_icon
 from ..shared.gtk import apply_css
 from ..shared.patched_dialog_window import PatchedDialogWindow
 from .advanced_preferences_page import AdvancedPreferencesPage
+from .capabilities_page import CapabilitiesPage
 from .device_settings_page import DeviceSettingsPage
 from .gcode_settings_page import GcodeSettingsPage
 from .general_preferences_page import GeneralPreferencesPage
 from .hardware_page import HardwarePage
+from .head_preferences_page import HeadPreferencesPage
 from .hooks_macros_page import HooksMacrosPage
-from .laser_preferences_page import LaserPreferencesPage
 from .maintenance_page import MaintenancePage
 from .nogo_zones_page import NogoZonesPage
 from .rotary_module_page import RotaryModulePage
@@ -49,7 +50,7 @@ class MachineSettingsDialog(PatchedDialogWindow):
         *,
         machine: Machine,
         transient_for=None,
-        initial_page: Optional[str] = None,
+        initial_page: str | None = None,
         **kwargs,
     ):
         super().__init__(skip_usage_tracking=True, **kwargs)
@@ -58,8 +59,8 @@ class MachineSettingsDialog(PatchedDialogWindow):
         self.machine = machine
         self._row_to_page_name = {}
         self._initial_page = initial_page
-        self._gcode_row: Optional[Gtk.ListBoxRow] = None
-        self._gcode_stack_page: Optional[Gtk.StackPage] = None
+        self._gcode_row: Gtk.ListBoxRow | None = None
+        self._gcode_stack_page: Gtk.StackPage | None = None
         if machine.name:
             self.set_title(
                 _("{machine_name} - Machine Settings").format(
@@ -177,9 +178,9 @@ class MachineSettingsDialog(PatchedDialogWindow):
         device_page.show_toast.connect(self._on_show_toast)
         self.content_stack.add_titled(device_page, "device", _("Device"))
 
-        # --- Page 7: Laser ---
-        laser_page = LaserPreferencesPage(machine=self.machine)
-        self.content_stack.add_titled(laser_page, "laser", _("Laser"))
+        # --- Page 7: Heads ---
+        heads_page = HeadPreferencesPage(machine=self.machine)
+        self.content_stack.add_titled(heads_page, "heads", _("Heads"))
 
         # --- Page 8: Rotary Module ---
         rotary_module_page = RotaryModulePage(machine=self.machine)
@@ -203,10 +204,16 @@ class MachineSettingsDialog(PatchedDialogWindow):
         )
         self.content_stack.add_titled(self.camera_page, "camera", _("Camera"))
 
-        # --- Page 9: Maintenance ---
+        # --- Page 11: Maintenance ---
         maintenance_page = MaintenancePage(machine=self.machine)
         self.content_stack.add_titled(
             maintenance_page, "maintenance", _("Maintenance")
+        )
+
+        # --- Page 12: Capabilities ---
+        capabilities_page = CapabilitiesPage(machine=self.machine)
+        self.content_stack.add_titled(
+            capabilities_page, "capabilities", _("Capabilities")
         )
 
         # Create the content's NavigationPage wrapper
@@ -232,7 +239,7 @@ class MachineSettingsDialog(PatchedDialogWindow):
             _("Hooks & Macros"), "code-symbolic", "hooks-macros"
         )
         self._add_sidebar_row(_("Device"), "settings-symbolic", "device")
-        self._add_sidebar_row(_("Laser"), "laser-on-symbolic", "laser")
+        self._add_sidebar_row(_("Heads"), "laser-on-symbolic", "heads")
         self._add_sidebar_row(
             _("Rotary Module"), "rotary-symbolic", "rotary-module"
         )
@@ -242,6 +249,9 @@ class MachineSettingsDialog(PatchedDialogWindow):
         self._add_sidebar_row(_("Camera"), "camera-on-symbolic", "camera")
         self._add_sidebar_row(
             _("Maintenance"), "timer-symbolic", "maintenance"
+        )
+        self._add_sidebar_row(
+            _("Capabilities"), "settings-symbolic", "capabilities"
         )
 
         # Connect sidebar selection
@@ -329,7 +339,7 @@ class MachineSettingsDialog(PatchedDialogWindow):
                     timeout=5,
                 )
             )
-        except Exception as e:
+        except (OSError, ValueError, RuntimeError) as e:
             logger.error(f"Export failed: {e}")
             self.toast_overlay.add_toast(
                 Adw.Toast(title=_("Export failed: {error}").format(error=e))
@@ -381,7 +391,7 @@ class MachineSettingsDialog(PatchedDialogWindow):
             return  # Safety check
 
         new_camera = Camera(
-            _("Camera {device_id}").format(device_id=device_id),
+            display_name(device_id),
             device_id,
         )
         new_camera.enabled = True

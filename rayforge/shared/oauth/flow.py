@@ -4,11 +4,12 @@ import socket as _socket
 import urllib.parse
 import urllib.request
 import webbrowser
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 logger = logging.getLogger(__name__)
@@ -19,8 +20,8 @@ class OAuthFlowConfig:
     authorize_url: str
     token_url: str
     client_id: str
-    client_secret: Optional[str] = None
-    scopes: List[str] = field(default_factory=list)
+    client_secret: str | None = None
+    scopes: list[str] = field(default_factory=list)
     redirect_port: int = 8765
     use_pkce: bool = False
 
@@ -28,10 +29,10 @@ class OAuthFlowConfig:
 @dataclass
 class OAuthResult:
     access_token: str
-    refresh_token: Optional[str] = None
-    expires_at: Optional[datetime] = None
-    scope: Optional[str] = None
-    raw_response: Dict[str, Any] = field(default_factory=dict)
+    refresh_token: str | None = None
+    expires_at: datetime | None = None
+    scope: str | None = None
+    raw_response: dict[str, Any] = field(default_factory=dict)
 
 
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
@@ -98,7 +99,7 @@ class OAuthFlow:
         redirect_uri = (
             f"http://127.0.0.1:{self._config.redirect_port}/callback"
         )
-        params: Dict[str, str] = {
+        params: dict[str, str] = {
             "response_type": "code",
             "client_id": self._config.client_id,
             "redirect_uri": redirect_uri,
@@ -116,7 +117,7 @@ class OAuthFlow:
         Start the OAuth flow. Opens the browser and listens for the
         callback on localhost. Calls on_complete or on_error when done.
         """
-        callback_received: Dict[str, Optional[str]] = {
+        callback_received: dict[str, str | None] = {
             "code": None,
             "error": None,
         }
@@ -149,7 +150,7 @@ class OAuthFlow:
         def run_server():
             try:
                 server.handle_request()
-            except Exception as e:
+            except (OSError, TimeoutError, ValueError) as e:
                 on_error(e)
                 return
 
@@ -157,7 +158,7 @@ class OAuthFlow:
                 try:
                     result = self._exchange_code(callback_received["code"])
                     on_complete(result)
-                except Exception as e:
+                except (OSError, TimeoutError, ValueError) as e:
                     on_error(e)
             else:
                 err = callback_received["error"] or "Unknown error"
@@ -173,7 +174,7 @@ class OAuthFlow:
         redirect_uri = (
             f"http://127.0.0.1:{self._config.redirect_port}/callback"
         )
-        data_dict: Dict[str, Any] = {
+        data_dict: dict[str, Any] = {
             "code": code,
             "client_id": self._config.client_id,
             "grant_type": "authorization_code",
@@ -195,7 +196,8 @@ class OAuthFlow:
         expires_at = None
         if expires_in:
             expires_at = datetime.fromtimestamp(
-                datetime.now().timestamp() + int(expires_in)
+                datetime.now(tz=timezone.utc).timestamp() + int(expires_in),
+                tz=timezone.utc,
             )
 
         return OAuthResult(
@@ -207,7 +209,7 @@ class OAuthFlow:
         )
 
     def refresh(self, refresh_token: str) -> OAuthResult:
-        data_dict: Dict[str, Any] = {
+        data_dict: dict[str, Any] = {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": self._config.client_id,
@@ -228,7 +230,8 @@ class OAuthFlow:
         expires_at = None
         if expires_in:
             expires_at = datetime.fromtimestamp(
-                datetime.now().timestamp() + int(expires_in)
+                datetime.now(tz=timezone.utc).timestamp() + int(expires_in),
+                tz=timezone.utc,
             )
 
         return OAuthResult(

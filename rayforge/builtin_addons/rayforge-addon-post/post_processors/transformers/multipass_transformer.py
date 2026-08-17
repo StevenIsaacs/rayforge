@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
-from raygeo.ops import Ops
+from raygeo.ops.transform.multipass import MultiPassSpec
 
 from rayforge.core.workpiece import WorkPiece
-from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
-from rayforge.shared.tasker.progress import ProgressContext
+from rayforge.pipeline.transformer.base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
@@ -23,6 +22,8 @@ class MultiPassTransformer(OpsTransformer):
     geometry. It can also apply a Z-axis step-down for each subsequent pass,
     which is useful for cutting through thick materials.
     """
+
+    SPEC_NAME = "multipass"
 
     def __init__(
         self, enabled: bool = True, passes: int = 1, z_step_down: float = 0.0
@@ -43,11 +44,6 @@ class MultiPassTransformer(OpsTransformer):
         # Use property setters to ensure validation logic is applied
         self.passes = passes
         self.z_step_down = z_step_down
-
-    @property
-    def execution_phase(self) -> ExecutionPhase:
-        """Multi-pass duplicates the final path, so it runs late."""
-        return ExecutionPhase.POST_PROCESSING
 
     @property
     def passes(self) -> int:
@@ -85,46 +81,15 @@ class MultiPassTransformer(OpsTransformer):
             "Repeats the path multiple times, optionally stepping down in Z."
         )
 
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """
-        Executes the multi-pass transformation on the Ops object.
+        workpiece: WorkPiece | None,
+        stock_geometries: list[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ) -> MultiPassSpec:
+        return MultiPassSpec(passes=self.passes, z_step_down=self.z_step_down)
 
-        Args:
-            ops: The Ops object to transform in-place.
-            context: Execution context for cancellation (not used here).
-        """
-        # No-op if only one pass and no Z movement is needed.
-        if self.passes <= 1 and self._z_step_down == 0.0:
-            return
-
-        # No-op if there are no commands to duplicate.
-        if ops.is_empty():
-            return
-
-        # Make a pristine copy of the original commands for subsequent passes.
-        original_ops = ops.copy()
-
-        # Generate and append subsequent passes
-        for i in range(1, self.passes):
-            # Create a fresh copy for this pass
-            pass_ops = original_ops.copy()
-
-            # Apply Z step-down if configured
-            if self._z_step_down != 0.0:
-                z_offset = i * self._z_step_down
-                # Translate by a negative amount to move down the Z axis
-                pass_ops.translate(0, 0, -abs(z_offset))
-
-            ops.extend(pass_ops)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the transformer's configuration to a dictionary."""
         return {
             **super().to_dict(),
@@ -133,7 +98,7 @@ class MultiPassTransformer(OpsTransformer):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MultiPassTransformer":
+    def from_dict(cls, data: dict[str, Any]) -> MultiPassTransformer:
         """Creates a MultiPassTransformer instance from a dictionary."""
         if data.get("name") != cls.__name__:
             raise ValueError(

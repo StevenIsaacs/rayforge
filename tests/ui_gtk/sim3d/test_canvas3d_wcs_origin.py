@@ -5,7 +5,12 @@ import pytest
 
 from rayforge.core.color import ColorSet
 from rayforge.machine.models.machine import Origin
-from rayforge.ui_gtk.sim3d.gl_utils import RenderContext
+from rayforge.ui_gtk.sim3d.gl_utils import ShaderSet
+from rayforge.ui_gtk.sim3d.render_context import (
+    CameraContext,
+    RenderContext,
+    ViewportContext,
+)
 from rayforge.ui_gtk.sim3d.renderer.axis_renderer_3d import AxisRenderer3D
 
 
@@ -37,7 +42,7 @@ def create_margin_offset(
 
     This matches the logic in Canvas3D.update_scene_from_doc().
     """
-    ml, mt, mr, mb = margins
+    ml, _mt, _mr, mb = margins
     margin_offset = np.identity(4, dtype=np.float32)
     margin_offset[0, 3] = -ml
     margin_offset[1, 3] = -mb
@@ -117,33 +122,25 @@ def test_wcs_marker_position(
         mock_text_shader = MagicMock()
 
         text_mvp = np.identity(4, dtype=np.float32)
-        scene_mvp = np.identity(4, dtype=np.float32)
-        view_matrix = np.identity(4, dtype=np.float32)
 
         ctx = RenderContext(
-            proj_matrix=np.eye(4, dtype=np.float32),
-            view_matrix=view_matrix,
-            mvp_ui=text_mvp,
-            mvp_scene=scene_mvp,
-            margin_shift=np.eye(4, dtype=np.float32),
-            model_matrix=model_matrix,
-            viewport_height=800,
-            camera_position=np.zeros(3),
-            color_set=ColorSet(),
+            camera=CameraContext(
+                mvp_ui=text_mvp,
+                viewport_height=800,
+                camera_position=np.zeros(3),
+                color_set=ColorSet(),
+            ),
+            viewport=ViewportContext(
+                model_matrix=model_matrix,
+                wcs_offset_mm=(wcs_x, wcs_y, 0.0),
+                x_right=x_right,
+                x_negative=x_neg,
+                y_negative=y_neg,
+            ),
         )
 
-        renderer.render(
-            ctx=ctx,
-            line_shader=mock_line_shader,
-            text_shader=mock_text_shader,
-            scene_mvp=scene_mvp,
-            text_mvp=text_mvp,
-            origin_offset_mm=(wcs_x, wcs_y, 0.0),
-            x_right=x_right,
-            y_down=y_down,
-            x_negative=x_neg,
-            y_negative=y_neg,
-        )
+        shaders = ShaderSet(main=mock_line_shader, text=mock_text_shader)
+        renderer.render(ctx=ctx, shaders=shaders)
 
     mvp_calls = [
         args[1]
@@ -156,8 +153,8 @@ def test_wcs_marker_position(
     assert len(mvp_calls) >= 2
     wcs_mvp = mvp_calls[-1]
 
-    actual_x = wcs_mvp[3, 0]
-    actual_y = wcs_mvp[3, 1]
+    actual_x = wcs_mvp[0, 3]
+    actual_y = wcs_mvp[1, 3]
 
     np.testing.assert_allclose(
         (actual_x, actual_y),

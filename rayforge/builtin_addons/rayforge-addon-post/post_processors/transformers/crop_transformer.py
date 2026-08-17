@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from raygeo.geo import Matrix
-from raygeo.ops import Ops
+from raygeo.ops.transform.clip import CropSpec
 
 from rayforge.core.workpiece import WorkPiece
-from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
-from rayforge.shared.tasker.progress import ProgressContext
+from rayforge.pipeline.transformer.base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
@@ -25,6 +24,7 @@ class CropTransformer(OpsTransformer):
     keeping only the parts that lie inside the stock boundary.
     """
 
+    SPEC_NAME = "crop"
     POSITION_SENSITIVE = True
 
     def __init__(
@@ -37,10 +37,6 @@ class CropTransformer(OpsTransformer):
         self._tolerance = tolerance
         self._offset = offset
         logger.debug(f"CropTransformer enabled={enabled}")
-
-    @property
-    def execution_phase(self) -> ExecutionPhase:
-        return ExecutionPhase.POST_PROCESSING
 
     @property
     def label(self) -> str:
@@ -70,25 +66,32 @@ class CropTransformer(OpsTransformer):
             self._offset = value
             self.changed.send(self)
 
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        if not self.enabled:
-            return
+        workpiece: WorkPiece | None,
+        stock_geometries: list[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ) -> CropSpec:
+        if not stock_geometries or workpiece is None:
+            return CropSpec(
+                tolerance=self._tolerance,
+                offset=self._offset,
+                regions=[],
+            )
+        regions = self._resolve_regions(workpiece, stock_geometries)
+        return CropSpec(
+            tolerance=self._tolerance,
+            offset=self._offset,
+            regions=regions,
+        )
 
-        if not stock_geometries:
-            return
-
-        if workpiece is None:
-            return
-
+    def _resolve_regions(
+        self,
+        workpiece: WorkPiece,
+        stock_geometries: list[Geometry],
+    ) -> list[list[tuple[float, float]]]:
         world_to_local = workpiece.get_world_transform().invert()
-        regions = []
+        regions: list[list[tuple[float, float]]] = []
 
         wp_size = workpiece.size
         scale_x, scale_y = wp_size if wp_size else (1.0, 1.0)
@@ -101,15 +104,12 @@ class CropTransformer(OpsTransformer):
                 scale_matrix = Matrix.scale(scale_x, scale_y)
                 local_geo = local_geo.transform(scale_matrix)
             polygons = local_geo.to_polygons(self._tolerance)
-            regions.extend(p for p in polygons if len(p) >= 3)
+            for p in polygons:
+                if len(p) >= 3:
+                    regions.append(p)
+        return regions
 
-        if not regions:
-            return
-
-        ops.preload_state()
-        ops.clip_ops_to_regions(regions, tolerance=self._tolerance)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             **super().to_dict(),
             "tolerance": self.tolerance,
@@ -117,7 +117,7 @@ class CropTransformer(OpsTransformer):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CropTransformer":
+    def from_dict(cls, data: dict[str, Any]) -> CropTransformer:
         return cls(
             enabled=data.get("enabled", True),
             tolerance=data.get("tolerance", 0.03),

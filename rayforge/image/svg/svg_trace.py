@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from gettext import gettext as _
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar
 
 from raygeo.geo import Geometry, Matrix
 from raygeo.geo.types import Rect
@@ -35,16 +35,16 @@ class SvgTraceImporter(SvgImporterBase):
     label = "SVG (Trace Strategy)"
     mime_types = ()
     extensions = ()
-    features = {ImporterFeature.BITMAP_TRACING}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.BITMAP_TRACING}
 
-    def __init__(self, data: bytes, source_file: Optional[Any] = None):
+    def __init__(self, data: bytes, source_file: Any | None = None):
         super().__init__(data, source_file)
-        self.traced_artefacts: Dict[str, Any] = {}
+        self.traced_artefacts: dict[str, Any] = {}
 
     def _analytical_trim(self, data: bytes) -> bytes:
         return trim_svg(data)
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         # 1. Use base class to get dimensions and units
         basics = self._calculate_parsing_basics()
         if not basics:
@@ -196,7 +196,7 @@ class SvgTraceImporter(SvgImporterBase):
             float(rendered_height),
         )
 
-        trace_untrimmed_bounds: Optional[Rect] = None
+        trace_untrimmed_bounds: Rect | None = None
         if parse_result.untrimmed_document_bounds:
             u_native = parse_result.untrimmed_document_bounds
             # Convert untrimmed native size to trace pixels
@@ -212,7 +212,7 @@ class SvgTraceImporter(SvgImporterBase):
 
         # Calculate authoritative world frame for the traced image
         t_ref_bounds = trace_untrimmed_bounds or trace_document_bounds
-        t_x, t_y, t_w, t_h = t_ref_bounds
+        t_x, _t_y, t_w, t_h = t_ref_bounds
         t_w_mm = t_w * mm_per_px_x
         t_h_mm = t_h * mm_per_px_x
         t_x_mm = t_x * mm_per_px_x

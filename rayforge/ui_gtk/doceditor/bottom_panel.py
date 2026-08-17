@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from blinker import Signal
 from gi.repository import Adw, Gtk
@@ -9,7 +10,7 @@ from raygeo.ops.axis import Axis
 from ...logging_setup import ui_log_event_received
 from ...machine.cmd import MachineCmd
 from ...machine.driver.dummy import NoDeviceDriver
-from ...machine.models.machine import Machine, Origin
+from ...machine.models.machine import Machine
 from ...shared.gcodeedit.viewer import GcodeViewer
 from ...shared.tasker import task_mgr
 from ..doceditor.layers_tab import LayersTab
@@ -18,12 +19,12 @@ from ..machine.console import Console
 from ..machine.jog_widget import JogWidget
 from ..machine.laser_control_widget import LaserControlWidget
 from ..machine.wcs_dialog import WcsDialog
-from ..shared.adwfix import get_spinrow_float
 from ..shared.dock_item import DockItem
 from ..shared.dock_layout import DockLayout
 from ..shared.gtk import apply_css
+from ..shared.pref_rows.length_spin_row import LengthSpinRow
+from ..shared.pref_rows.speed_spin_row import SpeedSpinRow
 from ..shared.responsive_box import ResponsiveBox
-from ..shared.unit_spin_row import UnitSpinRowHelper
 from .asset_browser import AssetBrowser
 
 if TYPE_CHECKING:
@@ -44,9 +45,9 @@ apply_css(controls_css)
 class BottomPanel(Gtk.Box):
     def __init__(
         self,
-        machine: Optional[Machine],
+        machine: Machine | None,
         doc_editor: "DocEditor",
-        machine_cmd: Optional[MachineCmd] = None,
+        machine_cmd: MachineCmd | None = None,
         **kwargs,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, **kwargs)
@@ -64,9 +65,9 @@ class BottomPanel(Gtk.Box):
         self._click_to_zero_mode = False
         self._updating_wcs_ui = False
         self._active_layer = None
-        self._get_bounds_callback: Optional[
-            Callable[[], Optional[Tuple[float, float, float, float]]]
-        ] = None
+        self._get_bounds_callback: (
+            Callable[[], tuple[float, float, float, float] | None] | None
+        ) = None
 
         self.console = Console()
         self.console.set_hexpand(True)
@@ -279,7 +280,7 @@ class BottomPanel(Gtk.Box):
         async def send_command(ctx):
             try:
                 await machine.run_raw(command)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fire-and-forget task
                 logger.error(str(e), extra={"log_category": "ERROR"})
 
         task_mgr.add_coroutine(send_command)
@@ -404,9 +405,7 @@ class BottomPanel(Gtk.Box):
         )
         self.zero_here_btn.add_css_class("flat")
         self.zero_here_btn.set_size_request(40, -1)
-        self.zero_here_btn.connect(
-            "clicked", self._on_zero_axis_clicked, Axis.X | Axis.Y | Axis.Z
-        )
+        self.zero_here_btn.connect("clicked", self._on_zero_here_clicked)
         zero_button_box.append(self.zero_here_btn)
 
         self._click_to_zero_icon = get_icon("crosshairs-symbolic")
@@ -424,41 +423,36 @@ class BottomPanel(Gtk.Box):
             _("Click on canvas to set work zero")
         )
 
-        speed_adjustment = Gtk.Adjustment(
-            value=1000, lower=1, upper=60000, step_increment=10
+        self.speed_row = SpeedSpinRow(
+            _("Jog Speed"),
+            _("Speed"),
+            lower=1,
+            upper=60000,
+            value_in_base=1000,
         )
-        self.speed_row = Adw.SpinRow(
-            title=_("Jog Speed"),
-            subtitle=_("Speed"),
-            adjustment=speed_adjustment,
-        )
-        self.speed_helper = UnitSpinRowHelper(
-            self.speed_row, quantity="speed", max_value_in_base=60000
-        )
-        self.speed_helper.set_value_in_base_units(1000)
-        self.speed_helper.changed.connect(self._on_speed_changed)
+        self.speed_row.value_changed.connect(self._on_speed_changed)
         self.wcs_group.add(self.speed_row)
 
-        distance_adjustment = Gtk.Adjustment(
-            value=10.0, lower=0.1, upper=1000, step_increment=1
+        self.distance_row = LengthSpinRow(
+            _("Jog Distance"),
+            _("Distance in machine units"),
+            lower=0.1,
+            upper=1000,
+            value_in_base=10.0,
         )
-        self.distance_row = Adw.SpinRow(
-            title=_("Jog Distance"),
-            subtitle=_("Distance in machine units"),
-            adjustment=distance_adjustment,
-            digits=1,
-        )
-        self.distance_row.connect("changed", self._on_distance_changed)
+        self.distance_row.value_changed.connect(self._on_distance_changed)
         self.wcs_group.add(self.distance_row)
 
         self._update_wcs_ui()
 
-    def _on_speed_changed(self, helper):
-        speed_mm_min = int(helper.get_value_in_base_units())
+    def _on_speed_changed(self, row):
+        speed_mm_min = int(self.speed_row.get_value_in_base_units())
         self.jog_widget.jog_speed = speed_mm_min
 
-    def _on_distance_changed(self, spin_row):
-        self.jog_widget.jog_distance = get_spinrow_float(spin_row)
+    def _on_distance_changed(self, row):
+        self.jog_widget.jog_distance = (
+            self.distance_row.get_value_in_base_units()
+        )
 
     def _connect_machine_signals(self):
         if self.machine:
@@ -476,8 +470,8 @@ class BottomPanel(Gtk.Box):
 
     def set_machine(
         self,
-        machine: Optional[Machine],
-        machine_cmd: Optional[MachineCmd] = None,
+        machine: Machine | None,
+        machine_cmd: MachineCmd | None = None,
     ):
         self._disconnect_machine_signals()
 
@@ -515,6 +509,14 @@ class BottomPanel(Gtk.Box):
         machine = self.machine
         task_mgr.add_coroutine(lambda ctx: machine.set_work_origin_here(axis))
 
+    def _on_zero_here_clicked(self, button):
+        if not self.machine:
+            return
+        machine = self.machine
+        task_mgr.add_coroutine(
+            lambda ctx: machine.set_work_origin_here(machine.available_axes)
+        )
+
     def set_click_to_zero_mode(self, active: bool):
         if self._click_to_zero_mode != active:
             self._click_to_zero_mode = active
@@ -523,9 +525,8 @@ class BottomPanel(Gtk.Box):
 
     def set_get_bounds_callback(
         self,
-        callback: Optional[
-            Callable[[], Optional[Tuple[float, float, float, float]]]
-        ],
+        callback: Callable[[], tuple[float, float, float, float] | None]
+        | None,
     ):
         self._get_bounds_callback = callback
 
@@ -557,45 +558,29 @@ class BottomPanel(Gtk.Box):
 
         min_x, min_y, max_x, max_y = bounds
 
+        # The bounds are in WORLD coordinates while the buttons refer to
+        # the presented (PANEL) corners, so project the selection into
+        # PANEL space before picking the corner.
+        panel = self.machine.panel
+        panel_min_x, panel_min_y, panel_max_x, panel_max_y = (
+            panel.world_bbox_to_panel((min_x, min_y, max_x, max_y))
+        )
+
         if position == "ll":
-            # Machine's lower-left corner depends on origin:
-            # - Right-side origins invert X (ll → max_x)
-            # - Top-side origins invert Y (ll → max_y)
-            world_x = (
-                max_x
-                if self.machine.origin
-                in (Origin.BOTTOM_RIGHT, Origin.TOP_RIGHT)
-                else min_x
-            )
-            world_y = (
-                max_y
-                if self.machine.origin
-                in (Origin.TOP_LEFT, Origin.TOP_RIGHT)
-                else min_y
-            )
+            panel_x, panel_y = panel_min_x, panel_min_y
         elif position == "center":
-            world_x, world_y = (min_x + max_x) / 2, (min_y + max_y) / 2
+            panel_x, panel_y = (
+                (panel_min_x + panel_max_x) / 2,
+                (panel_min_y + panel_max_y) / 2,
+            )
         elif position == "ur":
-            # Upper-right is the inverse of lower-left
-            world_x = (
-                min_x
-                if self.machine.origin
-                in (Origin.BOTTOM_RIGHT, Origin.TOP_RIGHT)
-                else max_x
-            )
-            world_y = (
-                min_y
-                if self.machine.origin
-                in (Origin.TOP_LEFT, Origin.TOP_RIGHT)
-                else max_y
-            )
+            panel_x, panel_y = panel_max_x, panel_max_y
         else:
             return
 
-        space = self.machine.get_coordinate_space()
-        machine_x, machine_y = space.world_point_to_machine(world_x, world_y)
+        machine_x, machine_y = panel.panel_point_to_machine(panel_x, panel_y)
         wcs_offset = self.machine.get_active_wcs_offset()
-        x_off, y_off, _ = space.get_command_offset(
+        x_off, y_off, _ = panel.get_command_offset(
             wcs_offset=wcs_offset,
             wcs_is_workarea_origin=self.machine.wcs_origin_is_workarea_origin,
         )
@@ -702,9 +687,10 @@ class BottomPanel(Gtk.Box):
         self.wcs_row.set_title(title)
 
         off_x, off_y, off_z = self.machine.get_active_wcs_offset()
-        self.wcs_row.set_subtitle(
-            f"X: {off_x:.2f}   Y: {off_y:.2f}   Z: {off_z:.2f}"
-        )
+        offset_parts = [f"X: {off_x:.2f}", f"Y: {off_y:.2f}"]
+        if self.machine.has_z_axis:
+            offset_parts.append(f"Z: {off_z:.2f}")
+        self.wcs_row.set_subtitle("   ".join(offset_parts))
 
         n = self._wcs_model.get_n_items()
         for i in range(n):
@@ -742,7 +728,7 @@ class BottomPanel(Gtk.Box):
             pos_str += f"X: {pos_x:.2f}   "
         if pos_y is not None:
             pos_str += f"Y: {pos_y:.2f}   "
-        if pos_z is not None:
+        if pos_z is not None and self.machine.has_z_axis:
             pos_str += f"Z: {pos_z:.2f}"
 
         if not is_active:
@@ -757,6 +743,7 @@ class BottomPanel(Gtk.Box):
         self.zero_x_btn.set_sensitive(can_zero)
         self.zero_y_btn.set_sensitive(can_zero)
         self.zero_z_btn.set_sensitive(can_zero)
+        self.zero_z_btn.set_visible(self.machine.has_z_axis)
         self.zero_here_btn.set_sensitive(can_zero)
         self.edit_offsets_btn.set_sensitive(can_manual)
 

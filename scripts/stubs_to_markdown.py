@@ -108,9 +108,7 @@ def convert_docstring_sections(text: str) -> tuple[str, dict[str, str]]:
         line = lines[i]
         stripped = line.strip()
 
-        if stripped.startswith("Attributes:") or stripped.startswith(
-            "Attributes:"
-        ):
+        if stripped.startswith(("Attributes:", "Attributes:")):
             in_attrs = True
             in_args = False
             in_returns = False
@@ -149,7 +147,7 @@ def convert_docstring_sections(text: str) -> tuple[str, dict[str, str]]:
         if in_example:
             if stripped == "" and example_lines:
                 pass
-            elif stripped.startswith("```") or stripped.startswith(".."):
+            elif stripped.startswith(("```", "..")):
                 in_example = False
                 result.extend(example_lines)
                 continue
@@ -163,7 +161,7 @@ def convert_docstring_sections(text: str) -> tuple[str, dict[str, str]]:
             if (
                 i < len(lines)
                 and not lines[i].startswith(" ")
-                and not lines[i].strip() == ""
+                and lines[i].strip() != ""
             ):
                 in_example = False
                 result.extend(example_lines)
@@ -171,14 +169,14 @@ def convert_docstring_sections(text: str) -> tuple[str, dict[str, str]]:
             i += 1
             continue
 
-        if stripped.startswith("Args:") or stripped.startswith("Parameters:"):
+        if stripped.startswith(("Args:", "Parameters:")):
             in_args = True
             in_returns = False
             in_raises = False
             i += 1
             continue
 
-        if stripped.startswith("Returns:") or stripped.startswith("Return:"):
+        if stripped.startswith(("Returns:", "Return:")):
             in_args = False
             in_returns = True
             in_raises = False
@@ -188,7 +186,7 @@ def convert_docstring_sections(text: str) -> tuple[str, dict[str, str]]:
             i += 1
             continue
 
-        if stripped.startswith("Raises:") or stripped.startswith("Raise:"):
+        if stripped.startswith(("Raises:", "Raise:")):
             in_args = False
             in_returns = False
             in_raises = True
@@ -312,7 +310,7 @@ def format_annotation(node: ast.expr | None) -> str:
         return ""
     try:
         return clean_type(ast.unparse(node))
-    except Exception:
+    except (TypeError, ValueError, IndexError, AttributeError):
         return ""
 
 
@@ -323,7 +321,7 @@ def format_default(node: ast.expr | None) -> str:
         return ""
     try:
         return f" = {ast.unparse(node)}"
-    except Exception:
+    except (TypeError, ValueError, IndexError, AttributeError):
         return ""
 
 
@@ -411,7 +409,7 @@ def extract_params(
         type_str = f"{ann}" if ann else ""
         if def_str:
             type_str = (
-                f"{type_str}{def_str}" if type_str else def_str.strip(" = ")
+                f"{type_str}{def_str}" if type_str else def_str.strip(" =")
             )
         params.append({"name": arg.arg, "type": type_str})
 

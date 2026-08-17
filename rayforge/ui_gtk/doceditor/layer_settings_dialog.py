@@ -7,8 +7,9 @@ from ...context import get_context
 from ...core.layer import Layer
 from ..icons import get_icon
 from ..machine.wcs_dialog import WcsDialog
-from ..shared.adwfix import get_spinrow_float
 from ..shared.patched_dialog_window import PatchedDialogWindow
+from ..shared.pref_rows.length_spin_row import LengthSpinRow
+from .material_selector import MaterialRow
 
 if TYPE_CHECKING:
     from ...doceditor.editor import DocEditor
@@ -64,6 +65,8 @@ class LayerSettingsDialog(PatchedDialogWindow):
         color_dialog = Gtk.ColorDialog()
         color_dialog.set_with_alpha(False)
         self.color_button = Gtk.ColorDialogButton(dialog=color_dialog)
+        self.color_button.set_size_request(45, 45)
+        self.color_button.set_valign(Gtk.Align.CENTER)
         rgba = Gdk.RGBA()
         rgba.parse(layer.color)
         self.color_button.set_rgba(rgba)
@@ -130,21 +133,27 @@ class LayerSettingsDialog(PatchedDialogWindow):
         self.module_row.set_sensitive(layer.rotary_enabled)
         rotary_group.add(self.module_row)
 
-        rotary_diameter_adjustment = Gtk.Adjustment(
-            lower=1, upper=1000, step_increment=1, page_increment=10
+        self.rotary_diameter_row = LengthSpinRow(
+            _("Object Diameter"),
+            _("Diameter of the cylindrical object"),
+            lower=1,
+            upper=1000,
+            value_in_base=layer.rotary_diameter,
         )
-        self.rotary_diameter_row = Adw.SpinRow(
-            title=_("Object Diameter"),
-            subtitle=_("Diameter of the cylindrical object in machine units"),
-            adjustment=rotary_diameter_adjustment,
-            digits=2,
-        )
-        rotary_diameter_adjustment.set_value(layer.rotary_diameter)
-        self.rotary_diameter_row.connect(
-            "notify::value", self._on_rotary_diameter_changed
+        self.rotary_diameter_row.value_changed.connect(
+            self._on_rotary_diameter_changed
         )
         self.rotary_diameter_row.set_sensitive(layer.rotary_enabled)
         rotary_group.add(self.rotary_diameter_row)
+
+        self.stock_material_row = MaterialRow(
+            _("Stock Material"),
+            _("Material rendered on the rotary object"),
+            on_select=self._on_stock_material_selected,
+        )
+        self.stock_material_row.set_sensitive(layer.rotary_enabled)
+        rotary_group.add(self.stock_material_row)
+        self.stock_material_row.set_material(layer.stock_material)
 
         self._is_initializing = False
 
@@ -157,7 +166,7 @@ class LayerSettingsDialog(PatchedDialogWindow):
 
     def _populate_wcs_store(self):
         self._wcs_store = Gtk.StringList()
-        self._wcs_values: list[Optional[str]] = [None]
+        self._wcs_values: list[str | None] = [None]
         self._wcs_store.append(_("Default"))
         machine = get_context().machine
         if machine:
@@ -172,7 +181,7 @@ class LayerSettingsDialog(PatchedDialogWindow):
         else:
             self.wcs_row.set_selected(0)
 
-    def _get_selected_wcs(self) -> Optional[str]:
+    def _get_selected_wcs(self) -> str | None:
         idx = self.wcs_row.get_selected()
         if idx < len(self._wcs_values):
             return self._wcs_values[idx]
@@ -230,6 +239,7 @@ class LayerSettingsDialog(PatchedDialogWindow):
         enabled = row.get_active()
         self.module_row.set_sensitive(enabled)
         self.rotary_diameter_row.set_sensitive(enabled)
+        self.stock_material_row.set_sensitive(enabled)
         self.layer.set_rotary_enabled(enabled)
         if enabled and self.layer.rotary_module_uid is None:
             machine = get_context().machine
@@ -238,7 +248,7 @@ class LayerSettingsDialog(PatchedDialogWindow):
                 if default_rm:
                     self.layer.set_rotary_module_uid(default_rm.uid)
                     self.layer.set_rotary_diameter(default_rm.default_diameter)
-                    self.rotary_diameter_row.set_value(
+                    self.rotary_diameter_row.set_value_in_base_units(
                         default_rm.default_diameter
                     )
 
@@ -254,21 +264,34 @@ class LayerSettingsDialog(PatchedDialogWindow):
                 rm = machine.get_rotary_module_by_uid(uid)
                 if rm:
                     self.layer.set_rotary_diameter(rm.default_diameter)
-                    self.rotary_diameter_row.set_value(rm.default_diameter)
+                    self.rotary_diameter_row.set_value_in_base_units(
+                        rm.default_diameter
+                    )
 
-    def _on_rotary_diameter_changed(self, spinrow, _param):
+    def _on_rotary_diameter_changed(self, row):
         if self._is_initializing:
             return
-        diameter = get_spinrow_float(spinrow)
+        diameter = self.rotary_diameter_row.get_value_in_base_units()
         self.layer.set_rotary_diameter(diameter)
+
+    def _on_stock_material_selected(self, material_uid: str | None):
+        """Callback for the rotary stock material selector."""
+        if material_uid is None:
+            return
+        if self.editor is not None:
+            self.editor.layer.set_layer_stock_material(
+                self.layer, material_uid
+            )
+        else:
+            self.layer.set_stock_material_uid(material_uid)
 
     def _on_color_changed(self, button, _param):
         if self._is_initializing:
             return
         rgba = button.get_rgba()
-        r = int(round(rgba.red * 255))
-        g = int(round(rgba.green * 255))
-        b = int(round(rgba.blue * 255))
+        r = round(rgba.red * 255)
+        g = round(rgba.green * 255)
+        b = round(rgba.blue * 255)
         hex_color = f"#{r:02x}{g:02x}{b:02x}"
         self.layer.set_color(hex_color)
 

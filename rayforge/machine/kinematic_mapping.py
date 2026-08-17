@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 from raygeo.ops import Ops
@@ -12,6 +13,7 @@ from .models.rotary_module import RotaryMode, RotaryType
 
 if TYPE_CHECKING:
     from ..core.doc import Doc
+    from .assembly import Assembly
     from .models.machine import Machine
     from .models.rotary_module import RotaryModule
 
@@ -21,7 +23,7 @@ def _resolve_rotary_layer_by_uid(layer_uid: str, doc):
     descendant = doc.find_descendant_by_uid(layer_uid)
     if not isinstance(descendant, Layer):
         return None
-    if not descendant.rotary_module_uid or not descendant.rotary_enabled:
+    if not descendant.rotary_enabled:
         return None
     return descendant
 
@@ -30,14 +32,72 @@ def _is_valid_replacement_module(module):
     """Check whether an AXIS_REPLACEMENT module is valid for mapping.
 
     Modules in AXIS_REPLACEMENT mode are only valid when they have a
-    positive ``mu_per_rotation`` *or* their target axis is one of the
+    positive ``mm_per_rotation`` *or* their target axis is one of the
     standard XYZ axes (which can accept degree values directly).
     """
     if module.mode != RotaryMode.AXIS_REPLACEMENT:
         return True
-    if module.mu_per_rotation > 0:
+    if module.mm_per_rotation > 0:
         return True
     return module.axis in KinematicMapping._AXIS_TO_INDEX
+
+
+@dataclass(frozen=True)
+class RotaryAxisConfig:
+    """Resolved rotary configuration for a layer.
+
+    ``source_axis`` is the world-space axis whose movement is mapped
+    onto ``rotary_axis``. ``module`` is the effective rotary module
+    resolved for the layer (``None`` when rotary is disabled or no
+    module applies).
+    """
+
+    source_axis: Axis
+    rotary_axis: Axis | None
+    module: RotaryModule | None = None
+
+
+def resolve_layer_rotary(
+    layer: Layer | None, machine: Machine
+) -> RotaryAxisConfig:
+    """Resolve the rotary axis configuration for *layer*.
+
+    Single source of truth shared by ``OpPlayer``, ``SnapshotBuilder``,
+    and the 3D canvas.  Rotary is only active for layers with
+    ``rotary_enabled``; the effective module is resolved through
+    ``machine.get_rotary_module_for_layer`` (including default-module
+    fallback).  TRUE_4TH_AXIS modules map the source axis onto
+    ``module.axis``; all other modes use ``Axis.Y`` as the rotary axis.
+    """
+    if not isinstance(layer, Layer) or not layer.rotary_enabled:
+        return RotaryAxisConfig(Axis.Y, None, None)
+    module = machine.get_rotary_module_for_layer(layer)
+    if module is None:
+        return RotaryAxisConfig(Axis.Y, None, None)
+    if module.mode == RotaryMode.TRUE_4TH_AXIS:
+        rotary_axis = module.axis
+    else:
+        rotary_axis = Axis.Y
+    return RotaryAxisConfig(Axis.Y, rotary_axis, module)
+
+
+def build_layer_assembly(
+    machine: Machine,
+    layer: Layer | None = None,
+) -> Assembly:
+    """Build a throwaway assembly for *layer*'s rotary config.
+
+    Reads only: it resolves the layer's rotary module via
+    ``machine.get_rotary_module_for_layer`` and builds a fresh assembly
+    without mutating the machine.  When *layer* is None or flat, a flat
+    assembly (no rotary) is returned.
+    """
+    modules = None
+    if layer is not None and layer.rotary_enabled:
+        module = machine.get_rotary_module_for_layer(layer)
+        if module is not None:
+            modules = {module.uid: module}
+    return machine.build_assembly_for_rotary(modules)
 
 
 class KinematicMapping:
@@ -56,9 +116,9 @@ class KinematicMapping:
         gear_ratio: float = 1.0,
         reverse: bool = False,
         axis_position: float = 0.0,
-        axis_position_3d: Optional[np.ndarray] = None,
-        cylinder_dir: Optional[np.ndarray] = None,
-        replaced_axis: Optional[Axis] = None,
+        axis_position_3d: np.ndarray | None = None,
+        cylinder_dir: np.ndarray | None = None,
+        replaced_axis: Axis | None = None,
     ):
         self.rotary_axis = rotary_axis
         self.diameter = diameter
@@ -83,7 +143,7 @@ class KinematicMapping:
         module: RotaryModule,
         diameter: float,
         apply_gear_ratio: bool = True,
-    ) -> Optional[KinematicMapping]:
+    ) -> KinematicMapping | None:
         if module.mode == RotaryMode.TRUE_4TH_AXIS:
             rotary_axis = module.axis
             replaced_axis = None
@@ -126,15 +186,15 @@ class KinematicMapping:
             replaced_axis=replaced_axis,
         )
 
-    def _mu_to_degrees(self, mu: float) -> float:
-        return KinematicMath.mu_to_degrees(
-            mu,
+    def _mm_to_degrees(self, mm: float) -> float:
+        return KinematicMath.mm_to_degrees(
+            mm,
             self.diameter,
             gear_ratio=self.gear_ratio,
             reverse=self.reverse,
         )
 
-    _AXIS_TO_INDEX: Dict[Axis, int] = {
+    _AXIS_TO_INDEX: ClassVar[dict[Axis, int]] = {
         Axis.X: 0,
         Axis.Y: 1,
         Axis.Z: 2,
@@ -148,10 +208,10 @@ class KinematicMapping:
         )
 
         def on_endpoint(
-            end: List[float],
-            extra_axes: Dict[Axis, float],
+            end: list[float],
+            extra_axes: dict[Axis, float],
         ) -> None:
-            degrees = self._mu_to_degrees(end[1])
+            degrees = self._mm_to_degrees(end[1])
             extra_axes[self.rotary_axis] = degrees
             end[1] = float(
                 self.axis_position_3d[1] + end[0] * self.cylinder_dir[1]
@@ -159,8 +219,8 @@ class KinematicMapping:
             if replaced_idx is not None:
                 end[replaced_idx] = 0.0
 
-        def on_aux_point(point: List[float]) -> None:
-            point[1] = self._mu_to_degrees(point[1])
+        def on_aux_point(point: list[float]) -> None:
+            point[1] = self._mm_to_degrees(point[1])
 
         ops.transform_moving(on_endpoint, on_aux_point)
 
@@ -204,11 +264,14 @@ class KinematicMapping:
                 encoding.
         """
 
+        if not machine.rotary_modules or not doc.has_rotary_layer:
+            return
+
         def _on_layer(layer_uid: str, layer_ops: Ops) -> None:
             layer = _resolve_rotary_layer_by_uid(layer_uid, doc)
             if layer is None:
                 return
-            module = machine.rotary_modules.get(layer.rotary_module_uid or "")
+            module = machine.get_rotary_module_for_layer(layer)
             if module is None or not _is_valid_replacement_module(module):
                 return
             mapping = KinematicMapping.from_rotary_module(
@@ -220,18 +283,18 @@ class KinematicMapping:
                 return
             mapping.apply(layer_ops)
             if apply_scaled_mu and module.mode == RotaryMode.AXIS_REPLACEMENT:
-                KinematicMapping.degrees_to_scaled_mu_pass(
+                KinematicMapping.degrees_to_mm_pass(
                     layer_ops,
-                    module.mu_per_rotation,
+                    module.mm_per_rotation,
                     target_axis=module.axis,
                 )
 
         ops.transform_layers(_on_layer)
 
     @staticmethod
-    def degrees_to_scaled_mu_pass(
+    def degrees_to_mm_pass(
         ops: Ops,
-        mu_per_rotation: float,
+        mm_per_rotation: float,
         target_axis: Axis = Axis.Y,
     ) -> None:
         idx = KinematicMapping._AXIS_TO_INDEX.get(target_axis, 1)
@@ -241,22 +304,20 @@ class KinematicMapping:
         )
 
         def on_endpoint(
-            end: List[float],
-            extra_axes: Dict[Axis, float],
+            end: list[float],
+            extra_axes: dict[Axis, float],
         ) -> None:
             degrees = extra_axes.pop(Axis.Y, None)
             if degrees is None:
                 return
-            end[idx] = KinematicMath.degrees_to_scaled_mu(
-                degrees, mu_per_rotation
-            )
+            end[idx] = KinematicMath.degrees_to_mm(degrees, mm_per_rotation)
             if null_source:
                 end[1] = 0.0
 
-        def on_aux_point(point: List[float]) -> None:
+        def on_aux_point(point: list[float]) -> None:
             if idx < len(point):
-                point[idx] = KinematicMath.degrees_to_scaled_mu(
-                    point[idx], mu_per_rotation
+                point[idx] = KinematicMath.degrees_to_mm(
+                    point[idx], mm_per_rotation
                 )
             if null_source:
                 point[1] = 0.0

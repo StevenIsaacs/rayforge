@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Rayforge\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-07-16 23:19+0200\n"
+"POT-Creation-Date: 2026-08-14 21:42+0200\n"
 "PO-Revision-Date: 2026-02-23 01:17+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: Ukrainian\n"
@@ -57,9 +57,17 @@ msgstr "Плоский"
 msgid "Rotary · {name}"
 msgstr "Роторний · {name}"
 
-#: rayforge/core/layer.py
+#: rayforge/core/layer.py rayforge/core/capability.py
 msgid "Rotary"
 msgstr "Поворотний"
+
+#: rayforge/core/doc.py
+msgid "Layer {}"
+msgstr "Шар {}"
+
+#: rayforge/core/doc.py rayforge/doceditor/layer_cmd.py
+msgid "Layer"
+msgstr "Шар"
 
 #: rayforge/core/stock.py
 #, python-brace-format
@@ -109,9 +117,25 @@ msgid "Model '{model}' not found. Available: {available}"
 msgstr "Модель '{model}' не знайдено. Доступні: {available}"
 
 #: rayforge/core/step.py
-#, python-brace-format
-msgid "{power_percent}% power, {speed_str}"
-msgstr "{power_percent}% потужність, {speed_str}"
+msgid "Cut Speed"
+msgstr "Швидкість різання"
+
+#: rayforge/core/step.py
+msgid "Speed of the cutting operation"
+msgstr "Швидкість операції різання"
+
+#: rayforge/core/step.py
+msgid "Travel Speed"
+msgstr "Швидкість переміщення"
+
+#: rayforge/core/step.py
+msgid "Speed of rapid positioning moves"
+msgstr "Швидкість швидких позиціонувальних рухів"
+
+#: rayforge/core/step.py rayforge/machine/models/dialect/base.py
+#: rayforge/ui_gtk/settings/settings_dialog.py rayforge/ui_gtk/main_menu.py
+msgid "Settings"
+msgstr "Налаштування"
 
 #: rayforge/core/varset/choicevar.py
 msgid "Choice"
@@ -164,6 +188,10 @@ msgstr "Значення має бути не менше {min_val}."
 msgid "Value must be at most {max_val}."
 msgstr "Значення має бути не більше {max_val}."
 
+#: rayforge/core/varset/intvar.py
+msgid "Slider (Integer)"
+msgstr "Повзунок (ціле число)"
+
 #: rayforge/core/varset/portvar.py
 msgid "Port cannot be empty."
 msgstr "Порт не може бути порожнім."
@@ -183,6 +211,14 @@ msgstr "Повзунок (0-100%)"
 #: rayforge/core/varset/textareavar.py
 msgid "Text (Multi-Line)"
 msgstr "Текст (багато рядків)"
+
+#: rayforge/core/varset/labeledchoicevar.py
+msgid "Choice (Labeled)"
+msgstr "Вибір (з мітками)"
+
+#: rayforge/core/varset/tuplevar.py
+msgid "Tuple"
+msgstr "Кортеж"
 
 #: rayforge/core/varset/boolvar.py
 msgid "Boolean (Switch)"
@@ -238,95 +274,35 @@ msgstr "Всередині-Ззовні"
 msgid "Outside-Inside"
 msgstr "Ззовні-Всередині"
 
-#: rayforge/core/capability.py rayforge/machine/models/laser.py
-#: rayforge/ui_gtk/machine/laser_control_widget.py
-msgid "Laser Head"
-msgstr "Лазерна головка"
-
-#: rayforge/core/capability.py rayforge/ui_gtk/main_menu.py
-#: rayforge/ui_gtk/doceditor/asset_browser.py
-#: rayforge/ui_gtk/doceditor/layer_column.py
-msgid "Cut"
-msgstr "Різання"
+#: rayforge/core/capability.py rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/bottom_panel.py
+msgid "Laser"
+msgstr "Лазер"
 
 #: rayforge/core/capability.py
-msgid "Optionally force a specific laser head"
-msgstr "Опціонально примусово використовувати певну лазерну головку"
+msgid "Mill"
+msgstr "Фрезерування"
 
-#: rayforge/core/capability.py rayforge/ui_gtk/machine/laser_control_widget.py
-msgid "Power"
-msgstr "Потужність"
-
-#: rayforge/core/capability.py
-msgid "Tab Power"
-msgstr "Потужність закладки"
-
-#: rayforge/core/capability.py
-#, python-format
-msgid "Laser power at tab positions (% of cut power)"
-msgstr "Потужність лазера в позиціях закладок (% від потужності різання)"
-
-#: rayforge/core/capability.py
-msgid "Cut Speed"
-msgstr "Швидкість різання"
-
-#: rayforge/core/capability.py
-msgid "Travel Speed"
-msgstr "Швидкість переміщення"
-
-#: rayforge/core/capability.py
-msgid "Air Assist"
-msgstr "Повітряний обдув"
-
-#: rayforge/core/capability.py
-msgid "Engrave"
-msgstr "Гравіювання"
-
-#: rayforge/core/capability.py
-msgid "Engrave Speed"
-msgstr "Швидкість гравіювання"
-
-#: rayforge/core/capability.py
-msgid "Score"
-msgstr "Надріз"
-
-#: rayforge/core/capability.py
-msgid "Score Speed"
-msgstr "Швидкість надрізу"
-
-#: rayforge/core/capability.py
-msgid "Kerf"
-msgstr "Пропил"
-
-#: rayforge/core/capability.py
-msgid "The effective width of the laser beam"
-msgstr "Ефективна ширина лазерного променя"
-
-#: rayforge/core/capability.py
-msgid "Material Test"
-msgstr "Тест матеріалу"
-
-#: rayforge/core/capability.py
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
+#: rayforge/core/capability.py rayforge/ui_gtk/machine/head_preferences_page.py
 msgid "PWM"
 msgstr "ШІМ"
 
-#: rayforge/core/capability.py rayforge/ui_gtk/machine/laser_control_widget.py
-msgid "Frequency"
-msgstr "Частота"
-
-#: rayforge/core/capability.py rayforge/ui_gtk/machine/laser_control_widget.py
-msgid "PWM frequency in Hz"
-msgstr "Частота ШІМ у Гц"
-
-#: rayforge/core/capability.py rayforge/ui_gtk/machine/laser_control_widget.py
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Pulse Width"
-msgstr "Ширина імпульсу"
+#: rayforge/core/capability.py
+msgid "Cutting and engraving with a laser"
+msgstr "Різання та гравіювання лазером"
 
 #: rayforge/core/capability.py
-msgid "Pulse width in microseconds"
-msgstr "Ширина імпульсу в мікросекундах"
+msgid "Milling and routing with a spindle"
+msgstr "Фрезерування та контурна обробка шпинделем"
+
+#: rayforge/core/capability.py
+msgid "Pulse-width-modulated laser power control"
+msgstr "Широтно-імпульсне керування потужністю лазера"
+
+#: rayforge/core/capability.py
+msgid "Rotary axis attachment for cylindrical objects"
+msgstr "Поворотний пристрій для циліндричних об'єктів"
 
 #: rayforge/core/model_manager.py
 msgid "Core"
@@ -405,13 +381,13 @@ msgstr ""
 "працювати нестабільно. Використовуйте на власний ризик."
 
 #: rayforge/machine/driver/driver.py rayforge/machine/transport/transport.py
-#: rayforge/ui_gtk/machine/config_wizard.py
 #: rayforge/ui_gtk/machine/machine_dropdown.py
 #: rayforge/ui_gtk/machine/status_widget.py
 msgid "Unknown"
 msgstr "Невідомо"
 
 #: rayforge/machine/driver/driver.py rayforge/machine/transport/transport.py
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
 msgid "Idle"
 msgstr "Бездіяльність"
 
@@ -473,6 +449,26 @@ msgstr "Цикл"
 #: rayforge/ui_gtk/settings/ai_settings_page.py
 msgid "Test"
 msgstr "Тест"
+
+#: rayforge/machine/driver/driver.py
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+msgid "Frequency"
+msgstr "Частота"
+
+#: rayforge/machine/driver/driver.py
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+msgid "PWM frequency in Hz"
+msgstr "Частота ШІМ у Гц"
+
+#: rayforge/machine/driver/driver.py
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+msgid "Pulse Width"
+msgstr "Ширина імпульсу"
+
+#: rayforge/machine/driver/driver.py
+msgid "Pulse width in microseconds"
+msgstr "Ширина імпульсу в мікросекундах"
 
 #: rayforge/machine/driver/driver.py
 msgid "Error during setup. You may need to edit device settings."
@@ -590,6 +586,7 @@ msgstr "HTTP-порт сервера OctoPrint"
 
 #: rayforge/machine/driver/octoprint/octoprint_driver.py
 #: rayforge/ui_gtk/settings/ai_settings_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
 #: rayforge/ui_gtk/varset/adapter/appkey.py
 msgid "API Key"
 msgstr "Ключ API"
@@ -1501,8 +1498,12 @@ msgid "Protocol variant"
 msgstr "Варіант протоколу"
 
 #: rayforge/machine/driver/grbl/grbl_network.py
-msgid "ESP3D or Longer GRBL variant"
-msgstr "Варіант ESP3D або Longer GRBL"
+msgid "Standard, ESP3D, or Longer GRBL variant"
+msgstr "Стандартний, ESP3D або Longer варіант GRBL"
+
+#: rayforge/machine/driver/grbl/grbl_network.py
+msgid "Standard"
+msgstr "Стандартний"
 
 #: rayforge/machine/driver/grbl/grbl_network.py
 msgid "Host is not configured. Please set a valid IP address or hostname."
@@ -1552,6 +1553,8 @@ msgid "Work area"
 msgstr "Робоча область"
 
 #: rayforge/machine/device/lightburn_importer.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
 msgid "Driver"
 msgstr "Драйвер"
 
@@ -1560,14 +1563,17 @@ msgid "Baud rate"
 msgstr "Швидкість передачі"
 
 #: rayforge/machine/device/lightburn_importer.py
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
 msgid "Home on start"
 msgstr "Пошук дому при запуску"
 
 #: rayforge/machine/device/lightburn_importer.py
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
 msgid "Max travel speed"
 msgstr "Максимальна швидкість переміщення"
 
 #: rayforge/machine/device/lightburn_importer.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
 msgid "Origin"
 msgstr "Початок координат"
 
@@ -1587,22 +1593,41 @@ msgstr "Калібрування камери"
 msgid "matrix + distortion imported"
 msgstr "матрицю + спотворення імпортовано"
 
+#: rayforge/machine/models/spindle.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+#: rayforge/ui_gtk/machine/capabilities_page.py
+msgid "Spindle Head"
+msgstr "Шпиндельна голівка"
+
 #: rayforge/machine/models/dialect_manager.py
 #: rayforge/machine/models/machine.py
 #, python-brace-format
 msgid "{label} (for {machine_name})"
 msgstr "{label} (для {machine_name})"
 
+#: rayforge/machine/models/laser.py
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+#: rayforge/ui_gtk/machine/capabilities_page.py
+msgid "Laser Head"
+msgstr "Лазерна головка"
+
 #: rayforge/machine/models/machine.py
 msgid "Default Machine"
 msgstr "Типовий верстат"
 
 #: rayforge/machine/models/rotary_module.py
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
 #: rayforge/ui_gtk/machine/rotary_module_page.py
 #: rayforge/ui_gtk/machine/settings_dialog.py
 #: rayforge/ui_gtk/doceditor/layer_settings_dialog.py
 msgid "Rotary Module"
 msgstr "Ротаційний модуль"
+
+#: rayforge/machine/models/head.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Head"
+msgstr "Голівка"
 
 #: rayforge/machine/models/controller.py
 msgid "No driver selected for this machine."
@@ -1689,21 +1714,14 @@ msgid "User-facing name"
 msgstr "Назва для користувача"
 
 #: rayforge/machine/models/dialect/base.py
-#: rayforge/ui_gtk/machine/config_wizard.py
 #: rayforge/ui_gtk/varset/varset_editor.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/pages/general.py
 msgid "Description"
 msgstr "Опис"
 
 #: rayforge/machine/models/dialect/base.py
 msgid "Short description"
 msgstr "Короткий опис"
-
-#: rayforge/machine/models/dialect/base.py
-#: rayforge/ui_gtk/settings/settings_dialog.py rayforge/ui_gtk/main_menu.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Settings"
-msgstr "Налаштування"
 
 #: rayforge/machine/models/dialect/base.py
 msgid "Omit unchanged coordinates"
@@ -1976,6 +1994,7 @@ msgid "Connected"
 msgstr "Підключено"
 
 #: rayforge/machine/transport/transport.py
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
 #: rayforge/ui_gtk/addon_manager/addon_list.py
 #: rayforge/ui_gtk/doceditor/material_library_list.py
 #: rayforge/ui_gtk/doceditor/material_list.py
@@ -2031,31 +2050,32 @@ msgstr ""
 #: rayforge/ui_gtk/settings/machine_settings_page.py
 #: rayforge/ui_gtk/settings/license_settings_page.py
 #: rayforge/ui_gtk/settings/ai_settings_page.py
+#: rayforge/ui_gtk/settings/color_presets_page.py
 #: rayforge/ui_gtk/camera/selection_dialog.py
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-#: rayforge/ui_gtk/camera/alignment_dialog.py
-#: rayforge/ui_gtk/machine/config_wizard.py
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+#: rayforge/ui_gtk/machine/unified_wizard.py
 #: rayforge/ui_gtk/machine/dialect_editor.py
 #: rayforge/ui_gtk/machine/hook_list.py rayforge/ui_gtk/machine/gcode_editor.py
 #: rayforge/ui_gtk/machine/wcs_dialog.py
 #: rayforge/ui_gtk/machine/maintenance_page.py
 #: rayforge/ui_gtk/machine/lbdev_import_dialog.py
 #: rayforge/ui_gtk/machine/dialect_list.py
-#: rayforge/ui_gtk/machine/profile_selector.py
 #: rayforge/ui_gtk/machine/template_selector.py
 #: rayforge/ui_gtk/addon_manager/addon_dialog.py
 #: rayforge/ui_gtk/addon_manager/license_dialog.py
 #: rayforge/ui_gtk/addon_manager/addon_list.py
+#: rayforge/ui_gtk/addon_manager/experimental_dialog.py
 #: rayforge/ui_gtk/shared/model_selection_dialog.py
 #: rayforge/ui_gtk/debug_log_dialog.py
 #: rayforge/ui_gtk/doceditor/import_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_selector_dialog.py
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
 #: rayforge/ui_gtk/doceditor/material_library_list.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
 #: rayforge/ui_gtk/doceditor/add_material_dialog.py
-#: rayforge/ui_gtk/doceditor/recipe_list.py
-#: rayforge/ui_gtk/doceditor/recipe_selector_dialog.py
+#: rayforge/ui_gtk/doceditor/step_type_selection_dialog.py
 #: rayforge/ui_gtk/doceditor/material_selector.py
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
 #: rayforge/ui_gtk/doceditor/material_list.py
 #: rayforge/ui_gtk/doceditor/import_handler.py
 msgid "Cancel"
@@ -2063,10 +2083,12 @@ msgstr "Скасувати"
 
 #: rayforge/ui_gtk/settings/machine_settings_page.py
 #: rayforge/ui_gtk/settings/ai_settings_page.py
+#: rayforge/ui_gtk/settings/color_presets_page.py
 #: rayforge/ui_gtk/machine/dialect_list.py
 #: rayforge/ui_gtk/doceditor/asset_browser.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
 #: rayforge/ui_gtk/doceditor/material_library_list.py
-#: rayforge/ui_gtk/doceditor/recipe_list.py
+#: rayforge/ui_gtk/doceditor/workflow_row.py
 #: rayforge/ui_gtk/doceditor/layer_column.py
 #: rayforge/ui_gtk/doceditor/material_list.py
 msgid "Delete"
@@ -2202,8 +2224,8 @@ msgid "New Provider"
 msgstr "Новий провайдер"
 
 #: rayforge/ui_gtk/settings/ai_settings_page.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
 #: rayforge/ui_gtk/doceditor/material_library_list.py
-#: rayforge/ui_gtk/doceditor/recipe_list.py
 #: rayforge/ui_gtk/doceditor/material_list.py
 #, python-brace-format
 msgid "Delete '{name}'?"
@@ -2216,15 +2238,19 @@ msgstr "Цей провайдер ШІ буде остаточно видале�
 
 #: rayforge/ui_gtk/settings/ai_settings_page.py
 #: rayforge/ui_gtk/camera/properties_widget.py
+#: rayforge/ui_gtk/machine/head_preferences_page.py
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 #: rayforge/ui_gtk/machine/gcode_editor.py
 #: rayforge/ui_gtk/machine/maintenance_page.py
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
 #: rayforge/ui_gtk/machine/rotary_module_page.py
 #: rayforge/ui_gtk/machine/general_preferences_page.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/pages/general.py
+#: rayforge/ui_gtk/doceditor/step_settings/pages/base.py
 #: rayforge/ui_gtk/doceditor/add_material_dialog.py
 #: rayforge/ui_gtk/doceditor/stock_properties_dialog.py
+#: rayforge/ui_gtk/doceditor/layer_settings_dialog.py
 msgid "Name"
 msgstr "Назва"
 
@@ -2237,6 +2263,7 @@ msgid "OpenAI Compatible"
 msgstr "Сумісний з OpenAI"
 
 #: rayforge/ui_gtk/settings/ai_settings_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
 msgid "Base URL"
 msgstr "Базова URL-адреса"
 
@@ -2299,6 +2326,103 @@ msgstr "Рецепти"
 #: rayforge/ui_gtk/settings/recipe_manager_page.py
 msgid "Manage your saved recipes for different materials and processes."
 msgstr "Керування збереженими рецептами для різних матеріалів та процесів."
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Edit Color Rule"
+msgstr "Редагувати правило кольору"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Update the color rule details:"
+msgstr "Оновіть деталі правила кольору:"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
+#: rayforge/ui_gtk/machine/dialect_editor.py
+#: rayforge/ui_gtk/machine/gcode_editor.py
+#: rayforge/ui_gtk/machine/wcs_dialog.py
+#: rayforge/ui_gtk/machine/maintenance_page.py rayforge/ui_gtk/main_menu.py
+#: rayforge/ui_gtk/toolbar.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/material_library_list.py
+#: rayforge/ui_gtk/doceditor/add_material_dialog.py
+msgid "Save"
+msgstr "Зберегти"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Add Color Rule"
+msgstr "Додати правило кольору"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Map a color to a step type for SVG imports."
+msgstr "Зіставте колір із типом кроку для імпорту SVG."
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/material_library_list.py
+#: rayforge/ui_gtk/doceditor/add_material_dialog.py
+msgid "Add"
+msgstr "Додати"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+#: rayforge/ui_gtk/doceditor/add_material_dialog.py
+msgid "Color"
+msgstr "Колір"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "SVG color that triggers this rule"
+msgstr "Колір SVG, що запускає це правило"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Label (optional)"
+msgstr "Позначка (необов'язково)"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Step Type"
+msgstr "Тип кроку"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Step type created when this color is imported"
+msgstr "Тип кроку, створений під час імпорту цього кольору"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+#, python-brace-format
+msgid "Color {color}"
+msgstr "Колір {color}"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "This step type is not currently available."
+msgstr "Цей тип кроку наразі недоступний."
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+#, python-brace-format
+msgid "{step_type} (unavailable)"
+msgstr "{step_type} (недоступно)"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "No color rules found."
+msgstr "Правила кольору не знайдено."
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+#, python-brace-format
+msgid "Delete color rule '{color}'?"
+msgstr "Видалити правило кольору '{color}'?"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid ""
+"The color rule will be permanently removed. This action cannot be undone."
+msgstr "Правило кольору буде остаточно видалено. Цю дію неможливо скасувати."
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid "Color Rules"
+msgstr "Правила кольору"
+
+#: rayforge/ui_gtk/settings/color_presets_page.py
+msgid ""
+"Map SVG colors to step types so they are applied automatically when "
+"importing."
+msgstr ""
+"Зіставте кольори SVG із типами кроків, щоб вони застосовувалися "
+"автоматичнопід час імпорту."
 
 #: rayforge/ui_gtk/settings/material_manager_page.py
 msgid "Materials"
@@ -2393,7 +2517,8 @@ msgstr "Системна за замовчуванням"
 #: rayforge/ui_gtk/machine/rotary_module_page.py
 #: rayforge/ui_gtk/machine/settings_dialog.py
 #: rayforge/ui_gtk/machine/general_preferences_page.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/step_settings/pages/base.py
 #: rayforge/ui_gtk/doceditor/layer_settings_dialog.py
 msgid "General"
 msgstr "Загальні"
@@ -2439,19 +2564,20 @@ msgid "Length"
 msgstr "Довжина"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
-#: rayforge/ui_gtk/machine/config_wizard.py
 #: rayforge/ui_gtk/doceditor/bottom_panel.py
 msgid "Speed"
 msgstr "Швидкість"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
-#: rayforge/ui_gtk/machine/config_wizard.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 #: rayforge/ui_gtk/machine/general_preferences_page.py
 msgid "Acceleration"
 msgstr "Прискорення"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
-#: rayforge/ui_gtk/machine/config_wizard.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Behavior"
 msgstr "Поведінка"
 
@@ -2466,18 +2592,27 @@ msgstr "Автоматичне оновлення операцій"
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid ""
 "Recalculate operations automatically after each change. Disable for manual "
-"recalculation via the toolbar button."
+"recalculation via the toolbar button"
 msgstr ""
-"Автоматично перераховувати операції після кожної зміни. Вимкнути для ручного "
-"перерахунку через кнопку панелі інструментів."
+"Автоматично перераховувати операції після кожної зміни. Вимкніть для ручного "
+"перерахунку через кнопку на панелі інструментів"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Cache budget (MB)"
+msgstr "Бюджет кешу (МБ)"
+
+#: rayforge/ui_gtk/settings/general_preferences_page.py
+msgid "Maximum memory for cache. High complexity scenes require more"
+msgstr ""
+"Максимальна пам'ять для кешу. Сцени високої складності потребують більше"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid "Check for updates"
 msgstr "Перевірити оновлення"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
-msgid "Automatically check for new Rayforge versions on startup."
-msgstr "Автоматично перевіряти нові версії Rayforge при запуску."
+msgid "Automatically check for new Rayforge versions on startup"
+msgstr "Автоматично перевіряти наявність нових версій Rayforge при запуску"
 
 #: rayforge/ui_gtk/settings/general_preferences_page.py
 msgid "Startup behavior"
@@ -2689,6 +2824,10 @@ msgstr "Імпортувати файл…"
 msgid "Paste"
 msgstr "Вставити"
 
+#: rayforge/ui_gtk/canvas2d/drag_drop_cmd.py rayforge/doceditor/edit_cmd.py
+msgid "Add {} Instance"
+msgstr "Додати екземпляр {}"
+
 #: rayforge/ui_gtk/canvas2d/drag_drop_cmd.py
 msgid "Drop files to import"
 msgstr "Перетягніть файли для імпорту"
@@ -2723,66 +2862,102 @@ msgstr "Автоматичне компонування (Просте)"
 msgid "{camera_name} - Lens Calibration"
 msgstr "{camera_name} - Калібрування об'єктива"
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-#: rayforge/ui_gtk/camera/properties_widget.py
-msgid "Lens Calibration"
-msgstr "Калібрування об'єктива"
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Camera Image Settings"
+msgstr "Налаштування зображення камери"
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid ""
-"Correct lens distortion for straighter lines. Use the wizard for automatic "
-"calibration or adjust manually."
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Adjust image quality and appearance parameters."
+msgstr "Налаштувати параметри якості та зовнішнього вигляду зображення."
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+#: rayforge/ui_gtk/doceditor/layer_settings_dialog.py
+msgid "Default"
+msgstr "Типово"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Custom..."
+msgstr "Довільне..."
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Resolution"
+msgstr "Роздільна здатність"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Camera capture resolution. Default uses the camera's native setting."
 msgstr ""
-"Виправляє дисторсію об'єктива для пряміших ліній. Використовуйте майстер для "
-"автоматичного калібрування або налаштуйте вручну."
+"Роздільна здатність захоплення камери. За замовчуванням використовується "
+"рідне налаштування камери."
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "Wizard"
-msgstr "Майстер"
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Custom Width"
+msgstr "Довільна ширина"
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Custom Height"
+msgstr "Довільна висота"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Prefer YUYV Format"
+msgstr "Надавати перевагу формату YUYV"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid ""
+"Use uncompressed YUYV instead of MJPEG. Fixes green artifacts on some USB "
+"cameras but may reduce resolution or frame rate on USB 2.0."
+msgstr ""
+"Використовувати нестиснений YUYV замість MJPEG. Усуває зелені артефакти на "
+"деяких USB-камерах, але може зменшити роздільну здатність або частоту кадрів "
+"на USB 2.0."
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Auto White Balance"
+msgstr "Автобаланс білого"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Automatically adjust white balance"
+msgstr "Автоматично регулювати баланс білого"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "White Balance (Kelvin)"
+msgstr "Баланс білого (Кельвін)"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Color temperature for accurate color representation"
+msgstr "Колірна температура для точного відтворення кольорів"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Contrast"
+msgstr "Контраст"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Difference between light and dark areas"
+msgstr "Різниця між світлими та темними ділянками"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Brightness"
+msgstr "Яскравість"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Overall lightness or darkness of the image"
+msgstr "Загальна світлість або темрява зображення"
+
+#: rayforge/ui_gtk/camera/image_settings_widget.py
 #: rayforge/ui_gtk/camera/camera_preferences_page.py
-msgid "Radial 1 (k1)"
-msgstr "Радіальний 1 (k1)"
+msgid "Noise Reduction"
+msgstr "Зменшення шуму"
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "First order radial distortion"
-msgstr "Радіальна дисторсія першого порядку"
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Temporal averaging, higher values cause trailing"
+msgstr "Часове усереднення, вищі значення викликають розмиття"
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-#: rayforge/ui_gtk/camera/camera_preferences_page.py
-msgid "Radial 2 (k2)"
-msgstr "Радіальний 2 (k2)"
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Transparency"
+msgstr "Прозорість"
 
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "Second order radial distortion"
-msgstr "Радіальна дисторсія другого порядку"
-
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "Radial 3 (k3)"
-msgstr "Радіальна 3 (k3)"
-
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "Third order radial distortion"
-msgstr "Радіальна дисторсія третього порядку"
-
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-#: rayforge/ui_gtk/camera/camera_preferences_page.py
-msgid "Tangential 1 (p1)"
-msgstr "Тангенціальний 1 (p1)"
-
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "First order tangential distortion"
-msgstr "Тангенціальна дисторсія першого порядку"
-
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-#: rayforge/ui_gtk/camera/camera_preferences_page.py
-msgid "Tangential 2 (p2)"
-msgstr "Тангенціальний 2 (p2)"
-
-#: rayforge/ui_gtk/camera/lens_calibration_dialog.py
-msgid "Second order tangential distortion"
-msgstr "Тангенціальна дисторсія другого порядку"
+#: rayforge/ui_gtk/camera/image_settings_widget.py
+msgid "Transparency on the worksurface"
+msgstr "Прозорість на робочій поверхні"
 
 #: rayforge/ui_gtk/camera/selection_dialog.py
 msgid "Please select an available camera device"
@@ -2807,18 +2982,12 @@ msgstr "Не вдалося завантажити зображення для I
 
 #: rayforge/ui_gtk/camera/selection_dialog.py
 #, python-brace-format
-msgid "{name} (Device ID: {device_id})"
-msgstr "{name} (ID пристрою: {device_id})"
+msgid "Camera {device_id}"
+msgstr "Камера {device_id}"
 
 #: rayforge/ui_gtk/camera/selection_dialog.py
 msgid "No cameras found."
 msgstr "Камери не знайдено."
-
-#: rayforge/ui_gtk/camera/selection_dialog.py
-#: rayforge/ui_gtk/machine/settings_dialog.py
-#, python-brace-format
-msgid "Camera {device_id}"
-msgstr "Камера {device_id}"
 
 #: rayforge/ui_gtk/camera/point_bubble_widget.py
 #, python-brace-format
@@ -2862,10 +3031,26 @@ msgid "Turn the camera stream on or off"
 msgstr "Увімкнути або вимкнути потік камери"
 
 #: rayforge/ui_gtk/camera/properties_widget.py
+msgid "Start"
+msgstr "Старт"
+
+#: rayforge/ui_gtk/camera/properties_widget.py
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+msgid "Camera Wizard"
+msgstr "Майстер камери"
+
+#: rayforge/ui_gtk/camera/properties_widget.py
+msgid "Guided setup: image settings, lens calibration, and alignment."
+msgstr ""
+"Інтерактивне налаштування: параметри зображення, калібрування лінзи та "
+"вирівнювання."
+
+#: rayforge/ui_gtk/camera/properties_widget.py
 msgid "Configure"
 msgstr "Налаштувати"
 
 #: rayforge/ui_gtk/camera/properties_widget.py
+#: rayforge/ui_gtk/camera/wizard/image_settings_page.py
 msgid "Image Settings"
 msgstr "Налаштування зображення"
 
@@ -2874,10 +3059,18 @@ msgid "Adjust brightness, contrast, white balance, and noise"
 msgstr "Налаштувати яскравість, контраст, баланс білого та шум"
 
 #: rayforge/ui_gtk/camera/properties_widget.py
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_settings_page.py
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "Lens Calibration"
+msgstr "Калібрування об'єктива"
+
+#: rayforge/ui_gtk/camera/properties_widget.py
 msgid "Correct lens distortion for straighter lines"
 msgstr "Виправити спотворення об'єктива для пряміших ліній"
 
 #: rayforge/ui_gtk/camera/properties_widget.py
+#: rayforge/ui_gtk/camera/wizard/alignment_page.py
 msgid "Image Alignment"
 msgstr "Вирівнювання зображення"
 
@@ -2907,42 +3100,61 @@ msgstr ""
 msgid "Image alignment not yet performed"
 msgstr "Вирівнювання зображення ще не виконано"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/capture_surface.py
 msgid "Waiting for camera..."
 msgstr "Очікування камери..."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-msgid "Lens Calibration Wizard"
-msgstr "Майстер калібрування об'єктива"
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid ""
+"Correct lens distortion for straighter lines. Choose how to calibrate, or "
+"skip if your lens has negligible distortion."
+msgstr ""
+"Виправлення спотворень лінзи для пряміших ліній. Оберіть спосіб калібрування "
+"або пропустіть, якщо ваша лінза має незначні спотворення."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Back"
-msgstr "Назад"
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid "Automatic"
+msgstr "Автоматично"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Next"
-msgstr "Далі"
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid "Automatic Calibration"
+msgstr "Автоматичне калібрування"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-msgid "Capture Frame"
-msgstr "Захопити кадр"
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid ""
+"Print a calibration card and capture it at several positions. The wizard "
+"solves the distortion coefficients for you."
+msgstr ""
+"Роздрукуйте калібрувальну картку та відзніміть її в кількох позиціях. "
+"Майстер сам обчислить коефіцієнти спотворень."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-#: rayforge/ui_gtk/varset/adapter/appkey.py
-msgid "Clear"
-msgstr "Очистити"
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid "Manual"
+msgstr "Вручну"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-msgid "Calibrate"
-msgstr "Калібрувати"
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid "Manual Calibration"
+msgstr "Ручне калібрування"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+msgid "Enter the radial and tangential distortion coefficients by hand."
+msgstr "Введіть коефіцієнти радіальних і тангенціальних спотворень вручну."
+
+#: rayforge/ui_gtk/camera/wizard/lens_calibration_choice_page.py
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Skip"
+msgstr "Пропустити"
+
+#: rayforge/ui_gtk/camera/wizard/card_page.py
+msgid "Calibration Card"
+msgstr "Калібрувальна картка"
+
+#: rayforge/ui_gtk/camera/wizard/card_page.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Instructions"
 msgstr "Інструкції"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid ""
 "Print a calibration card to correct lens distortion. The card size should "
 "fit within your camera view."
@@ -2950,75 +3162,75 @@ msgstr ""
 "Надрукуйте калібрувальну картку для виправлення дисторсії об'єктива. Розмір "
 "картки має вміщуватися в огляд камери."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Card Size"
 msgstr "Розмір картки"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Adjust to fit your work surface."
 msgstr "Налаштуйте для вашої робочої поверхні."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 #: rayforge/ui_gtk/doceditor/property_providers/transform.py
 msgid "Width"
 msgstr "Ширина"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Card width"
 msgstr "Ширина картки"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 #: rayforge/ui_gtk/doceditor/property_providers/transform.py
 msgid "Height"
 msgstr "Висота"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Card height"
 msgstr "Висота картки"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Generated Pattern"
 msgstr "Згенерований шаблон"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Details about the calibration pattern."
 msgstr "Деталі про калібрувальний шаблон."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Grid Size"
 msgstr "Розмір сітки"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Square Size"
 msgstr "Розмір квадрата"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Physical Size"
 msgstr "Фізичний розмір"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Save to PDF"
 msgstr "Зберегти як PDF"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
 msgid "Export the calibration card for printing"
 msgstr "Експортувати калібрувальну картку для друку"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-#: rayforge/ui_gtk/machine/dialect_editor.py
-#: rayforge/ui_gtk/machine/gcode_editor.py
-#: rayforge/ui_gtk/machine/wcs_dialog.py
-#: rayforge/ui_gtk/machine/maintenance_page.py rayforge/ui_gtk/main_menu.py
-#: rayforge/ui_gtk/toolbar.py
-#: rayforge/ui_gtk/doceditor/material_library_list.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-#: rayforge/ui_gtk/doceditor/add_material_dialog.py
-msgid "Save"
-msgstr "Зберегти"
+#: rayforge/ui_gtk/camera/wizard/card_page.py
+msgid "Save Calibration Card"
+msgstr "Зберегти калібрувальну картку"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/card_page.py
+msgid "Calibration card saved"
+msgstr "Калібрувальну картку збережено"
+
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
+msgid "Capture Frames"
+msgstr "Захоплення кадрів"
+
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid ""
 "Capture the card at different positions. Important: include the image "
 "corners and edges for accurate distortion correction."
@@ -3026,69 +3238,73 @@ msgstr ""
 "Захопіть картку в різних положеннях. Важливо: включіть кути та краї "
 "зображення для точного виправлення дисторсії."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
 msgid "Status"
 msgstr "Статус"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Progress of the calibration capture process."
 msgstr "Прогрес процесу захоплення калібрування."
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Captured Frames"
 msgstr "Захоплені кадри"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Corners Detected"
 msgstr "Виявлено кутів"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Coverage"
 msgstr "Покриття"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Not started"
 msgstr "Не розпочато"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Move card to capture more positions"
 msgstr "Перемістіть картку для захоплення більше позицій"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Capture Progress"
 msgstr "Прогрес захоплення"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
+msgid "Capture Frame"
+msgstr "Захопити кадр"
+
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
+#: rayforge/ui_gtk/varset/adapter/appkey.py
+msgid "Clear"
+msgstr "Очистити"
+
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
+msgid "Calibrate"
+msgstr "Калібрувати"
+
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Good"
 msgstr "Добре"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Limited — reach edges"
 msgstr "Обмежено — досяжте країв"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Poor — reach all corners"
 msgstr "Погано — досяжте всіх кутів"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Calibration Failed"
 msgstr "Калібрування не вдалося"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-#: rayforge/ui_gtk/machine/dialect_list.py
-#: rayforge/ui_gtk/machine/profile_selector.py
-#: rayforge/ui_gtk/addon_manager/license_dialog.py
-#: rayforge/ui_gtk/addon_manager/addon_list.py
-#: rayforge/ui_gtk/doceditor/material_library_list.py
-#: rayforge/ui_gtk/doceditor/material_list.py
-msgid "OK"
-msgstr "Гаразд"
-
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Calibration Complete"
 msgstr "Калібрування завершено"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 #, python-brace-format
 msgid ""
 "RMS Error: {rms:.4f} pixels\n"
@@ -3099,21 +3315,93 @@ msgstr ""
 "Якість: {quality}\n"
 "Використано кадрів: {frames}"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Discard"
 msgstr "Відхилити"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
+#: rayforge/ui_gtk/camera/wizard/capture_page.py
 msgid "Save Calibration"
 msgstr "Зберегти калібрування"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-msgid "Save Calibration Card"
-msgstr "Зберегти калібрувальну картку"
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+#, python-brace-format
+msgid "{camera} - Camera Wizard"
+msgstr "{camera} - Майстер камери"
 
-#: rayforge/ui_gtk/camera/calibration_wizard.py
-msgid "Calibration card saved"
-msgstr "Калібрувальну картку збережено"
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Back"
+msgstr "Назад"
+
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Next"
+msgstr "Далі"
+
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+msgid "Finish"
+msgstr "Готово"
+
+#: rayforge/ui_gtk/camera/wizard/wizard.py
+#: rayforge/ui_gtk/machine/dialect_list.py
+#: rayforge/ui_gtk/addon_manager/license_dialog.py
+#: rayforge/ui_gtk/addon_manager/addon_list.py
+#: rayforge/ui_gtk/doceditor/material_library_list.py
+#: rayforge/ui_gtk/doceditor/material_list.py
+msgid "OK"
+msgstr "Гаразд"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+#: rayforge/ui_gtk/camera/camera_preferences_page.py
+msgid "Radial 1 (k1)"
+msgstr "Радіальний 1 (k1)"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "First order radial distortion"
+msgstr "Радіальна дисторсія першого порядку"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+#: rayforge/ui_gtk/camera/camera_preferences_page.py
+msgid "Radial 2 (k2)"
+msgstr "Радіальний 2 (k2)"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "Second order radial distortion"
+msgstr "Радіальна дисторсія другого порядку"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "Radial 3 (k3)"
+msgstr "Радіальна 3 (k3)"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "Third order radial distortion"
+msgstr "Радіальна дисторсія третього порядку"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+#: rayforge/ui_gtk/camera/camera_preferences_page.py
+msgid "Tangential 1 (p1)"
+msgstr "Тангенціальний 1 (p1)"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "First order tangential distortion"
+msgstr "Тангенціальна дисторсія першого порядку"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+#: rayforge/ui_gtk/camera/camera_preferences_page.py
+msgid "Tangential 2 (p2)"
+msgstr "Тангенціальний 2 (p2)"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid "Second order tangential distortion"
+msgstr "Тангенціальна дисторсія другого порядку"
+
+#: rayforge/ui_gtk/camera/lens_calibration_widget.py
+msgid ""
+"Correct lens distortion for straighter lines. Adjust the coefficients "
+"manually."
+msgstr ""
+"Виправлення спотворень лінзи для пряміших ліній. Налаштуйте коефіцієнти "
+"вручну."
 
 #: rayforge/ui_gtk/camera/alignment_dialog.py
 #, python-brace-format
@@ -3132,131 +3420,10 @@ msgstr "Вмістити у вікно"
 msgid "Zoom In (Scroll Up)"
 msgstr "Збільшити (прокрутка вгору)"
 
-#: rayforge/ui_gtk/camera/alignment_dialog.py
-msgid ""
-"Click the image to add reference points. Drag to move them.\n"
-"Scroll to Zoom. Middle-click and drag to Pan.\n"
-"Use the Arrow Keys to nudge the active point precisely."
-msgstr ""
-"Натисніть на зображення, щоб додати опорні точки. Перетягуйте для "
-"переміщення.\n"
-"Прокручуйте для масштабування. Середня кнопка та перетягування для "
-"панорамування.\n"
-"Використовуйте клавіші стрілок для точного переміщення активної точки."
-
-#: rayforge/ui_gtk/camera/alignment_dialog.py
-msgid "Reset Points"
-msgstr "Скинути точки"
-
-#: rayforge/ui_gtk/camera/alignment_dialog.py
-msgid "Clear All Points"
-msgstr "Очистити всі точки"
-
-#: rayforge/ui_gtk/camera/alignment_dialog.py
-msgid "Apply"
-msgstr "Застосувати"
-
 #: rayforge/ui_gtk/camera/image_settings_dialog.py
 #, python-brace-format
 msgid "{camera_name} - Camera Image Settings"
 msgstr "{camera_name} - Налаштування зображення камери"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Camera Image Settings"
-msgstr "Налаштування зображення камери"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Adjust image quality and appearance parameters."
-msgstr "Налаштувати параметри якості та зовнішнього вигляду зображення."
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-#: rayforge/ui_gtk/doceditor/layer_settings_dialog.py
-msgid "Default"
-msgstr "Типово"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Custom..."
-msgstr "Довільне..."
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Resolution"
-msgstr "Роздільна здатність"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Camera capture resolution. Default uses the camera's native setting."
-msgstr ""
-"Роздільна здатність захоплення камери. За замовчуванням використовується "
-"рідне налаштування камери."
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Custom Width"
-msgstr "Довільна ширина"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Custom Height"
-msgstr "Довільна висота"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Prefer YUYV Format"
-msgstr "Надавати перевагу формату YUYV"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid ""
-"Use uncompressed YUYV instead of MJPEG. Fixes green artifacts on some USB "
-"cameras but may reduce resolution or frame rate on USB 2.0."
-msgstr ""
-"Використовувати нестиснений YUYV замість MJPEG. Усуває зелені артефакти на "
-"деяких USB-камерах, але може зменшити роздільну здатність або частоту кадрів "
-"на USB 2.0."
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Auto White Balance"
-msgstr "Автобаланс білого"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Automatically adjust white balance"
-msgstr "Автоматично регулювати баланс білого"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "White Balance (Kelvin)"
-msgstr "Баланс білого (Кельвін)"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Color temperature for accurate color representation"
-msgstr "Колірна температура для точного відтворення кольорів"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Contrast"
-msgstr "Контраст"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Difference between light and dark areas"
-msgstr "Різниця між світлими та темними ділянками"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Brightness"
-msgstr "Яскравість"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Overall lightness or darkness of the image"
-msgstr "Загальна світлість або темрява зображення"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-#: rayforge/ui_gtk/camera/camera_preferences_page.py
-msgid "Noise Reduction"
-msgstr "Зменшення шуму"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Temporal averaging, higher values cause trailing"
-msgstr "Часове усереднення, вищі значення викликають розмиття"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Transparency"
-msgstr "Прозорість"
-
-#: rayforge/ui_gtk/camera/image_settings_dialog.py
-msgid "Transparency on the worksurface"
-msgstr "Прозорість на робочій поверхні"
 
 #: rayforge/ui_gtk/camera/camera_preferences_page.py
 #, python-brace-format
@@ -3303,6 +3470,8 @@ msgid "Camera"
 msgstr "Камера"
 
 #: rayforge/ui_gtk/camera/camera_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/camera_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
 msgid "Cameras"
 msgstr "Камери"
 
@@ -3310,135 +3479,30 @@ msgstr "Камери"
 msgid "Stream a camera image directly onto the work surface."
 msgstr "Транслювати зображення камери безпосередньо на робочу поверхню."
 
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Configure Device"
-msgstr "Налаштувати пристрій"
+#: rayforge/ui_gtk/camera/alignment_widget.py
+msgid ""
+"Click the image to add reference points. Drag to move them.\n"
+"Scroll to Zoom. Middle-click and drag to Pan.\n"
+"Use the Arrow Keys to nudge the active point precisely."
+msgstr ""
+"Натисніть на зображення, щоб додати опорні точки. Перетягуйте для "
+"переміщення.\n"
+"Прокручуйте для масштабування. Середня кнопка та перетягування для "
+"панорамування.\n"
+"Використовуйте клавіші стрілок для точного переміщення активної точки."
 
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Create Machine"
-msgstr "Створити машину"
+#: rayforge/ui_gtk/camera/alignment_widget.py
+msgid "Reset Points"
+msgstr "Скинути точки"
 
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Retry"
-msgstr "Повторити"
+#: rayforge/ui_gtk/camera/alignment_widget.py
+msgid "Clear All Points"
+msgstr "Очистити всі точки"
 
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Connection"
-msgstr "З'єднання"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Select a driver and enter the connection parameters for your device."
-msgstr "Виберіть драйвер і введіть параметри з'єднання для вашого пристрою."
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-#: rayforge/ui_gtk/machine/general_preferences_page.py
-msgid "Select driver"
-msgstr "Виберіть драйвер"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Discovering Device"
-msgstr "Виявлення пристрою"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Connecting to the device and reading its configuration."
-msgstr "Підключення до пристрою та читання його конфігурації."
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Device Info"
-msgstr "Інформація про пристрій"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Device Name"
-msgstr "Назва пристрою"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Firmware Version"
-msgstr "Версія прошивки"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "RX Buffer Size"
-msgstr "Розмір буфера RX"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Arc Tolerance"
-msgstr "Допуск дуги"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Working Area"
-msgstr "Робоча зона"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Axis travel in machine units."
-msgstr "Хід осей у машинних одиницях."
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "X Travel"
-msgstr "Хід X"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Y Travel"
-msgstr "Хід Y"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Speed limits in machine units per minute."
-msgstr "Обмеження швидкості в машинних одиницях за хвилину."
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-#: rayforge/ui_gtk/machine/general_preferences_page.py
-msgid "Max Travel Speed"
-msgstr "Макс. швидкість переміщення"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-#: rayforge/ui_gtk/machine/general_preferences_page.py
-msgid "Max Cut Speed"
-msgstr "Макс. швидкість різання"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Machine units per second squared."
-msgstr "Машинні одиниці на секунду в квадраті."
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-#: rayforge/ui_gtk/machine/settings_dialog.py
-#: rayforge/ui_gtk/doceditor/bottom_panel.py
-msgid "Laser"
-msgstr "Лазер"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Max Power (S-value)"
-msgstr "Макс. потужність (значення S)"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Maximum spindle speed / S-value range"
-msgstr "Максимальна швидкість шпинделя / діапазон значення S"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Home on Start"
-msgstr "Паркування при запуску"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Run homing cycle when machine connects"
-msgstr "Виконувати цикл паркування при підключенні машини"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Single-Axis Homing"
-msgstr "Паркування по одній осі"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Allow homing individual axes"
-msgstr "Дозволити паркування окремих осей"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-#: rayforge/ui_gtk/shared/sanity_check_dialog.py
-msgid "Warnings"
-msgstr "Попередження"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Probe failed"
-msgstr "Зондування не вдалося"
-
-#: rayforge/ui_gtk/machine/config_wizard.py
-msgid "Error: {}"
-msgstr "Помилка: {}"
+#: rayforge/ui_gtk/camera/alignment_widget.py
+#: rayforge/ui_gtk/doceditor/step_type_selection_dialog.py
+msgid "Apply"
+msgstr "Застосувати"
 
 #: rayforge/ui_gtk/machine/macro_list.py
 msgid "Add New Macro"
@@ -3451,6 +3515,365 @@ msgstr "Макроси не налаштовано"
 #: rayforge/ui_gtk/machine/macro_list.py
 msgid "New Macro"
 msgstr "Новий макрос"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#, python-brace-format
+msgid "Tool {tool_number}, {min_rpm}-{max_rpm} rpm"
+msgstr "Інструмент {tool_number}, {min_rpm}-{max_rpm} об/хв"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#, python-brace-format
+msgid "Tool {tool_number}, max power {max_power}, spot size {spot_x}x{spot_y}"
+msgstr ""
+"Інструмент {tool_number}, макс. потужність {max_power}, розмір плями {spot_x}"
+"x{spot_y}"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#, python-brace-format
+msgid "Tool {tool_number}"
+msgstr "Інструмент {tool_number}"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Add New Head"
+msgstr "Додати нову голівку"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "No heads configured"
+msgstr "Голівки не налаштовані"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "At least one head is required"
+msgstr "Потрібна щонайменше одна голівка"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Spindle"
+msgstr "Шпиндель"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "New Laser"
+msgstr "Новий лазер"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "New Spindle"
+msgstr "Новий шпиндель"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "3D Model"
+msgstr "3D-модель"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Select and configure a 3D model for this head."
+msgstr "Оберіть та налаштуйте 3D-модель для цієї голівки."
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Model"
+msgstr "Модель"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Scale"
+msgstr "Масштаб"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Uniform scale factor for the model"
+msgstr "Рівномірний коефіцієнт масштабування для моделі"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "X Rotation"
+msgstr "Обертання X"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Degrees around the X axis"
+msgstr "Градуси навколо осі X"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Y Rotation"
+msgstr "Обертання Y"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Degrees around the Y axis"
+msgstr "Градуси навколо осі Y"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Z Rotation"
+msgstr "Обертання Z"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Degrees around the Z axis"
+msgstr "Градуси навколо осі Z"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+#: rayforge/ui_gtk/shared/model_selection_dialog.py
+#: rayforge/ui_gtk/doceditor/stock_properties_dialog.py
+msgid "None"
+msgstr "Немає"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Laser Properties"
+msgstr "Властивості лазера"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Configure the selected laser head."
+msgstr "Налаштуйте вибрану лазерну голівку."
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Pulse Width Modulation settings for frequency and pulse width control."
+msgstr ""
+"Налаштування широтно-імпульсної модуляції для контролю частоти та ширини "
+"імпульсу."
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Framing"
+msgstr "Обрамлення"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Settings for the frame outline operation that traces the job boundary."
+msgstr "Налаштування операції обведення контуру меж завдання."
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Tool Number"
+msgstr "Номер інструменту"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "G-code tool number (e.g., T0, T1)"
+msgstr "Номер інструменту G-коду (наприклад, T0, T1)"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Diode"
+msgstr "Діод"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "CO₂"
+msgstr "CO₂"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Fiber"
+msgstr "Волокно"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Laser Type"
+msgstr "Тип лазера"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Type of laser tube or diode"
+msgstr "Тип лазерної трубки або діода"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Max Power"
+msgstr "Макс. потужність"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Maximum power value in GCode"
+msgstr "Максимальне значення потужності в GCode"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Focus Power"
+msgstr "Потужність фокусування"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Power value in percent to use when focusing. 0 to disable"
+msgstr "Значення потужності у відсотках для фокусування. 0 для вимкнення"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Spot Size X"
+msgstr "Розмір плями X"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Size of the laser spot in the X direction"
+msgstr "Розмір лазерної плями в напрямку X"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Spot Size Y"
+msgstr "Розмір плями Y"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Size of the laser spot in the Y direction"
+msgstr "Розмір лазерної плями в напрямку Y"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Cut Color"
+msgstr "Колір різання"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Color for cutting operations"
+msgstr "Колір для операцій різання"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Raster Color"
+msgstr "Колір растру"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Color for engraving/raster operations"
+msgstr "Колір для операцій гравіювання/растру"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Focal Distance"
+msgstr "Фокусна відстань"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Distance from the laser head to the work surface (Z offset)"
+msgstr "Відстань від лазерної голови до робочої поверхні (зсув Z)"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "PWM Frequency"
+msgstr "Частота ШІМ"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Default PWM frequency in Hz"
+msgstr "Типова частота ШІМ у Гц"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Max PWM Frequency"
+msgstr "Макс. частота ШІМ"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Maximum supported PWM frequency in Hz"
+msgstr "Максимальна підтримувана частота ШІМ у Гц"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Default pulse width in µs"
+msgstr "Типова ширина імпульсу в мкс"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Min Pulse Width"
+msgstr "Мін. ширина імпульсу"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Minimum pulse width in µs"
+msgstr "Мінімальна ширина імпульсу в мкс"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Max Pulse Width"
+msgstr "Макс. ширина імпульсу"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Maximum pulse width in µs"
+msgstr "Максимальна ширина імпульсу в мкс"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Frame Power"
+msgstr "Потужність обведення"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Power value in percent to use when framing. 0 to disable"
+msgstr "Значення потужності у відсотках для обведення. 0 для вимкнення"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Frame Speed"
+msgstr "Швидкість обведення"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid ""
+"Speed for frame outline. Leave at 0 to use the machine's max travel speed"
+msgstr ""
+"Швидкість обведення контуру. Залиште 0, щоб використовувати максимальну "
+"швидкість переміщення машини"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Repeat Count"
+msgstr "Кількість повторень"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Number of times to trace the frame outline"
+msgstr "Кількість разів для обведення контуру"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Pause at Corners"
+msgstr "Пауза на кутах"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid ""
+"Pause duration in seconds at each corner of the frame outline. 0 to disable"
+msgstr "Тривалість паузи в секундах на кожному куті контуру. 0 для вимкнення"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Spindle Properties"
+msgstr "Властивості шпинделя"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Configure the selected spindle head."
+msgstr "Налаштуйте вибрану шпиндельну голівку."
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Min RPM"
+msgstr "Мін. об/хв"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Minimum spindle speed"
+msgstr "Мінімальна швидкість шпинделя"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Max RPM"
+msgstr "Макс. об/хв"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Maximum spindle speed"
+msgstr "Максимальна швидкість шпинделя"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Supports Flood Coolant"
+msgstr "Підтримка затоплювального охолодження"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Coolant delivered to the workpiece as a flood"
+msgstr "Охолодження, що подається на заготовку затопленням"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Supports Mist Coolant"
+msgstr "Підтримка туманного охолодження"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid "Coolant delivered to the workpiece as a mist"
+msgstr "Охолодження, що подається на заготовку у вигляді туману"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/settings_dialog.py
+msgid "Heads"
+msgstr "Голівки"
+
+#: rayforge/ui_gtk/machine/head_preferences_page.py
+msgid ""
+"You can configure multiple lasers or spindles if your machine supports it."
+msgstr ""
+"Ви можете налаштувати кілька лазерів або шпинделів, якщо ваша машина це "
+"підтримує."
+
+#: rayforge/ui_gtk/machine/unified_wizard.py
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Add a Machine"
+msgstr "Додати машину"
+
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Create Machine"
+msgstr "Створити машину"
+
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Could not create machine"
+msgstr "Не вдалося створити машину"
+
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Camera setup unavailable"
+msgstr "Налаштування камери недоступне"
+
+#: rayforge/ui_gtk/machine/unified_wizard.py
+msgid "Calibrate this camera later from the machine settings page."
+msgstr "Відкалібруйте цю камеру пізніше на сторінці налаштувань машини."
 
 #: rayforge/ui_gtk/machine/console.py
 msgid "Show verbose output (status polls)"
@@ -3541,32 +3964,24 @@ msgid "Z position in {wcs}"
 msgstr "Позиція Z у {wcs}"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Width in mm"
-msgstr "Ширина в мм"
-
-#: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Height in mm"
-msgstr "Висота в мм"
-
-#: rayforge/ui_gtk/machine/nogo_zones_page.py
 msgid "Depth"
 msgstr "Глибина"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Depth (Z extent) in mm"
-msgstr "Глибина (Z) в мм"
+msgid "Depth (Z extent)"
+msgstr "Глибина (протяжність по Z)"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Cylinder radius in mm"
-msgstr "Радіус циліндра в мм"
+msgid "Cylinder radius"
+msgstr "Радіус циліндра"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
 msgid "Cylinder Height"
 msgstr "Висота циліндра"
 
 #: rayforge/ui_gtk/machine/nogo_zones_page.py
-msgid "Cylinder height in mm"
-msgstr "Висота циліндра в мм"
+msgid "Cylinder height"
+msgstr "Висота циліндра"
 
 #: rayforge/ui_gtk/machine/dialect_editor.py
 msgid "Escaped braces {{ or }} are not supported."
@@ -3715,6 +4130,18 @@ msgstr "Редагувати робочі зміщення"
 msgid "Enter the offset from Machine Zero to Work Zero for the active WCS."
 msgstr ""
 "Введіть зміщення від машинного нуля до робочого нуля для активного WCS."
+
+#: rayforge/ui_gtk/machine/wcs_dialog.py
+msgid "X Offset"
+msgstr "Зсув X"
+
+#: rayforge/ui_gtk/machine/wcs_dialog.py
+msgid "Y Offset"
+msgstr "Зсув Y"
+
+#: rayforge/ui_gtk/machine/wcs_dialog.py
+msgid "Z Offset"
+msgstr "Зсув Z"
 
 #: rayforge/ui_gtk/machine/maintenance_page.py
 msgid "Reset Counter"
@@ -3980,13 +4407,11 @@ msgstr "Допуск дуг і кривих"
 
 #: rayforge/ui_gtk/machine/advanced_preferences_page.py
 msgid ""
-"Maximum deviation from original path when fitting arcs and curves (in "
-"machine units). Lower values drastically increase processing time and job "
-"size"
+"Maximum deviation from original path when fitting arcs and curves. Lower "
+"values drastically increase processing time and job size"
 msgstr ""
-"Максимальне відхилення від початкового шляху при апроксимації дуг і кривих "
-"(у одиницях машини). Нижчі значення значно збільшують час обробки та розмір "
-"завдання"
+"Максимальне відхилення від початкового шляху під час підгонки дуг і "
+"кривих.Нижчі значення значно збільшують час обробки та розмір завдання."
 
 #: rayforge/ui_gtk/machine/advanced_preferences_page.py
 msgid "Homing and Startup"
@@ -4076,6 +4501,10 @@ msgstr "Вибрати активний верстат"
 #: rayforge/ui_gtk/machine/laser_control_widget.py
 msgid "Toggle laser on/off"
 msgstr "Увімкнути/вимкнути лазер"
+
+#: rayforge/ui_gtk/machine/laser_control_widget.py
+msgid "Power"
+msgstr "Потужність"
 
 #: rayforge/ui_gtk/machine/laser_control_widget.py
 msgid "Laser power in percent"
@@ -4193,30 +4622,6 @@ msgstr "Зменшити відстань Z"
 msgid "Cancel running job"
 msgstr "Скасувати поточне завдання"
 
-#: rayforge/ui_gtk/machine/profile_selector.py
-msgid "Add a New Machine"
-msgstr "Додати новий верстат"
-
-#: rayforge/ui_gtk/machine/profile_selector.py
-msgid "Select a machine profile to use as a template."
-msgstr "Виберіть профіль верстата для використання як шаблону."
-
-#: rayforge/ui_gtk/machine/profile_selector.py
-msgid "Search devices…"
-msgstr "Пошук пристроїв…"
-
-#: rayforge/ui_gtk/machine/profile_selector.py
-msgid "Other Device…"
-msgstr "Інший пристрій…"
-
-#: rayforge/ui_gtk/machine/profile_selector.py
-msgid "Import from File…"
-msgstr "Імпортувати з файлу…"
-
-#: rayforge/ui_gtk/machine/profile_selector.py
-msgid "Import Failed"
-msgstr "Помилка імпорту"
-
 #: rayforge/ui_gtk/machine/template_selector.py
 msgid "Select a Template"
 msgstr "Вибрати шаблон"
@@ -4226,51 +4631,67 @@ msgid "Choose a built-in dialect as a starting point."
 msgstr "Виберіть вбудований діалект як початкову точку."
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 #: rayforge/ui_gtk/machine/settings_dialog.py
 msgid "Hardware"
 msgstr "Обладнання"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Axes"
 msgstr "Осі"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Configure the axis extents and coordinate system."
 msgstr "Налаштуйте межі осей та систему координат."
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "X Extent"
 msgstr "Межа X"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Full X-axis travel range"
 msgstr "Повний діапазон переміщення по осі X"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Y Extent"
 msgstr "Межа Y"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Full Y-axis travel range"
 msgstr "Повний діапазон переміщення по осі Y"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Bottom Left"
 msgstr "Лівий нижній"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Top Left"
 msgstr "Лівий верхній"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Top Right"
 msgstr "Правий верхній"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Bottom Right"
 msgstr "Правий нижній"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Coordinate Origin (0,0)"
 msgstr "Початок координат (0,0)"
 
@@ -4279,18 +4700,22 @@ msgid "The physical corner where coordinates are zero after homing"
 msgstr "Фізичний кут, де координати дорівнюють нулю після паркування"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Reverse X-Axis Direction"
 msgstr "Інвертувати напрямок осі X"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Makes coordinate values negative"
 msgstr "Робить значення координат від'ємними"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Reverse Y-Axis Direction"
 msgstr "Інвертувати напрямок осі Y"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Reverse Z-Axis Direction"
 msgstr "Інвертувати напрямок осі Z"
 
@@ -4301,42 +4726,52 @@ msgstr ""
 "вниз"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Work Area"
 msgstr "Робоча зона"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Margins define the unusable space around the axis extents."
 msgstr "Поля визначають непридатний простір навколо меж осей."
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Left Margin"
 msgstr "Ліве поле"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Unusable space from left edge"
 msgstr "Непридатний простір від лівого краю"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Top Margin"
 msgstr "Верхнє поле"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Unusable space from top edge"
 msgstr "Непридатний простір від верхнього краю"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Right Margin"
 msgstr "Праве поле"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Unusable space from right edge"
 msgstr "Непридатний простір від правого краю"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Bottom Margin"
 msgstr "Нижнє поле"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Unusable space from bottom edge"
 msgstr "Непридатний простір від нижнього краю"
 
@@ -4353,10 +4788,12 @@ msgstr ""
 "WCS та використовує поля робочої зони як зміщення."
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Soft Limits"
 msgstr "М'які обмеження"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid ""
 "Configurable safety bounds for jogging. Leave disabled to use work surface "
 "bounds."
@@ -4365,6 +4802,7 @@ msgstr ""
 "використовувати межі робочої поверхні."
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Enable Custom Soft Limits"
 msgstr "Увімкнути власні м'які обмеження"
 
@@ -4373,306 +4811,676 @@ msgid "Override work surface bounds with custom limits"
 msgstr "Замінити межі робочої поверхні власними обмеженнями"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "X Min"
 msgstr "X мін"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Minimum X coordinate"
 msgstr "Мінімальна координата X"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Y Min"
 msgstr "Y мін"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Minimum Y coordinate"
 msgstr "Мінімальна координата Y"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "X Max"
 msgstr "X макс"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Maximum X coordinate"
 msgstr "Максимальна координата X"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Y Max"
 msgstr "Y макс"
 
 #: rayforge/ui_gtk/machine/hardware_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
 msgid "Maximum Y coordinate"
 msgstr "Максимальна координата Y"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/camera_page.py
+msgid ""
+"Optional. Configure any cameras you want to use for preview and alignment."
+msgstr ""
+"Необов'язково. Налаштуйте будь-які камери, які ви хочете використовувати для "
+"попереднього перегляду та вирівнювання."
+
+#: rayforge/ui_gtk/machine/wizard_pages/camera_page.py
+msgid ""
+"Set up cameras now or do it later from machine settings. The wizard records "
+"which V4L devices you mark as 'enabled'; detailed lens calibration is "
+"performed on the camera settings page."
+msgstr ""
+"Налаштуйте камери зараз або зробіть це пізніше в налаштуваннях машини. "
+"Майстер запам'ятовує, які V4L-пристрої ви позначили як 'увімкнені'; детальне "
+"калібрування лінзи виконується на сторінці налаштувань камери."
+
+#: rayforge/ui_gtk/machine/wizard_pages/camera_page.py
+msgid "No cameras detected"
+msgstr "Камери не виявлено"
+
+#: rayforge/ui_gtk/machine/wizard_pages/camera_page.py
+msgid "You can add cameras later from machine settings."
+msgstr "Ви можете додати камери пізніше в налаштуваннях машини."
+
+#: rayforge/ui_gtk/machine/wizard_pages/controller_page.py
+msgid "Choose Controller"
+msgstr "Вибір контролера"
+
+#: rayforge/ui_gtk/machine/wizard_pages/controller_page.py
+msgid "What kind of controller board does this machine use?"
+msgstr "Яку плату контролера використовує ця машина?"
+
+#: rayforge/ui_gtk/machine/wizard_pages/controller_page.py
+msgid "Controller"
+msgstr "Контролер"
+
+#: rayforge/ui_gtk/machine/wizard_pages/controller_page.py
+msgid ""
+"Pick the firmware / protocol family for this machine. If you aren't sure, "
+"choose the closest match — you can refine individual settings later."
+msgstr ""
+"Оберіть сімейство прошивки / протоколів для цієї машини. Якщо не впевнені, "
+"оберіть найближчий варіант — окремі налаштування можна уточнити пізніше."
+
+#: rayforge/ui_gtk/machine/wizard_pages/controller_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
+msgid "None — G-code export only"
+msgstr "Немає — лише експорт G-code"
+
+#: rayforge/ui_gtk/machine/wizard_pages/controller_page.py
+msgid "No physical controller; export G-code to a file"
+msgstr "Немає фізичного контролера; експорт G-code у файл"
+
+#: rayforge/ui_gtk/machine/wizard_pages/__init__.py
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "New Machine"
+msgstr "Нова машина"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid ""
+"Optional. Set up a rotary attachment now or skip this step to add one later "
+"from machine settings."
+msgstr ""
+"Необов'язково. Налаштуйте поворотний пристрій зараз або пропустіть цей крок, "
+"щоб додати його пізніше з налаштувань машини."
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Module"
+msgstr "Модуль"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Pick rotary type, axis, mode, and geometry."
+msgstr "Оберіть тип повороту, вісь, режим та геометрію."
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Jaws / chuck"
+msgstr "Кулачки / патрон"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Rollers"
+msgstr "Ролики"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Rotary Type"
+msgstr "Тип повороту"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "How the workpiece is held"
+msgstr "Як утримується заготовка"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Rotary Axis"
+msgstr "Поворотна вісь"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Which axis the rotary uses"
+msgstr "Яку вісь використовує поворотний пристрій"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "True 4th Axis (keeps X/Y/Z)"
+msgstr "Справжня 4-та вісь (зберігає X/Y/Z)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Axis Replacement (swaps e.g. Y for A)"
+msgstr "Заміна осі (замінює, наприклад, Y на A)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Mode"
+msgstr "Режим"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Length per Rotation"
+msgstr "Довжина на оберт"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Auto-fetched from GRBL $101/$103 if probing"
+msgstr "Автоматично отримується з GRBL $101/$103 під час зондування"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Default Workpiece Ø"
+msgstr "Заготовка за замовчуванням Ø"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+#: rayforge/ui_gtk/machine/rotary_module_page.py
+msgid "Max Workpiece Length"
+msgstr "Макс. довжина заготовки"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Roller Ø"
+msgstr "Ролик Ø"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Required when using roller-type rotary"
+msgstr "Потрібно при використанні роликового поворотного пристрою"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Reverse Axis Direction"
+msgstr "Реверсувати напрямок осі"
+
+#: rayforge/ui_gtk/machine/wizard_pages/rotary_page.py
+msgid "Invert the rotary's rotation direction"
+msgstr "Інвертувати напрямок обертання поворотного пристрою"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "—"
+msgstr "—"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Yes"
+msgstr "Так"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "No"
+msgstr "Ні"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Metric (mm)"
+msgstr "Метрична (мм)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Imperial (inches)"
+msgstr "Імперська (дюйми)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Review & Name"
+msgstr "Перегляд та назва"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Final name and sanity check before creating the machine."
+msgstr "Фінальна назва та перевірка перед створенням машини."
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "A friendly name for this machine."
+msgstr "Зручна назва для цієї машини."
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Machine Name"
+msgstr "Назва машини"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Summary"
+msgstr "Підсумок"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/shared/sanity_check_dialog.py
+msgid "Warnings"
+msgstr "Попередження"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "None (G-code export only)"
+msgstr "Немає (лише експорт G-code)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Unknown driver: {}"
+msgstr "Невідомий драйвер: {}"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
+msgid "Connection"
+msgstr "З'єднання"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Work Area X×Y"
+msgstr "Робоча зона X×Y"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Unit System"
+msgstr "Система одиниць"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Max Travel Speed"
+msgstr "Макс. швидкість переміщення"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Max Cut Speed"
+msgstr "Макс. швидкість різання"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Home on Start"
+msgstr "Паркування при запуску"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Rotary Modules"
+msgstr "Поворотні модулі"
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid ""
+"No driver selected — this machine will only export G-code to files; it "
+"cannot run jobs."
+msgstr ""
+"Драйвер не вибрано — ця машина лише експортуватиме G-code у файли; вона не "
+"може виконувати завдання."
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Work area dimensions are unset or non-positive."
+msgstr "Розміри робочої зони не встановлені або не є додатними."
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "No head is configured for this machine."
+msgstr "Для цієї машини не налаштована жодна голівка."
+
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
 #, python-brace-format
-msgid "Tool {tool_number}, max power {max_power}, spot size {spot_x}x{spot_y}"
-msgstr ""
-"Інструмент {tool_number}, макс. потужність {max_power}, розмір плями {spot_x}"
-"x{spot_y}"
+msgid "Head #{n} looks like a laser but has no max_power setting."
+msgstr "Голівка #{n} схожа на лазер, але не має налаштування max_power."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Add New Laser Head"
-msgstr "Додати нову лазерну головку"
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+#, python-brace-format
+msgid "Head #{n} looks like a spindle but has no max_rpm setting."
+msgstr "Голівка #{n} схожа на шпиндель, але не має налаштування max_rpm."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "No laser heads configured"
-msgstr "Лазерні головки не налаштовані"
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Machine name is blank."
+msgstr "Назва машини порожня."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "At least one laser head is required"
-msgstr "Потрібна принаймні одна лазерна головка"
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Missing name"
+msgstr "Відсутня назва"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "New Laser"
-msgstr "Новий лазер"
+#: rayforge/ui_gtk/machine/wizard_pages/review_page.py
+msgid "Please enter a name."
+msgstr "Будь ласка, введіть назву."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Laser Heads"
-msgstr "Лазерні головки"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Discover Device"
+msgstr "Виявити пристрій"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "You can configure multiple laser heads if your machine supports it."
-msgstr ""
-"Ви можете налаштувати кілька лазерних головок, якщо ваш верстат це підтримує."
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Laser Properties"
-msgstr "Властивості лазера"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Configure the selected laser."
-msgstr "Налаштувати обраний лазер."
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Tool Number"
-msgstr "Номер інструменту"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "G-code tool number (e.g., T0, T1)"
-msgstr "Номер інструменту G-коду (наприклад, T0, T1)"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Diode"
-msgstr "Діод"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "CO₂"
-msgstr "CO₂"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Fiber"
-msgstr "Волокно"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Laser Type"
-msgstr "Тип лазера"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Type of laser tube or diode"
-msgstr "Тип лазерної трубки або діода"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Max Power"
-msgstr "Макс. потужність"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Maximum power value in GCode"
-msgstr "Максимальне значення потужності в GCode"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Focus Power"
-msgstr "Потужність фокусування"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Power value in percent to use when focusing. 0 to disable"
-msgstr "Значення потужності у відсотках для фокусування. 0 для вимкнення"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Spot Size X"
-msgstr "Розмір плями X"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Size of the laser spot in the X direction"
-msgstr "Розмір лазерної плями в напрямку X"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Spot Size Y"
-msgstr "Розмір плями Y"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Size of the laser spot in the Y direction"
-msgstr "Розмір лазерної плями в напрямку Y"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Cut Color"
-msgstr "Колір різання"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Color for cutting operations"
-msgstr "Колір для операцій різання"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Raster Color"
-msgstr "Колір растру"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Color for engraving/raster operations"
-msgstr "Колір для операцій гравіювання/растру"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Pulse Width Modulation settings for frequency and pulse width control."
-msgstr ""
-"Налаштування широтно-імпульсної модуляції для контролю частоти та ширини "
-"імпульсу."
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "PWM Frequency"
-msgstr "Частота ШІМ"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Default PWM frequency in Hz"
-msgstr "Типова частота ШІМ у Гц"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Max PWM Frequency"
-msgstr "Макс. частота ШІМ"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Maximum supported PWM frequency in Hz"
-msgstr "Максимальна підтримувана частота ШІМ у Гц"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Default pulse width in µs"
-msgstr "Типова ширина імпульсу в мкс"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Min Pulse Width"
-msgstr "Мін. ширина імпульсу"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Minimum pulse width in µs"
-msgstr "Мінімальна ширина імпульсу в мкс"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Max Pulse Width"
-msgstr "Макс. ширина імпульсу"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Maximum pulse width in µs"
-msgstr "Максимальна ширина імпульсу в мкс"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Framing"
-msgstr "Обрамлення"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Settings for the frame outline operation that traces the job boundary."
-msgstr "Налаштування операції обведення контуру меж завдання."
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Frame Power"
-msgstr "Потужність обведення"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Power value in percent to use when framing. 0 to disable"
-msgstr "Значення потужності у відсотках для обведення. 0 для вимкнення"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Frame Speed"
-msgstr "Швидкість обведення"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
 msgid ""
-"Speed for frame outline. Leave at 0 to use the machine's max travel speed"
+"Connect to the device and read its configuration, or skip to enter the "
+"values manually."
 msgstr ""
-"Швидкість обведення контуру. Залиште 0, щоб використовувати максимальну "
-"швидкість переміщення машини"
+"Підключіться до пристрою та прочитайте його конфігурацію, або пропустіть, "
+"щоб ввести значення вручну."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Repeat Count"
-msgstr "Кількість повторень"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Probing"
+msgstr "Зондування"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Number of times to trace the frame outline"
-msgstr "Кількість разів для обведення контуру"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Pause at Corners"
-msgstr "Пауза на кутах"
-
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
 msgid ""
-"Pause duration in seconds at each corner of the frame outline. 0 to disable"
-msgstr "Тривалість паузи в секундах на кожному куті контуру. 0 для вимкнення"
+"Auto-discover the machine's working area, speeds, and firmware capabilities "
+"by reading its settings over the connection."
+msgstr ""
+"Автоматичне виявлення робочої зони машини, швидкостей та можливостей "
+"прошивки шляхом читання її налаштувань через з'єднання."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "3D Model"
-msgstr "3D-модель"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Probe Now"
+msgstr "Зондувати зараз"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Select and configure a 3D model for this laser head."
-msgstr "Виберіть та налаштуйте 3D-модель для цієї лазерної голови."
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Probing…"
+msgstr "Зондування…"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Model"
-msgstr "Модель"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Connecting to device and reading settings"
+msgstr "Підключення до пристрою та читання налаштувань"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Scale"
-msgstr "Масштаб"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Probe failed"
+msgstr "Зондування не вдалося"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Uniform scale factor for the model"
-msgstr "Рівномірний коефіцієнт масштабування для моделі"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Probe succeeded"
+msgstr "Зондування успішне"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "X Rotation"
-msgstr "Обертання X"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Working area and speeds auto-detected."
+msgstr "Робочу зону та швидкості виявлено автоматично."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Degrees around the X axis"
-msgstr "Градуси навколо осі X"
+#: rayforge/ui_gtk/machine/wizard_pages/probe_page.py
+msgid "Retry"
+msgstr "Повторити"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Y Rotation"
-msgstr "Обертання Y"
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Pick a starting point for the new machine."
+msgstr "Оберіть початкову точку для нової машини."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Degrees around the Y axis"
-msgstr "Градуси навколо осі Y"
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Machine Templates"
+msgstr "Шаблони машин"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Z Rotation"
-msgstr "Обертання Z"
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid ""
+"Pick a built-in profile to pre-fill common settings. You will still be asked "
+"for connection-specific values."
+msgstr ""
+"Оберіть вбудований профіль, щоб попередньо заповнити типові налаштування. "
+"Вас все одно попросять ввести значення, пов'язані з підключенням."
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Degrees around the Z axis"
-msgstr "Градуси навколо осі Z"
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Search devices…"
+msgstr "Пошук пристроїв…"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Focal Distance"
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Import from File…"
+msgstr "Імпортувати з файлу…"
+
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Device Not Listed"
+msgstr "Пристрій не в списку"
+
+#: rayforge/ui_gtk/machine/wizard_pages/profile_page.py
+msgid "Import Failed"
+msgstr "Помилка імпорту"
+
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
+msgid "AI Provider"
+msgstr "AI-провайдер"
+
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
+msgid ""
+"Configure an AI provider so the wizard can pre-fill known machine "
+"specifications."
+msgstr ""
+"Налаштуйте AI-провайдера, щоб майстер міг попередньо заповнювати відомі "
+"характеристики машин."
+
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
+msgid ""
+"Enter an OpenAI-compatible endpoint. This is only used for the automatic "
+"spec lookup; you can also skip and enter the values by hand."
+msgstr ""
+"Введіть сумісну з OpenAI адресу. Вона використовується лише для "
+"автоматичного пошуку характеристик; ви також можете пропустити цей крок і "
+"ввести значення вручну."
+
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
+msgid "Default Provider"
+msgstr "Провайдер за замовчуванням"
+
+#: rayforge/ui_gtk/machine/wizard_pages/provider_page.py
+msgid "Default Model (optional)"
+msgstr "Модель за замовчуванням (необов'язково)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Work area (X, Y)"
+msgstr "Робоча зона (X, Y)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Max cut speed"
+msgstr "Макс. швидкість різання"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Coordinate origin"
+msgstr "Початок координат"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Head type"
+msgstr "Тип голівки"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Head max power (S-value)"
+msgstr "Макс. потужність голівки (значення S)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Head max RPM"
+msgstr "Макс. об/хв голівки"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Head min RPM"
+msgstr "Мін. об/хв голівки"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Spot size (X, Y)"
+msgstr "Розмір плями (X, Y)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "PWM frequency (Hz)"
+msgstr "Частота ШІМ (Гц)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Focal distance"
 msgstr "Фокусна відстань"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-msgid "Distance from the laser head to the work surface (Z offset)"
-msgstr "Відстань від лазерної голови до робочої поверхні (зсув Z)"
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "AI Spec Lookup"
+msgstr "AI-пошук характеристик"
 
-#: rayforge/ui_gtk/machine/laser_preferences_page.py
-#: rayforge/ui_gtk/machine/rotary_module_page.py
-#: rayforge/ui_gtk/shared/model_selection_dialog.py
-#: rayforge/ui_gtk/doceditor/stock_properties_dialog.py
-msgid "None"
-msgstr "Немає"
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid ""
+"If your machine is a known commercial model, the AI can pre-fill "
+"specification values from the manufacturer's documentation."
+msgstr ""
+"Якщо ваша машина — відома комерційна модель, AI може попередньо заповнити "
+"значення характеристик з документації виробника."
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Vendor &amp; Model"
+msgstr "Виробник &amp; модель"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid ""
+"Enter the machine's vendor (manufacturer) and model name. The more specific, "
+"the better — e.g. \"Sculpfun\" / \"S30 Pro\"."
+msgstr ""
+"Введіть виробника та назву моделі машини. Що конкретніше, то краще — "
+"наприклад, \"Sculpfun\" / \"S30 Pro\"."
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Vendor (e.g. Sculpfun)"
+msgstr "Виробник (наприклад, Sculpfun)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Model (e.g. S30 Pro)"
+msgstr "Модель (наприклад, S30 Pro)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Look Up Specs"
+msgstr "Пошук характеристик"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Suggestions"
+msgstr "Пропозиції"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Suggested values are switched on; turn off any you don't want applied."
+msgstr ""
+"Запропоновані значення ввімкнено; вимкніть ті, які не хочете застосовувати."
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid ""
+"No AI provider is configured in Settings. Configure one to enable automatic "
+"spec lookup, or skip this step and enter the values by hand."
+msgstr ""
+"У Налаштуваннях не налаштовано AI-провайдера. Налаштуйте його, щоб увімкнути "
+"автоматичний пошук характеристик, або пропустіть цей крок і введіть значення "
+"вручну."
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Looking up…"
+msgstr "Пошук…"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Lookup failed"
+msgstr "Помилка пошуку"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid ""
+"The AI couldn't return specifications for this machine. You can enter the "
+"values manually in the next steps."
+msgstr ""
+"AI не зміг повернути характеристики для цієї машини. Ви можете ввести "
+"значення вручну на наступних кроках."
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+#, python-brace-format
+msgid "AI suggests: {value}"
+msgstr "AI пропонує: {value}"
+
+#: rayforge/ui_gtk/machine/wizard_pages/ai_lookup_page.py
+msgid "Main Head"
+msgstr "Основна голівка"
+
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
+msgid "Enter the connection parameters for your device."
+msgstr "Введіть параметри з'єднання для вашого пристрою."
+
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
+msgid ""
+"Enter the connection parameters your machine requires. The exact fields "
+"depend on the controller you chose in the previous step."
+msgstr ""
+"Введіть параметри з'єднання, необхідні вашій машині. Точні поля залежать від "
+"контролера, який ви обрали на попередньому кроці."
+
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
+msgid "Fixed by the chosen profile"
+msgstr "Зафіксовано вибраним профілем"
+
+#: rayforge/ui_gtk/machine/wizard_pages/connection_page.py
+msgid "Invalid input"
+msgstr "Неправильний ввід"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Work area, origin, speeds and acceleration."
+msgstr "Робоча зона, початок координат, швидкості та прискорення."
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Physical corner where coordinates are zero after homing"
+msgstr "Фізичний кут, де координати дорівнюють нулю після пошуку дому"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Enable if +Z moves head down"
+msgstr "Увімкніть, якщо +Z опускає голівку вниз"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Override work-surface bounds with custom limits"
+msgstr "Перевизначити межі робочої поверхні власними обмеженнями"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Speeds"
+msgstr "Швидкості"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Limits in machine units per minute."
+msgstr "Межі в одиницях машини за хвилину."
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Maximum rapid movement speed"
+msgstr "Максимальна швидкість швидкого переміщення"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Maximum cutting speed"
+msgstr "Максимальна швидкість різання"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Used for time estimations and calculating the default overscan distance"
+msgstr ""
+"Використовується для оцінки часу та розрахунку відстані оверскану за "
+"замовчуванням"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Run homing cycle when machine connects"
+msgstr "Виконувати цикл паркування при підключенні машини"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Single-Axis Homing"
+msgstr "Паркування по одній осі"
+
+#: rayforge/ui_gtk/machine/wizard_pages/hardware_page.py
+msgid "Allow homing individual axes"
+msgstr "Дозволити паркування окремих осей"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "What's attached to the gantry: a laser, a spindle, or both?"
+msgstr "Що прикріплено до порталу: лазер, шпиндель чи обидва?"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Head Type"
+msgstr "Тип голівки"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Pick the primary head for this machine."
+msgstr "Оберіть основну голівку для цієї машини."
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Type of tool attached to this machine"
+msgstr "Тип інструменту, прикріпленого до цієї машини"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Head Name"
+msgstr "Назва голівки"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Laser Settings"
+msgstr "Налаштування лазера"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Max Power (S-value)"
+msgstr "Макс. потужність (значення S)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Max laser power value in GCode"
+msgstr "Максимальне значення потужності лазера в GCode"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Laser beam width on X axis"
+msgstr "Ширина лазерного променя по осі X"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Laser beam width on Y axis"
+msgstr "Ширина лазерного променя по осі Y"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "PWM Frequency (Hz)"
+msgstr "Частота ШІМ (Гц)"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Laser modulation frequency"
+msgstr "Частота модуляції лазера"
+
+#: rayforge/ui_gtk/machine/wizard_pages/head_page.py
+msgid "Lens-to-workpiece distance"
+msgstr "Відстань від лінзи до заготовки"
 
 #: rayforge/ui_gtk/machine/rotary_module_page.py
 msgid "Axis Replacement"
@@ -4780,10 +5588,6 @@ msgid "Jaws / Chuck"
 msgstr "Кулачки / Патрон"
 
 #: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Rollers"
-msgstr "Ролики"
-
-#: rayforge/ui_gtk/machine/rotary_module_page.py
 msgid "Drive Type"
 msgstr "Тип приводу"
 
@@ -4819,10 +5623,6 @@ msgid "Default diameter for new layers using this module"
 msgstr "Стандартний діаметр для нових шарів, що використовують цей модуль"
 
 #: rayforge/ui_gtk/machine/rotary_module_page.py
-msgid "Max Workpiece Length"
-msgstr "Макс. довжина заготовки"
-
-#: rayforge/ui_gtk/machine/rotary_module_page.py
 msgid "Maximum workpiece length this module can accommodate"
 msgstr "Максимальна довжина заготовки, яку може обслуговувати цей модуль"
 
@@ -4852,6 +5652,33 @@ msgstr "Позиція Z"
 msgid "Z coordinate in machine space"
 msgstr "Координата Z у просторі машини"
 
+#: rayforge/ui_gtk/machine/capabilities_page.py
+#: rayforge/ui_gtk/machine/settings_dialog.py
+msgid "Capabilities"
+msgstr "Можливості"
+
+#: rayforge/ui_gtk/machine/capabilities_page.py
+msgid "Machine Capabilities"
+msgstr "Можливості машини"
+
+#: rayforge/ui_gtk/machine/capabilities_page.py
+msgid ""
+"Capabilities are inferred from the machine's heads, rotary modules, and any "
+"explicit configuration. They control which steps are offered when adding to "
+"a workflow."
+msgstr ""
+"Можливості визначаються на основі голівок машини, поворотних модулів та будь-"
+"якої явної конфігурації. Вони визначають, які кроки пропонуються під час "
+"додавання до робочого процесу."
+
+#: rayforge/ui_gtk/machine/capabilities_page.py
+msgid "explicit configuration"
+msgstr "явна конфігурація"
+
+#: rayforge/ui_gtk/machine/capabilities_page.py
+msgid "unknown source"
+msgstr "невідоме джерело"
+
 #: rayforge/ui_gtk/machine/settings_dialog.py
 #, python-brace-format
 msgid "{machine_name} - Machine Settings"
@@ -4880,7 +5707,7 @@ msgid "Export failed: {error}"
 msgstr "Помилка експорту: {error}"
 
 #: rayforge/ui_gtk/machine/general_preferences_page.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
 msgid "Machine"
 msgstr "Верстат"
 
@@ -4897,6 +5724,10 @@ msgid "Connection and communication settings for the machine driver."
 msgstr "Налаштування підключення та зв'язку для драйвера верстата."
 
 #: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Select driver"
+msgstr "Виберіть драйвер"
+
+#: rayforge/ui_gtk/machine/general_preferences_page.py
 msgid "Speeds &amp; Acceleration"
 msgstr "Швидкості та прискорення"
 
@@ -4907,18 +5738,17 @@ msgstr ""
 "шляху."
 
 #: rayforge/ui_gtk/machine/general_preferences_page.py
-msgid "Maximum rapid movement speed"
-msgstr "Максимальна швидкість швидкого переміщення"
-
-#: rayforge/ui_gtk/machine/general_preferences_page.py
-msgid "Maximum cutting speed"
-msgstr "Максимальна швидкість різання"
-
-#: rayforge/ui_gtk/machine/general_preferences_page.py
-msgid "Used for time estimations and calculating the default overscan distance"
+msgid ""
+"The unit system used when emitting G-code and communicating with the device. "
+"This setting is independent of the units used in the user interface."
 msgstr ""
-"Використовується для оцінки часу та розрахунку відстані оверскану за "
-"замовчуванням"
+"Система одиниць, що використовується під час генерації G-коду та зв'язку "
+"зпристроєм. Цей параметр не залежить від одиниць, які використовуються "
+"вінтерфейсі користувача."
+
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid "Machine Unit System"
+msgstr "Система одиниць машини"
 
 #: rayforge/ui_gtk/machine/general_preferences_page.py
 #, python-brace-format
@@ -4933,6 +5763,26 @@ msgstr "<b>Помилка:</b> {error}"
 #: rayforge/ui_gtk/machine/general_preferences_page.py
 msgid "Not supported by the driver"
 msgstr "Не підтримується драйвером"
+
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid ""
+"The preamble contains G21 (millimeters) but the machine unit system is set "
+"to imperial. G-code values will be emitted in inches — ensure your preamble "
+"matches."
+msgstr ""
+"Преамбула містить G21 (міліметри), але систему одиниць машини встановленона "
+"імперську. Значення G-коду будуть виведені в дюймах — переконайтеся, щоваша "
+"преамбула відповідає."
+
+#: rayforge/ui_gtk/machine/general_preferences_page.py
+msgid ""
+"The preamble contains G20 (inches) but the machine unit system is set to "
+"metric. G-code values will be emitted in millimeters — ensure your preamble "
+"matches."
+msgstr ""
+"Преамбула містить G20 (дюйми), але систему одиниць машини встановлено "
+"наметричну. Значення G-коду будуть виведені в міліметрах — переконайтеся, "
+"щоваша преамбула відповідає."
 
 #: rayforge/ui_gtk/varset/varset_editor.py
 msgid "Drag to reorder"
@@ -4981,11 +5831,6 @@ msgstr "Додати параметр"
 #: rayforge/ui_gtk/varset/varset_editor.py
 msgid "New Parameter"
 msgstr "Новий параметр"
-
-#: rayforge/ui_gtk/varset/adapter/speed.py
-#, python-brace-format
-msgid "Max: {max_speed}"
-msgstr "Макс: {max_speed}"
 
 #: rayforge/ui_gtk/varset/adapter/appkey.py
 msgid "Request Access"
@@ -5132,7 +5977,7 @@ msgid "Install"
 msgstr "Встановити"
 
 #: rayforge/ui_gtk/addon_manager/addon_dialog.py
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
 msgid "Update"
 msgstr "Оновити"
 
@@ -5229,6 +6074,14 @@ msgid "This addon is incompatible with the current version of Rayforge"
 msgstr "Цей додаток несумісний з поточною версією Rayforge"
 
 #: rayforge/ui_gtk/addon_manager/addon_list.py
+msgid ""
+"This addon is experimental and may have unresolved issues. Use it with "
+"caution."
+msgstr ""
+"Цей додаток експериментальний і може мати невирішені проблеми. "
+"Використовуйте з обережністю."
+
+#: rayforge/ui_gtk/addon_manager/addon_list.py
 msgid "Premium addon"
 msgstr "Преміум-доповнення"
 
@@ -5262,6 +6115,29 @@ msgid "Failed to install addon."
 msgstr "Не вдалося встановити додаток."
 
 #: rayforge/ui_gtk/addon_manager/addon_list.py
+msgid "Cannot Disable Addon"
+msgstr "Неможливо вимкнути додаток"
+
+#: rayforge/ui_gtk/addon_manager/addon_list.py
+#, python-brace-format
+msgid ""
+"This addon cannot be disabled.\n"
+"\n"
+"{reason}"
+msgstr ""
+"Цей додаток неможливо вимкнути.\n"
+"\n"
+"{reason}"
+
+#: rayforge/ui_gtk/addon_manager/addon_list.py
+msgid "Addon will be disabled when active jobs complete."
+msgstr "Додаток буде вимкнено після завершення активних завдань."
+
+#: rayforge/ui_gtk/addon_manager/addon_list.py
+msgid "Failed to disable addon. Check the logs for details."
+msgstr "Не вдалося вимкнути додаток. Перевірте журнали для отримання деталей."
+
+#: rayforge/ui_gtk/addon_manager/addon_list.py
 msgid "Failed to enable addon and its dependencies."
 msgstr "Не вдалося увімкнути додаток та його залежності."
 
@@ -5289,29 +6165,6 @@ msgid "Failed to enable addon. Check the logs for details."
 msgstr "Не вдалося увімкнути додаток. Перевірте журнали для отримання деталей."
 
 #: rayforge/ui_gtk/addon_manager/addon_list.py
-msgid "Cannot Disable Addon"
-msgstr "Неможливо вимкнути додаток"
-
-#: rayforge/ui_gtk/addon_manager/addon_list.py
-#, python-brace-format
-msgid ""
-"This addon cannot be disabled.\n"
-"\n"
-"{reason}"
-msgstr ""
-"Цей додаток неможливо вимкнути.\n"
-"\n"
-"{reason}"
-
-#: rayforge/ui_gtk/addon_manager/addon_list.py
-msgid "Addon will be disabled when active jobs complete."
-msgstr "Додаток буде вимкнено після завершення активних завдань."
-
-#: rayforge/ui_gtk/addon_manager/addon_list.py
-msgid "Failed to disable addon. Check the logs for details."
-msgstr "Не вдалося вимкнути додаток. Перевірте журнали для отримання деталей."
-
-#: rayforge/ui_gtk/addon_manager/addon_list.py
 #, python-brace-format
 msgid "Uninstall {name}?"
 msgstr "Видалити {name}?"
@@ -5334,6 +6187,23 @@ msgstr "Помилка при видаленні додатка."
 #: rayforge/ui_gtk/addon_manager/addon_list.py
 msgid "Info"
 msgstr "Інформація"
+
+#: rayforge/ui_gtk/addon_manager/experimental_dialog.py
+msgid "Enable Experimental Addon?"
+msgstr "Увімкнути експериментальний додаток?"
+
+#: rayforge/ui_gtk/addon_manager/experimental_dialog.py
+#, python-brace-format
+msgid ""
+"The addon \"{name}\" is experimental and may have unresolved issues. Use it "
+"with caution."
+msgstr ""
+"Додаток \"{name}\" експериментальний і може мати невирішені проблеми. "
+"Використовуйте з обережністю."
+
+#: rayforge/ui_gtk/addon_manager/experimental_dialog.py
+msgid "Enable Anyway"
+msgstr "Увімкнути в будь-якому разі"
 
 #: rayforge/ui_gtk/shared/usage_consent_dialog.py
 msgid "Help Improve Rayforge"
@@ -5413,26 +6283,6 @@ msgstr "Немає параметрів"
 msgid "Show all options"
 msgstr "Показати всі параметри"
 
-#: rayforge/ui_gtk/shared/playback_overlay.py
-msgid "Play simulation"
-msgstr "Відтворити симуляцію"
-
-#: rayforge/ui_gtk/shared/playback_overlay.py
-msgid "Step backward"
-msgstr "Крок назад"
-
-#: rayforge/ui_gtk/shared/playback_overlay.py
-msgid "Step forward"
-msgstr "Крок уперед"
-
-#: rayforge/ui_gtk/shared/playback_overlay.py
-msgid "Playback speed"
-msgstr "Швидкість відтворення"
-
-#: rayforge/ui_gtk/shared/playback_overlay.py
-msgid "Pause simulation"
-msgstr "Призупинити симуляцію"
-
 #: rayforge/ui_gtk/shared/model_selection_dialog.py
 msgid "Select Model"
 msgstr "Вибрати модель"
@@ -5474,6 +6324,11 @@ msgstr ""
 msgid "Errors"
 msgstr "Помилки"
 
+#: rayforge/ui_gtk/shared/pref_rows/unit_spin_row.py
+#, python-brace-format
+msgid "Value in {unit}"
+msgstr "Значення в {unit}"
+
 #: rayforge/ui_gtk/main_menu.py
 msgid "New"
 msgstr "Новий"
@@ -5483,7 +6338,7 @@ msgid "Open..."
 msgstr "Відкрити..."
 
 #: rayforge/ui_gtk/main_menu.py rayforge/ui_gtk/toolbar.py
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
 msgid "Save As..."
 msgstr "Зберегти як..."
 
@@ -5518,6 +6373,11 @@ msgstr "Скасувати"
 #: rayforge/ui_gtk/main_menu.py rayforge/ui_gtk/toolbar.py
 msgid "Redo"
 msgstr "Повторити"
+
+#: rayforge/ui_gtk/main_menu.py rayforge/ui_gtk/doceditor/asset_browser.py
+#: rayforge/ui_gtk/doceditor/layer_column.py
+msgid "Cut"
+msgstr "Різання"
 
 #: rayforge/ui_gtk/main_menu.py rayforge/ui_gtk/doceditor/asset_browser.py
 #: rayforge/ui_gtk/doceditor/layer_column.py
@@ -5993,6 +6853,22 @@ msgid "How imported layers are mapped to document layers"
 msgstr "Як імпортовані шари відображаються на шари документа"
 
 #: rayforge/ui_gtk/doceditor/import_dialog.py
+msgid "SVG Layers"
+msgstr "SVG-шари"
+
+#: rayforge/ui_gtk/doceditor/import_dialog.py
+msgid "Colors"
+msgstr "Кольори"
+
+#: rayforge/ui_gtk/doceditor/import_dialog.py
+msgid "Layer Source"
+msgstr "Джерело шару"
+
+#: rayforge/ui_gtk/doceditor/import_dialog.py
+msgid "Group imported geometry by SVG layer or by color"
+msgstr "Групувати імпортовану геометрію за SVG-шаром або кольором"
+
+#: rayforge/ui_gtk/doceditor/import_dialog.py
 msgid "Import Image"
 msgstr "Імпортувати зображення"
 
@@ -6100,29 +6976,218 @@ msgstr "Шар з {n} векторами"
 msgid "Generating preview..."
 msgstr "Генерування попереднього перегляду..."
 
-#: rayforge/ui_gtk/doceditor/step_settings/placeholder.py
-msgid "This feature is not available."
-msgstr "Ця функція недоступна."
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+msgid "Applicability"
+msgstr "Застосовність"
 
-#: rayforge/ui_gtk/doceditor/step_settings/placeholder.py
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
 msgid ""
-"The required component '{}' could not be found. The document can still be "
-"saved."
-msgstr "Не вдалося знайти необхідний компонент '{}'. Документ можна зберегти."
+"Define when this recipe should be suggested. Leave fields blank to match any "
+"value."
+msgstr ""
+"Визначте, коли пропонувати цей рецепт. Залиште поля порожніми для "
+"відповідності будь-якому значенню."
 
-#: rayforge/ui_gtk/doceditor/step_settings/base.py
-msgid "Enable {}"
-msgstr "Увімкнути {}"
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_selector_dialog.py
+msgid "Any"
+msgstr "Будь-який"
 
-#: rayforge/ui_gtk/doceditor/step_settings/base.py
-msgid "Toggle {}"
-msgstr "Перемкнути {}"
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Step Types"
+msgstr "Типи кроків"
 
-#: rayforge/ui_gtk/doceditor/step_settings/base.py
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid ""
+"The step types this recipe applies to. Leave empty to match any step type."
+msgstr ""
+"Типи кроків, до яких застосовується цей рецепт. Залиште порожнім, щоб "
+"відповідати будь-якому типу кроку."
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Select..."
+msgstr "Вибрати..."
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Clear Step Types Selection"
+msgstr "Очистити вибір типів кроків"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+#: rayforge/ui_gtk/doceditor/stock_properties_dialog.py
+msgid "Material"
+msgstr "Матеріал"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Clear Material Selection"
+msgstr "Очистити вибір матеріалу"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Min Thickness"
+msgstr "Мін. товщина"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Minimum stock thickness for this recipe to apply"
+msgstr "Мінімальна товщина заготовки для застосування цього рецепта"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Max Thickness"
+msgstr "Макс. товщина"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Maximum stock thickness for this recipe to apply"
+msgstr "Максимальна товщина заготовки для застосування цього рецепта"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "…"
+msgstr "…"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/applicability.py
+msgid "Not Found"
+msgstr "Не знайдено"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/general.py
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+msgid "Recipe"
+msgstr "Рецепт"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/general.py
+msgid "A named preset of settings that can be automatically applied later."
+msgstr ""
+"Іменований пресет налаштувань, який можна автоматично застосувати пізніше."
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/settings.py
+msgid ""
+"The settings that will be applied by this recipe. When multiple step types "
+"are selected, only settings common to all of them are shown."
+msgstr ""
+"Налаштування, які будуть застосовані цим рецептом. Коли вибрано кілька типів "
+"кроків, показуються лише налаштування, спільні для всіх них."
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/post_processing.py
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/step_settings/pages/post_processing.py
+#: rayforge/ui_gtk/doceditor/step_settings/dialog.py
+msgid "Post Processing"
+msgstr "Постобробка"
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/post_processing.py
+msgid ""
+"Transformer settings applied by this recipe. When multiple step types are "
+"selected, only transformers common to all of them are shown."
+msgstr ""
+"Налаштування трансформаторів, застосовані цим рецептом. Коли вибрано кілька "
+"типів кроків, показуються лише трансформатори, спільні для всіх них."
+
+#: rayforge/ui_gtk/doceditor/recipes/pages/post_processing.py
+#: rayforge/ui_gtk/doceditor/step_settings/pages/post_processing.py
+msgid "No post-processing options available for this step."
+msgstr "Для цього кроку немає доступних опцій постобробки."
+
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+msgid "Edit Recipe"
+msgstr "Редагувати рецепт"
+
+#: rayforge/ui_gtk/doceditor/recipes/edit_recipe_dialog.py
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+msgid "Add New Recipe"
+msgstr "Додати новий рецепт"
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+msgid "Unknown Machine"
+msgstr "Невідома машина"
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+msgid "Unknown Material"
+msgstr "Невідомий матеріал"
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+msgid "No recipes found."
+msgstr "Рецепти не знайдено."
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_list.py
+msgid "The recipe will be permanently removed. This action cannot be undone."
+msgstr "Рецепт буде остаточно видалено. Цю дію неможливо скасувати."
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_selector_dialog.py
+msgid "Select Recipe"
+msgstr "Вибрати рецепт"
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_selector_dialog.py
+msgid "Choose a recipe to apply to the current step."
+msgstr "Виберіть рецепт для застосування до поточного кроку."
+
+#: rayforge/ui_gtk/doceditor/recipes/recipe_selector_dialog.py
+msgid "Show only compatible recipes"
+msgstr "Показати лише сумісні рецепти"
+
+#: rayforge/ui_gtk/doceditor/recipes/varset_widget.py
+#: rayforge/ui_gtk/doceditor/post_processor/groups/transformer_group.py
+msgid "Apply this setting to the step"
+msgstr "Застосувати цей параметр до кроку"
+
+#: rayforge/ui_gtk/doceditor/step_settings/pages/base.py
+msgid "Step name and recipe settings."
+msgstr "Назва кроку та налаштування рецепта."
+
+#: rayforge/ui_gtk/doceditor/step_settings/pages/base.py
 #, python-brace-format
 msgid "Change {key}"
 msgstr "Змінити {key}"
+
+#: rayforge/ui_gtk/doceditor/step_settings/pages/post_processing.py
+msgid "Transformers applied to this step's generated toolpath."
+msgstr ""
+"Трансформатори, застосовані до згенерованого шляху інструмента цього кроку."
+
+#: rayforge/ui_gtk/doceditor/step_settings/dialog.py
+#, python-brace-format
+msgid "{name} Settings"
+msgstr "Налаштування {name}"
+
+#: rayforge/ui_gtk/doceditor/step_settings/dialog.py
+msgid "Step Settings"
+msgstr "Налаштування кроку"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+msgid "Choose..."
+msgstr "Вибрати..."
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+msgid "Manual Settings"
+msgstr "Ручні налаштування"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+#, python-brace-format
+msgid "Apply Recipe '{name}'"
+msgstr "Застосувати рецепт '{name}'"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+msgid "Apply Recipe Transformer"
+msgstr "Застосувати трансформатор рецепта"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+#, python-brace-format
+msgid "New {label} Recipe"
+msgstr "Новий рецепт {label}"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+msgid "Set Applied Recipe"
+msgstr "Встановити застосований рецепт"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+#, python-brace-format
+msgid "Update Recipe '{name}'?"
+msgstr "Оновити рецепт '{name}'?"
+
+#: rayforge/ui_gtk/doceditor/step_settings/recipe_control_widget.py
+msgid ""
+"This will permanently overwrite the saved recipe with the current step "
+"settings. This action cannot be undone."
+msgstr ""
+"Це остаточно перезапише збережений рецепт поточними налаштуваннями кроку. Цю "
+"дію неможливо скасувати."
 
 #: rayforge/ui_gtk/doceditor/material_library_list.py
 msgid "1 material"
@@ -6175,124 +7240,9 @@ msgid "Enter a name for the new library folder:"
 msgstr "Введіть назву для нової папки бібліотеки:"
 
 #: rayforge/ui_gtk/doceditor/material_library_list.py
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-#: rayforge/ui_gtk/doceditor/add_material_dialog.py
-msgid "Add"
-msgstr "Додати"
-
-#: rayforge/ui_gtk/doceditor/material_library_list.py
 msgid "Failed to create library. A folder with that name may already exist."
 msgstr ""
 "Не вдалося створити бібліотеку. Папка з такою назвою може вже існувати."
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-msgid "General Settings"
-msgstr "Загальні налаштування"
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-msgid "Power, speed, and laser head selection for this operation."
-msgstr "Потужність, швидкість та вибір лазерної головки для цієї операції."
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-msgid "Change Laser"
-msgstr "Змінити лазер"
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-msgid "No post-processing options available for this step."
-msgstr "Для цього кроку немає доступних опцій постобробки."
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-#, python-brace-format
-msgid "{name} Settings"
-msgstr "Налаштування {name}"
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-msgid "Step Settings"
-msgstr "Налаштування кроку"
-
-#: rayforge/ui_gtk/doceditor/step_settings_dialog.py
-msgid "Post Processing"
-msgstr "Постобробка"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Edit Recipe"
-msgstr "Редагувати рецепт"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-#: rayforge/ui_gtk/doceditor/recipe_list.py
-msgid "Add New Recipe"
-msgstr "Додати новий рецепт"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Applicability"
-msgstr "Застосовність"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-msgid "Recipe"
-msgstr "Рецепт"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "A named preset of settings that can be automatically applied later."
-msgstr ""
-"Іменований пресет налаштувань, який можна автоматично застосувати пізніше."
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid ""
-"Define when this recipe should be suggested. Leave fields blank to match any "
-"value."
-msgstr ""
-"Визначте, коли пропонувати цей рецепт. Залиште поля порожніми для "
-"відповідності будь-якому значенню."
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Any Machine"
-msgstr "Будь-яка машина"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Task Type"
-msgstr "Тип завдання"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-#: rayforge/ui_gtk/doceditor/stock_properties_dialog.py
-msgid "Material"
-msgstr "Матеріал"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Select..."
-msgstr "Вибрати..."
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Clear Material Selection"
-msgstr "Очистити вибір матеріалу"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Min Thickness"
-msgstr "Мін. товщина"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Minimum stock thickness for this recipe to apply"
-msgstr "Мінімальна товщина заготовки для застосування цього рецепта"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Max Thickness"
-msgstr "Макс. товщина"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Maximum stock thickness for this recipe to apply"
-msgstr "Максимальна товщина заготовки для застосування цього рецепта"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "The process settings that will be applied by this recipe."
-msgstr "Налаштування процесу, які буде застосовано цим рецептом."
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Not Found"
-msgstr "Не знайдено"
-
-#: rayforge/ui_gtk/doceditor/edit_recipe_dialog.py
-msgid "Any"
-msgstr "Будь-який"
 
 #: rayforge/ui_gtk/doceditor/file_dialogs.py
 msgid "Open File"
@@ -6363,44 +7313,12 @@ msgid "Category"
 msgstr "Категорія"
 
 #: rayforge/ui_gtk/doceditor/add_material_dialog.py
-msgid "Color"
-msgstr "Колір"
-
-#: rayforge/ui_gtk/doceditor/add_material_dialog.py
 msgid "Custom"
 msgstr "Власний"
-
-#: rayforge/ui_gtk/doceditor/recipe_list.py
-msgid "Unknown Machine"
-msgstr "Невідома машина"
-
-#: rayforge/ui_gtk/doceditor/recipe_list.py
-msgid "Unknown Material"
-msgstr "Невідомий матеріал"
-
-#: rayforge/ui_gtk/doceditor/recipe_list.py
-msgid "No recipes found."
-msgstr "Рецепти не знайдено."
-
-#: rayforge/ui_gtk/doceditor/recipe_list.py
-msgid "The recipe will be permanently removed. This action cannot be undone."
-msgstr "Рецепт буде остаточно видалено. Цю дію неможливо скасувати."
 
 #: rayforge/ui_gtk/doceditor/layers_tab.py
 msgid "Add New Layer"
 msgstr "Додати новий шар"
-
-#: rayforge/ui_gtk/doceditor/recipe_selector_dialog.py
-msgid "Select Recipe"
-msgstr "Вибрати рецепт"
-
-#: rayforge/ui_gtk/doceditor/recipe_selector_dialog.py
-msgid "Choose a recipe to apply to the current step."
-msgstr "Виберіть рецепт для застосування до поточного кроку."
-
-#: rayforge/ui_gtk/doceditor/recipe_selector_dialog.py
-msgid "Show only compatible recipes"
-msgstr "Показати лише сумісні рецепти"
 
 #: rayforge/ui_gtk/doceditor/stock_properties_dialog.py
 #: rayforge/ui_gtk/doceditor/item_properties.py
@@ -6521,6 +7439,18 @@ msgstr "Верстат має бути підключено для встано�
 msgid "Set current position as 0"
 msgstr "Встановити поточну позицію як 0"
 
+#: rayforge/ui_gtk/doceditor/step_type_selection_dialog.py
+msgid "Select Step Types"
+msgstr "Вибрати типи кроків"
+
+#: rayforge/ui_gtk/doceditor/step_type_selection_dialog.py
+msgid "Choose which step types this recipe applies to."
+msgstr "Виберіть типи кроків, до яких застосовується цей рецепт."
+
+#: rayforge/ui_gtk/doceditor/step_type_selection_dialog.py
+msgid "Search..."
+msgstr "Пошук..."
+
 #: rayforge/ui_gtk/doceditor/missing_features_dialog.py
 msgid "Missing Features"
 msgstr "Відсутні функції"
@@ -6568,6 +7498,12 @@ msgstr "Змінити порядок кроків"
 msgid "Add step '{name}'"
 msgstr "Додати крок '{name}'"
 
+#: rayforge/ui_gtk/doceditor/workflow_row.py
+#: rayforge/ui_gtk/doceditor/workflow_view.py
+#, python-brace-format
+msgid "Remove step '{name}'"
+msgstr "Видалити крок '{name}'"
+
 #: rayforge/ui_gtk/doceditor/layer_column.py
 msgid "Layer Settings"
 msgstr "Налаштування шару"
@@ -6579,6 +7515,10 @@ msgstr "Видалити цей шар"
 #: rayforge/ui_gtk/doceditor/layer_column.py rayforge/doceditor/layer_cmd.py
 msgid "Toggle layer visibility"
 msgstr "Перемкнути видимість шару"
+
+#: rayforge/ui_gtk/doceditor/layer_column.py
+msgid "Rename"
+msgstr "Перейменувати"
 
 #: rayforge/ui_gtk/doceditor/property_providers/transform.py
 #, python-brace-format
@@ -6639,8 +7579,8 @@ msgstr "Скинути нахил до 0°"
 
 #: rayforge/ui_gtk/doceditor/property_providers/transform.py
 #, python-brace-format
-msgid "Natural: {val:.2f}"
-msgstr "Природний: {val:.2f}"
+msgid "Natural: {val}"
+msgstr "Натуральний: {val}"
 
 #: rayforge/ui_gtk/doceditor/property_providers/workpiece.py
 msgid "Source File"
@@ -6681,6 +7621,7 @@ msgid "Remove all tabs"
 msgstr "Видалити всі табуляції"
 
 #: rayforge/ui_gtk/doceditor/property_providers/workpiece.py
+#: rayforge/ui_gtk/doceditor/add_tabs_popover.py
 msgid "Tab Width"
 msgstr "Ширина табуляції"
 
@@ -6706,12 +7647,26 @@ msgid "Number of Tabs"
 msgstr "Кількість табуляцій"
 
 #: rayforge/ui_gtk/doceditor/add_tabs_popover.py
-msgid "Tab Width (mm)"
-msgstr "Ширина табуляції (мм)"
-
-#: rayforge/ui_gtk/doceditor/add_tabs_popover.py
 msgid "Adjust Equidistant Tabs"
 msgstr "Налаштувати рівновіддалені табуляції"
+
+#: rayforge/ui_gtk/doceditor/post_processor/groups/transformer_group.py
+msgid "Enable {}"
+msgstr "Увімкнути {}"
+
+#: rayforge/ui_gtk/doceditor/post_processor/groups/transformer_group.py
+msgid "Toggle {}"
+msgstr "Перемкнути {}"
+
+#: rayforge/ui_gtk/doceditor/post_processor/groups/placeholder_group.py
+msgid "This feature is not available."
+msgstr "Ця функція недоступна."
+
+#: rayforge/ui_gtk/doceditor/post_processor/groups/placeholder_group.py
+msgid ""
+"The required component '{}' could not be found. The document can still be "
+"saved."
+msgstr "Не вдалося знайти необхідний компонент '{}'. Документ можна зберегти."
 
 #: rayforge/ui_gtk/doceditor/step_box.py
 msgid "Toggle step visibility"
@@ -6748,41 +7703,6 @@ msgstr "Усі метадані, витягнуті з зображення."
 #: rayforge/ui_gtk/doceditor/image_metadata_dialog.py
 msgid "Metadata copied to clipboard"
 msgstr "Метадані скопійовано до буфера обміну"
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-msgid "Choose..."
-msgstr "Вибрати..."
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-msgid "Manual Settings"
-msgstr "Ручні налаштування"
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-#, python-brace-format
-msgid "Apply Recipe '{name}'"
-msgstr "Застосувати рецепт '{name}'"
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-#, python-brace-format
-msgid "New {cap} Recipe"
-msgstr "Новий рецепт {cap}"
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-msgid "Set Applied Recipe"
-msgstr "Встановити застосований рецепт"
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-#, python-brace-format
-msgid "Update Recipe '{name}'?"
-msgstr "Оновити рецепт '{name}'?"
-
-#: rayforge/ui_gtk/doceditor/recipe_control_widget.py
-msgid ""
-"This will permanently overwrite the saved recipe with the current step "
-"settings. This action cannot be undone."
-msgstr ""
-"Це остаточно перезапише збережений рецепт поточними налаштуваннями кроку. Цю "
-"дію неможливо скасувати."
 
 #: rayforge/ui_gtk/doceditor/item_properties.py
 msgid "Item Properties"
@@ -6868,8 +7788,8 @@ msgid "Object Diameter"
 msgstr "Діаметр об'єкта"
 
 #: rayforge/ui_gtk/doceditor/layer_settings_dialog.py
-msgid "Diameter of the cylindrical object in machine units"
-msgstr "Діаметр циліндричного об'єкта в одиницях машини"
+msgid "Diameter of the cylindrical object"
+msgstr "Діаметр циліндричного об'єкта"
 
 #: rayforge/ui_gtk/doceditor/material_list.py
 msgid "No materials in selected library."
@@ -6941,10 +7861,25 @@ msgstr "{count} крок"
 msgid "{count} steps"
 msgstr "{count} кроків"
 
-#: rayforge/ui_gtk/doceditor/workflow_view.py
-#, python-brace-format
-msgid "Remove step '{name}'"
-msgstr "Видалити крок '{name}'"
+#: rayforge/ui_gtk/sim3d/playback_overlay.py
+msgid "Play simulation"
+msgstr "Відтворити симуляцію"
+
+#: rayforge/ui_gtk/sim3d/playback_overlay.py
+msgid "Step backward"
+msgstr "Крок назад"
+
+#: rayforge/ui_gtk/sim3d/playback_overlay.py
+msgid "Step forward"
+msgstr "Крок уперед"
+
+#: rayforge/ui_gtk/sim3d/playback_overlay.py
+msgid "Playback speed"
+msgstr "Швидкість відтворення"
+
+#: rayforge/ui_gtk/sim3d/playback_overlay.py
+msgid "Pause simulation"
+msgstr "Призупинити симуляцію"
 
 #: rayforge/ui_gtk/about.py
 msgid "Not found"
@@ -7153,7 +8088,7 @@ msgstr "Встановлення оновлень додатків..."
 #, python-brace-format
 msgid "Addon successfully updated."
 msgid_plural "{num} addons successfully updated."
-msgstr[0] "Додаток успішно оновлено."
+msgstr[0] "{num} додаток успішно оновлено."
 msgstr[1] "{num} додатків успішно оновлено."
 msgstr[2] "{num} додатків успішно оновлено."
 
@@ -7166,7 +8101,7 @@ msgstr "{num_s} додатків оновлено, {num_f} не вдалося."
 #, python-brace-format
 msgid "Failed to update addon."
 msgid_plural "Failed to update {num} addons."
-msgstr[0] "Не вдалося оновити додаток."
+msgstr[0] "Не вдалося оновити {num} додаток."
 msgstr[1] "Не вдалося оновити {num} додатків."
 msgstr[2] "Не вдалося оновити {num} додатків."
 
@@ -7236,25 +8171,63 @@ msgstr ""
 "Шлях до каталогу користувацької конфігурації. Корисно для тестування з "
 "ізольованими конфігураціями."
 
-#: rayforge/pipeline/stage/step_runner.py
-msgid "Assembling step..."
-msgstr "Збирання кроку..."
+#: rayforge/pipeline/status_messages.py
+msgid "Aggregate"
+msgstr "Агрегування"
 
-#: rayforge/pipeline/stage/step_runner.py
-msgid "Storing step data..."
-msgstr "Збереження даних кроку..."
+#: rayforge/pipeline/status_messages.py
+#, python-brace-format
+msgid "{status} — {activity}"
+msgstr "{status} — {activity}"
 
-#: rayforge/pipeline/stage/step_runner.py
-msgid "Calculating time estimate..."
-msgstr "Розрахунок оцінки часу..."
+#: rayforge/pipeline/status_messages.py
+msgid "Aggregating job"
+msgstr "Агрегування завдання"
 
-#: rayforge/pipeline/stage/job_runner.py
-msgid "Storing final job artifact..."
-msgstr "Збереження фінального артефакту завдання..."
+#: rayforge/pipeline/status_messages.py
+msgid "Generating machine code"
+msgstr "Генерація машинного коду"
 
-#: rayforge/pipeline/stage/job_runner.py rayforge/pipeline/stage/job_compute.py
-msgid "Job finalization complete"
-msgstr "Завершення завдання виконано"
+#: rayforge/pipeline/status_messages.py
+msgid "Applying machine transform"
+msgstr "Застосування перетворення машини"
+
+#: rayforge/pipeline/status_messages.py
+msgid "Processing"
+msgstr "Обробка"
+
+#: rayforge/pipeline/status_messages.py
+#, python-brace-format
+msgid "Processing '{workpiece}' — {step}"
+msgstr "Обробка '{workpiece}' — {step}"
+
+#: rayforge/pipeline/status_messages.py
+msgid "Assembling"
+msgstr "Збирання"
+
+#: rayforge/pipeline/status_messages.py
+#, python-brace-format
+msgid "Assembling '{step}'"
+msgstr "Збирання '{step}'"
+
+#: rayforge/pipeline/assembly_warnings.py
+msgid "default face"
+msgstr "грань за замовчуванням"
+
+#: rayforge/pipeline/assembly_warnings.py
+#, python-brace-format
+msgid "Face '{face}' could not be machined: {detail}"
+msgstr "Грань '{face}' не вдалося обробити: {detail}"
+
+#: rayforge/pipeline/assembly_warnings.py
+#, python-brace-format
+msgid "Region {region} of face '{face}' could not be machined: {detail}"
+msgstr "Область {region} грані '{face}' не вдалося обробити: {detail}"
+
+#: rayforge/pipeline/assembly_warnings.py
+#, python-brace-format
+msgid "Machining warning: {detail}"
+msgstr "Попередження обробки: {detail}"
 
 #: rayforge/pipeline/stage/assembler_helpers.py
 msgid "Variable Power"
@@ -7284,58 +8257,10 @@ msgstr "Постійне"
 msgid "Multi-Pass"
 msgstr "Багатопрохідний"
 
-#: rayforge/pipeline/stage/workpiece_compute.py
+#: rayforge/pipeline/intent_controller.py
 #, python-brace-format
-msgid "Applying '{transformer}' on '{workpiece}'"
-msgstr "Застосування '{transformer}' до '{workpiece}'"
-
-#: rayforge/pipeline/stage/workpiece_compute.py
-#, python-brace-format
-msgid "Generating path for '{workpiece}'"
-msgstr "Генерація шляху для '{workpiece}'"
-
-#: rayforge/pipeline/stage/workpiece_compute.py
-#, python-brace-format
-msgid "Finalizing '{workpiece}'"
-msgstr "Завершення '{workpiece}'"
-
-#: rayforge/pipeline/stage/step_compute.py
-#, python-brace-format
-msgid "Applying '{t}'"
-msgstr "Застосування '{t}'"
-
-#: rayforge/pipeline/stage/job_compute.py
-msgid "Assembling final job..."
-msgstr "Збирання фінального завдання..."
-
-#: rayforge/pipeline/stage/job_compute.py
-#, python-brace-format
-msgid "Processing final ops for '{step}'"
-msgstr "Обробка фінальних операцій для '{step}'"
-
-#: rayforge/pipeline/stage/job_compute.py
-msgid "Calculating final time and distance estimates..."
-msgstr "Розрахунок фінальних оцінок часу та відстані..."
-
-#: rayforge/pipeline/stage/job_compute.py
-msgid "Generating machine code..."
-msgstr "Генерація машинного коду..."
-
-#: rayforge/pipeline/view/view_compute.py
-msgid "Rendering vertices..."
-msgstr "Рендеринг вершин..."
-
-#: rayforge/pipeline/view/view_compute.py
-msgid "Preparing 2D preview..."
-msgstr "Підготовка 2D перегляду..."
-
-#: rayforge/pipeline/view/view_compute.py
-msgid "Rendering texture..."
-msgstr "Рендеринг текстури..."
-
-#: rayforge/pipeline/view/view_compute.py
-msgid "Rendering complete."
-msgstr "Рендеринг завершено."
+msgid "(+{n} more)"
+msgstr "(+{n} ще)"
 
 #: rayforge/pipeline/transformer/placeholder.py
 msgid "Missing: {}"
@@ -7463,6 +8388,18 @@ msgid "Toggle Asset Visibility"
 msgstr "Перемкнути видимість ресурсу"
 
 #: rayforge/doceditor/file_cmd.py
+msgid "Flood"
+msgstr "Заливний"
+
+#: rayforge/doceditor/file_cmd.py
+msgid "Mist"
+msgstr "Туманний"
+
+#: rayforge/doceditor/file_cmd.py rayforge/doceditor/layer_cmd.py
+msgid "Rename layer"
+msgstr "Перейменувати шар"
+
+#: rayforge/doceditor/file_cmd.py
 #, python-brace-format
 msgid "Import {filename}"
 msgstr "Імпортувати {filename}"
@@ -7546,6 +8483,15 @@ msgstr "Файл не знайдено: {name}"
 
 #: rayforge/doceditor/file_cmd.py
 #, python-brace-format
+msgid ""
+"This project uses cooling methods not supported by the current machine: "
+"{methods}"
+msgstr ""
+"Цей проєкт використовує методи охолодження, які не підтримуються поточною "
+"машиною: {methods}"
+
+#: rayforge/doceditor/file_cmd.py
+#, python-brace-format
 msgid "{count} asset(s) require disabled addon(s)"
 msgstr "{count} ресурс(и) потребують вимкнені розширення"
 
@@ -7562,6 +8508,10 @@ msgstr "Помилка завантаження: {error}"
 #, python-brace-format
 msgid "Could not fit the following items: {item_names}"
 msgstr "Не вдалося розмістити наступні елементи: {item_names}"
+
+#: rayforge/doceditor/step_cmd.py
+msgid "Rename step"
+msgstr "Перейменувати крок"
 
 #: rayforge/doceditor/stock_cmd.py
 msgid "Remove Stock Asset"
@@ -7609,14 +8559,6 @@ msgid "Move to another layer"
 msgstr "Перемістити на інший шар"
 
 #: rayforge/doceditor/layer_cmd.py
-msgid "Layer"
-msgstr "Шар"
-
-#: rayforge/doceditor/layer_cmd.py
-msgid "Rename layer"
-msgstr "Перейменувати шар"
-
-#: rayforge/doceditor/layer_cmd.py
 msgid "Set active layer"
 msgstr "Встановити активний шар"
 
@@ -7624,10 +8566,6 @@ msgstr "Встановити активний шар"
 #, python-brace-format
 msgid "Remove layer '{name}'"
 msgstr "Видалити шар '{name}'"
-
-#: rayforge/doceditor/layer_cmd.py
-msgid "Reorder layers"
-msgstr "Змінити порядок шарів"
 
 #: rayforge/doceditor/layer_cmd.py
 msgid "Reorder workpieces"
@@ -7695,6 +8633,10 @@ msgid "Remove item"
 msgstr "Видалити елемент"
 
 #: rayforge/doceditor/edit_cmd.py
+msgid "Rename item"
+msgstr "Перейменувати елемент"
+
+#: rayforge/doceditor/edit_cmd.py
 msgid "Remove all workpieces"
 msgstr "Видалити всі робочі деталі"
 
@@ -7718,9 +8660,17 @@ msgstr "Позиціювати в точці"
 msgid "Auto Layout"
 msgstr "Автоматичне компонування"
 
+#: rayforge/image/png/importer.py
+msgid "Failed to scan PNG file: {}"
+msgstr "Не вдалося сканувати файл PNG: {}"
+
 #: rayforge/image/png/importer.py rayforge/image/jpg/importer.py
 msgid "Failed to process image data."
 msgstr "Не вдалося обробити дані зображення."
+
+#: rayforge/image/png/importer.py rayforge/image/jpg/importer.py
+msgid "Image load failed: {}"
+msgstr "Не вдалося завантажити зображення: {}"
 
 #: rayforge/image/svg/svg_base.py
 msgid "Could not calculate SVG metadata."
@@ -7754,9 +8704,21 @@ msgstr "Не вдалося нормалізувати дані зображен
 msgid "PDF file contains no pages."
 msgstr "PDF-файл не містить сторінок."
 
+#: rayforge/image/pdf/pdf_trace.py rayforge/image/pdf/pdf_vector.py
+msgid "Could not read PDF: {}"
+msgstr "Не вдалося прочитати PDF: {}"
+
+#: rayforge/image/pdf/pdf_trace.py
+msgid "Unexpected error while scanning PDF: {}"
+msgstr "Неочікувана помилка під час сканування PDF: {}"
+
 #: rayforge/image/pdf/pdf_trace.py
 msgid "Failed to process PDF image data."
 msgstr "Не вдалося обробити дані зображення PDF."
+
+#: rayforge/image/pdf/pdf_trace.py
+msgid "Failed to read PDF page dimensions: {}"
+msgstr "Не вдалося прочитати розміри сторінок PDF: {}"
 
 #: rayforge/image/pdf/pdf_trace.py rayforge/image/pdf/pdf_vector.py
 msgid "PDF page has zero dimensions"
@@ -7770,13 +8732,73 @@ msgstr "Не вдалося растеризувати PDF"
 msgid "PDF contains no vector geometry."
 msgstr "PDF не містить векторної геометрії."
 
+#: rayforge/image/pdf/pdf_vector.py
+msgid "Failed to parse PDF: {}"
+msgstr "Не вдалося розібрати PDF: {}"
+
+#: rayforge/image/lightburn/importer.py
+msgid "LightBurn file is invalid XML: {}"
+msgstr "Файл LightBurn містить недійсний XML: {}"
+
+#: rayforge/image/lightburn/importer.py
+msgid "LightBurn file is corrupt or invalid: {}"
+msgstr "Файл LightBurn пошкоджено або він недійсний: {}"
+
+#: rayforge/image/bmp/importer.py
+msgid "Could not parse BMP header in {}"
+msgstr "Не вдалося розібрати заголовок BMP у {}"
+
+#: rayforge/image/bmp/importer.py
+msgid "Failed to scan BMP file: {}"
+msgstr "Не вдалося сканувати файл BMP: {}"
+
 #: rayforge/image/bmp/importer.py
 msgid "Invalid or unsupported BMP data."
 msgstr "Неприпустимі або непідтримувані дані BMP."
 
+#: rayforge/image/bmp/importer.py
+msgid "Image processing failed: {}"
+msgstr "Не вдалося обробити зображення: {}"
+
 #: rayforge/image/ruida/importer.py
 msgid "File contains no vector commands."
 msgstr "Файл не містить векторних команд."
+
+#: rayforge/image/ruida/importer.py
+msgid "Ruida file is invalid: {}"
+msgstr "Файл Ruida недійсний: {}"
+
+#: rayforge/image/ruida/importer.py
+msgid "Unexpected error while scanning Ruida file: {}"
+msgstr "Неочікувана помилка під час сканування файлу Ruida: {}"
+
+#: rayforge/image/ruida/importer.py
+msgid "Failed to parse Ruida commands: {}"
+msgstr "Не вдалося розібрати команди Ruida: {}"
+
+#: rayforge/image/dxf/importer.py
+msgid "DXF file structure is invalid: {}"
+msgstr "Структура файлу DXF недійсна: {}"
+
+#: rayforge/image/dxf/importer.py
+msgid "Unexpected error while scanning DXF: {}"
+msgstr "Неочікувана помилка під час сканування DXF: {}"
+
+#: rayforge/image/dxf/importer.py
+msgid "DXF file is corrupt or invalid: {}"
+msgstr "Файл DXF пошкоджено або він недійсний: {}"
+
+#: rayforge/image/procedural/importer.py
+msgid "Failed to calculate parameters: {}"
+msgstr "Не вдалося розрахувати параметри: {}"
+
+#: rayforge/image/procedural/importer.py
+msgid "Failed to execute generator: {}"
+msgstr "Не вдалося виконати генератор: {}"
+
+#: rayforge/image/jpg/importer.py
+msgid "Failed to scan JPEG file: {}"
+msgstr "Не вдалося сканувати файл JPEG: {}"
 
 #: rayforge/image/dither.py
 msgid "Floyd Steinberg"

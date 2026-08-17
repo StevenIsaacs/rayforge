@@ -95,12 +95,12 @@ class MockSmoothieServer:
                     except (OSError, AttributeError):
                         pass
                     sock.close()
-            except Exception:
+            except (OSError, AttributeError):
                 pass
 
             try:
                 writer.close()
-            except Exception:
+            except OSError:
                 pass
 
         # 3. Cancel all client tasks
@@ -142,7 +142,7 @@ class MockSmoothieServer:
                     continue
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except (OSError, EOFError):
                     break
 
                 if not data:
@@ -174,7 +174,7 @@ class MockSmoothieServer:
             pass
         except asyncio.CancelledError:
             pass
-        except Exception as e:
+        except OSError as e:
             if not self._stopping:
                 logger.error(f"Mock server client error: {e}")
         finally:
@@ -183,7 +183,7 @@ class MockSmoothieServer:
             try:
                 writer.close()
                 await writer.wait_closed()
-            except Exception:
+            except OSError:
                 pass
 
 
@@ -316,7 +316,7 @@ class TestSmoothieDriver:
         driver.job_finished.send = job_finished_mock
         callback_mock = MagicMock()
 
-        encoded = driver._machine.encode_ops(ops, doc)
+        encoded = driver.get_encoder().encode(ops, driver._machine, doc)
         await driver.run(encoded, doc, ops, callback_mock)
 
         # Check that the server received the correct G-code

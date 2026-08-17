@@ -1,13 +1,13 @@
 from gettext import gettext as _
-from typing import Optional
 
 from gi.repository import Adw, GLib, Gtk
 
 from ...machine.cmd import MachineCmd
-from ...machine.models.laser import Laser
+from ...machine.models.laser import Laser, LaserHead
 from ...machine.models.machine import Machine
 from ..icons import get_icon
 from ..shared.gtk import apply_css
+from ..shared.pref_rows.base import SpinRow
 from ..shared.slider import create_slider
 
 _POWER_CSS = """
@@ -24,10 +24,10 @@ class LaserControlWidget(Gtk.Box):
     def __init__(self, **kwargs):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, **kwargs)
 
-        self.machine: Optional[Machine] = None
-        self.machine_cmd: Optional[MachineCmd] = None
+        self.machine: Machine | None = None
+        self.machine_cmd: MachineCmd | None = None
         self._is_on = False
-        self._timer_source_id: Optional[int] = None
+        self._timer_source_id: int | None = None
         self._remaining_ms: int = 0
 
         self._group = Adw.PreferencesGroup()
@@ -96,33 +96,28 @@ class LaserControlWidget(Gtk.Box):
         self._power_row.add_suffix(suffix_box)
         self._group.add(self._power_row)
 
-        self._frequency_adj = Gtk.Adjustment(
-            lower=1, upper=100000, step_increment=100, page_increment=1000
-        )
-        self._frequency_row = Adw.SpinRow(
-            title=_("Frequency"),
-            subtitle=_("PWM frequency in Hz"),
-            adjustment=self._frequency_adj,
+        self._frequency_row = SpinRow(
+            _("Frequency"),
+            _("PWM frequency in Hz"),
+            lower=1,
+            upper=100000,
+            step_increment=100,
         )
         self._group.add(self._frequency_row)
 
-        self._pulse_width_adj = Gtk.Adjustment(
-            lower=1, upper=100000, step_increment=1, page_increment=10
-        )
-        self._pulse_width_row = Adw.SpinRow(
-            title=_("Pulse Width"),
-            subtitle=_("Pulse width in µs"),
-            adjustment=self._pulse_width_adj,
+        self._pulse_width_row = SpinRow(
+            _("Pulse Width"),
+            _("Pulse width in µs"),
+            lower=1,
+            upper=100000,
         )
         self._group.add(self._pulse_width_row)
 
-        duration_adjustment = Gtk.Adjustment(
-            value=0, lower=0, upper=3600, step_increment=0.5
-        )
-        self._duration_row = Adw.SpinRow(
-            title=_("Duration"),
-            subtitle=_("Seconds (0 = continuous)"),
-            adjustment=duration_adjustment,
+        self._duration_row = SpinRow(
+            _("Duration"),
+            _("Seconds (0 = continuous)"),
+            upper=3600,
+            step_increment=0.5,
             digits=1,
         )
         self._group.add(self._duration_row)
@@ -139,7 +134,7 @@ class LaserControlWidget(Gtk.Box):
         self._update_pwm_visibility()
 
     def set_machine(
-        self, machine: Optional[Machine], machine_cmd: Optional[MachineCmd]
+        self, machine: Machine | None, machine_cmd: MachineCmd | None
     ):
         if self.machine:
             self.machine.connection_status_changed.disconnect(
@@ -165,19 +160,24 @@ class LaserControlWidget(Gtk.Box):
     def _rebuild_head_model(self):
         if not self.machine:
             return
-        heads = self.machine.heads
-        model = Gtk.StringList.new([h.name for h in heads])
+        laser_heads = [
+            h for h in self.machine.heads if isinstance(h, LaserHead)
+        ]
+        model = Gtk.StringList.new([h.name for h in laser_heads])
         self._head_row.set_model(model)
-        if heads:
+        if laser_heads:
             self._head_row.set_selected(0)
-            self._sync_head_fields(heads[0])
+            self._sync_head_fields(laser_heads[0])
 
-    def _get_selected_head(self) -> Optional[Laser]:
-        if not self.machine or not self.machine.heads:
+    def _get_selected_head(self) -> Laser | None:
+        if not self.machine:
             return None
+        laser_heads = [
+            h for h in self.machine.heads if isinstance(h, LaserHead)
+        ]
         idx = self._head_row.get_selected()
-        if 0 <= idx < len(self.machine.heads):
-            return self.machine.heads[idx]
+        if 0 <= idx < len(laser_heads):
+            return laser_heads[idx]
         return None
 
     def _sync_head_fields(self, head: Laser):
@@ -187,10 +187,11 @@ class LaserControlWidget(Gtk.Box):
             )
         )
         self._power_adj.set_value(head.focus_power_percent * 100)
-        self._frequency_adj.set_upper(head.max_pwm_frequency)
+        self._frequency_row.set_range(1, head.max_pwm_frequency)
         self._frequency_row.set_value(head.pwm_frequency)
-        self._pulse_width_adj.set_lower(head.min_pulse_width)
-        self._pulse_width_adj.set_upper(head.max_pulse_width)
+        self._pulse_width_row.set_range(
+            head.min_pulse_width, head.max_pulse_width
+        )
         self._pulse_width_row.set_value(head.pulse_width)
         self._update_pwm_visibility()
 
@@ -262,9 +263,13 @@ class LaserControlWidget(Gtk.Box):
     def _turn_off(self):
         self._cancel_timer()
         head = self._get_selected_head()
-        if head and self.machine and self.machine.is_connected():
-            if self.machine_cmd:
-                self.machine_cmd.set_focus_power(head, 0, self.machine)
+        if (
+            head
+            and self.machine
+            and self.machine.is_connected()
+            and self.machine_cmd
+        ):
+            self.machine_cmd.set_focus_power(head, 0, self.machine)
         self._is_on = False
         self._update_toggle_ui()
         self._update_sensitivity()

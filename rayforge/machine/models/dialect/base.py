@@ -11,7 +11,7 @@ from dataclasses import (
     replace,
 )
 from gettext import gettext as _
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from ....core.varset import BoolVar, TextAreaVar, Var, VarSet
 
@@ -58,8 +58,8 @@ class GcodeDialect:
     coolant_mist: str = "M7"
     coolant_off: str = "M9"
 
-    preamble: List[str] = field(default_factory=list)
-    postscript: List[str] = field(default_factory=list)
+    preamble: list[str] = field(default_factory=list)
+    postscript: list[str] = field(default_factory=list)
 
     inject_wcs_after_preamble: bool = True
     can_g0_with_speed: bool = False
@@ -72,14 +72,14 @@ class GcodeDialect:
         metadata={"template_meta": True},
     )
     is_custom: bool = field(default=False, metadata={"template_meta": True})
-    parent_uid: Optional[str] = field(
+    parent_uid: str | None = field(
         default=None, metadata={"template_meta": True}
     )
-    extra: Dict[str, Any] = field(
+    extra: dict[str, Any] = field(
         default_factory=dict, metadata={"template_meta": True}
     )
 
-    def get_editor_varsets(self) -> Dict[str, VarSet]:
+    def get_editor_varsets(self) -> dict[str, VarSet]:
         """
         Returns a dictionary of VarSets that define the editable fields for
         this dialect, serving as the single source of truth for the UI.
@@ -209,7 +209,7 @@ class GcodeDialect:
             "scripts": scripts_vs,
         }
 
-    def copy_as_custom(self, new_label: str) -> "GcodeDialect":
+    def copy_as_custom(self, new_label: str) -> GcodeDialect:
         """
         Creates a new, custom dialect instance from this one, generating a
         new UID.
@@ -222,7 +222,26 @@ class GcodeDialect:
             label=new_label,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def format_wcs_offset(
+        self,
+        p_num: int | str,
+        x: float | str,
+        y: float | str,
+        z: float | str | None = None,
+    ) -> str:
+        """Format the ``set_wcs_offset`` template for emission.
+
+        When *z* is ``None`` (a no-Z machine), the Z component is
+        dropped from the command so the controller never receives a
+        ``Z{...}`` word.  The caller is responsible for converting
+        coordinates to the machine's unit system before calling this.
+        """
+        if z is None:
+            template = self.set_wcs_offset.replace(" Z{z}", "")
+            return template.format(p_num=p_num, x=x, y=y)
+        return self.set_wcs_offset.format(p_num=p_num, x=x, y=y, z=z)
+
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the dialect to a dictionary."""
         result = asdict(self)
         result.update(self.extra)
@@ -231,9 +250,9 @@ class GcodeDialect:
     @classmethod
     def from_dict(
         cls,
-        data: Dict[str, Any],
-        registry: Optional[Dict[str, "GcodeDialect"]] = None,
-    ) -> "GcodeDialect":
+        data: dict[str, Any],
+        registry: dict[str, GcodeDialect] | None = None,
+    ) -> GcodeDialect:
         """
         Creates a dialect instance from a dictionary, correctly handling
         missing fields by inheriting from parent dialect.
@@ -301,7 +320,7 @@ class GcodeDialect:
             frozenset(required | optional),
         )
 
-    def to_template_dict(self) -> Dict[str, Any]:
+    def to_template_dict(self) -> dict[str, Any]:
         """
         Serialize template fields for device profile export.
 
@@ -309,7 +328,7 @@ class GcodeDialect:
         like ``uid``, ``label``, ``is_custom``, etc.
         """
         meta = self._template_meta_fields()
-        result: Dict[str, Any] = {}
+        result: dict[str, Any] = {}
         for f in fields(self):
             if f.name not in meta:
                 result[f.name] = getattr(self, f.name)
@@ -318,7 +337,7 @@ class GcodeDialect:
     @classmethod
     def validate_template_dict(
         cls,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         source: str = "",
     ):
         """
@@ -328,7 +347,7 @@ class GcodeDialect:
         Logs warnings for unknown keys.
         """
         if not isinstance(data, dict):
-            raise ValueError(f"Invalid dialect data: {source}")
+            raise TypeError(f"Invalid dialect data: {source}")
         required, _, all_fields = cls._template_field_sets()
         missing = required - set(data.keys())
         if missing:
@@ -342,8 +361,8 @@ class GcodeDialect:
 
     @classmethod
     def from_template_dict(
-        cls, data: Dict[str, Any], **overrides
-    ) -> "GcodeDialect":
+        cls, data: dict[str, Any], **overrides
+    ) -> GcodeDialect:
         """
         Create a dialect from a device profile template dict.
 

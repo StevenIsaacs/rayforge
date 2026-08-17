@@ -9,12 +9,18 @@ instance have been fully executed the texture is un-dimmed and those ring
 slots become available for recycling.
 """
 
-from typing import Optional
-
 import numpy as np
 from OpenGL import GL
 
-from ..gl_utils import BaseRenderer, RenderContext, Shader, set_line_width
+from ....simulator.scene3d import ScanlineOverlayLayer
+from ...shared.color_lut_provider import ColorLutProvider
+from ..gl_utils import (
+    LINE_DEPTH_WINDOW_BIAS,
+    ShaderSet,
+    set_line_width,
+)
+from ..render_context import RenderContext
+from .base import BaseRenderer
 
 
 class RingBufferRenderer(BaseRenderer):
@@ -26,13 +32,21 @@ class RingBufferRenderer(BaseRenderer):
     first *n* vertices, where *n* corresponds to the playhead position.
     """
 
-    def __init__(self, capacity_vertices: int = 4_000_000):
+    def __init__(
+        self, capacity_vertices: int = 4_000_000, is_rotary: bool = False
+    ):
         super().__init__()
         self._capacity = capacity_vertices
+        self.is_rotary = is_rotary
         self.vao: int = 0
         self.pos_vbo: int = 0
         self.pow_vbo: int = 0
         self.vertex_count: int = 0
+        self.ring_offsets: np.ndarray = np.array([], dtype=np.int32)
+        self._positions: np.ndarray = np.array([], dtype=np.float32)
+        self._exec_ring = -1
+        self._partial_ring_id = -1
+        self._partial_ring_end = np.zeros(3, dtype=np.float32)
         self._color_lut_texture: int = 0
         self._num_laser_luts: int = 1
 
@@ -73,38 +87,37 @@ class RingBufferRenderer(BaseRenderer):
     def upload(
         self,
         positions: np.ndarray,
-        power_values: np.ndarray,
-        laser_indices: Optional[np.ndarray] = None,
+        attrib: np.ndarray,
     ):
         pos = np.ascontiguousarray(positions, dtype=np.float32).ravel()
-        pow_flat = np.ascontiguousarray(power_values, dtype=np.float32).ravel()
         n = pos.size // 3
-        assert pow_flat.size == n
         assert n <= self._capacity, (
             f"Scanline overlay has {n} vertices but ring capacity is "
             f"{self._capacity}"
         )
 
-        if laser_indices is not None and laser_indices.size > 0:
-            li_flat = np.ascontiguousarray(
-                laser_indices, dtype=np.float32
-            ).ravel()
-        else:
-            li_flat = np.zeros(n, dtype=np.float32)
-
-        pow_vec4 = np.zeros(n * 4, dtype=np.float32)
-        pow_vec4[0::4] = pow_flat
-        pow_vec4[1::4] = li_flat
-        pow_vec4[3::4] = 1.0
-
+        self._positions = pos
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.pos_vbo)
         GL.glBufferSubData(GL.GL_ARRAY_BUFFER, 0, pos.nbytes, pos)
 
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.pow_vbo)
-        GL.glBufferSubData(GL.GL_ARRAY_BUFFER, 0, pow_vec4.nbytes, pow_vec4)
+        a = np.ascontiguousarray(attrib, dtype=np.float32)
+        GL.glBufferSubData(GL.GL_ARRAY_BUFFER, 0, a.nbytes, a)
 
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
         self.vertex_count = n
+
+    def update_from_overlay_layer(self, ol: ScanlineOverlayLayer):
+        """Uploads a compiled scanline overlay layer into the ring buffer."""
+        positions = ol.positions.to_numpy()
+        attrib = ol.overlay_attrib.to_numpy()
+        self.update_from_overlay_layer_payload(positions, attrib)
+
+    def update_from_overlay_layer_payload(
+        self, positions: np.ndarray, attrib: np.ndarray
+    ):
+        """Uploads pre-decompressed overlay arrays into the ring buffer."""
+        self.upload(positions.ravel(), attrib)
 
     def update_color_lut(self, lut_data: np.ndarray, num_lasers: int = 1):
         if not self._color_lut_texture:
@@ -141,54 +154,124 @@ class RingBufferRenderer(BaseRenderer):
         )
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
 
+    def update_color_lut_from(self, provider: ColorLutProvider):
+        """Updates the colour LUT from a shared ColorLutProvider."""
+        self.update_color_lut(provider.ring_lut_2d(), provider.num_lasers)
+
     def clear(self):
         self.vertex_count = 0
 
-    def render(
-        self,
-        ctx: RenderContext,
-        shader: Shader,
-        mvp_matrix: np.ndarray,
-        executed_vertex_count: int = -1,
-        alpha_pending: float = 0.2,
-    ):
+    def prepare(self, ctx: RenderContext) -> None:
+        """
+        Computes the executed-vertex count for this frame.
+
+        Reads the playhead from ``ctx.playback.op_player`` and maps it
+        through the renderer's command offsets, stashing the resulting
+        count so ``render`` can publish it back into ``ctx``.  When the
+        playhead falls inside a command, a fractional executed count is
+        split into an int count plus a partial boundary segment for a
+        smooth reveal.
+        """
+        exec_ring = -1
+        self._partial_ring_id = -1
+        self._partial_ring_end = np.zeros(3, dtype=np.float32)
+        op_player = ctx.playback.op_player
+        if op_player:
+            p, frac = op_player.playback_progress()
+            exec_ring, self._partial_ring_id, self._partial_ring_end = (
+                self._fractional_exec_count(
+                    self.ring_offsets, self._positions, p, frac
+                )
+            )
+        self._exec_ring = exec_ring
+
+    @staticmethod
+    def _fractional_exec_count(offsets, positions, p, frac):
+        """Map ``(in_progress_command, fraction)`` to executed vertices.
+
+        Returns ``(executed_count, partial_vertex_id, partial_end)``;
+        see :meth:`OpsRenderer._fractional_exec_count` for details.
+        """
+        if len(offsets) == 0:
+            return -1, -1, np.zeros(3, dtype=np.float32)
+        total = positions.size // 3 if positions is not None else 0
+        if len(offsets) < 2:
+            return total, -1, np.zeros(3, dtype=np.float32)
+        if p + 1 >= len(offsets):
+            p = len(offsets) - 2
+            frac = 1.0
+        p = max(p, 0)
+        base = int(offsets[p])
+        span = int(offsets[p + 1]) - base
+        exec_f = base + frac * span
+        zero = np.zeros(3, dtype=np.float32)
+        if total == 0:
+            # No position data uploaded: there is nothing to reveal.
+            return 0, -1, zero
+        if exec_f >= total:
+            return total, -1, zero
+        if exec_f <= 0:
+            return 0, -1, zero
+        seg = int(exec_f) // 2
+        f_in_seg = exec_f - 2 * seg
+        if f_in_seg <= 1e-9:
+            return 2 * seg, -1, zero
+        if positions is None or 2 * seg + 1 >= total:
+            return 2 * seg + 2, -1, zero
+        v0 = positions[2 * seg * 3 : 2 * seg * 3 + 3]
+        v1 = positions[(2 * seg + 1) * 3 : (2 * seg + 1) * 3 + 3]
+        partial_end = (v0 + (v1 - v0) * (f_in_seg / 2.0)).astype(np.float32)
+        return 2 * seg + 2, 2 * seg + 1, partial_end
+
+    def render(self, ctx: RenderContext, shaders: ShaderSet, **kwargs):
         if self.vertex_count == 0:
             return
 
-        draw_count = self.vertex_count
-        if executed_vertex_count >= 0:
-            draw_count = min(executed_vertex_count, self.vertex_count)
+        ctx.playback.executed_vertex_count = self._exec_ring
 
-        if draw_count == 0:
+        shader = shaders.main_lines or shaders.main
+        if shader is None:
             return
 
-        line_width = ctx.line_width
+        mvp = ctx.kinematics.mvp_for(self.is_rotary)
+        if mvp is None:
+            return
+
+        draw_count = self.vertex_count
+        executed_vertex_count = ctx.playback.executed_vertex_count
+
+        line_width = ctx.camera.line_width
         shader.use()
-        shader.set_mat4("uMVP", mvp_matrix)
+        shader.set_mat4("uMVP", mvp)
         shader.set_float("uHasNormals", 0.0)
         shader.set_float("uUsePowerLUT", 1.0)
         shader.set_int("uNumLaserLUTs", self._num_laser_luts)
         shader.set_vec4(
-            "uZeroPowerColor", ctx.color_set.get_rgba("zero_power")
+            "uZeroPowerColor", ctx.camera.color_set.get_rgba("zero_power")
         )
-        shader.set_int("uExecutedVertexCount", -1)
-        shader.set_float("uAlphaPending", alpha_pending)
+        shader.set_int("uExecutedVertexCount", executed_vertex_count)
+        shader.set_float("uAlphaPending", 0.0)
+        if self._partial_ring_id >= 0:
+            shader.set_int("uPartialVertexID", self._partial_ring_id)
+            shader.set_vec3("uPartialEnd", self._partial_ring_end)
+        else:
+            shader.set_int("uPartialVertexID", -1)
+            shader.set_vec3("uPartialEnd", (0.0, 0.0, 0.0))
 
         GL.glActiveTexture(GL.GL_TEXTURE1)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self._color_lut_texture)
         shader.set_int("uColorLUT", 1)
 
+        # The scanline trail must draw on top of the toolpath and the
+        # raster texture; bias its window-space depth a few LSBs toward
+        # the camera so it always wins against the coplanar surface
+        # (which would let travel lines or the texture's depth split
+        # the trail on a cylinder) while the laser head model still
+        # occludes it.  Depth writes stay off so later geometry is
+        # unaffected.
         GL.glDepthFunc(GL.GL_LEQUAL)
+        GL.glDepthMask(GL.GL_FALSE)
+        shader.set_float("uFragDepthBias", LINE_DEPTH_WINDOW_BIAS)
         set_line_width(line_width)
         GL.glBindVertexArray(self.vao)
         GL.glDrawArrays(GL.GL_LINES, 0, draw_count)
-        GL.glBindVertexArray(0)
-        set_line_width(1.0)
-
-        GL.glActiveTexture(GL.GL_TEXTURE1)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-
-        shader.set_float("uUsePowerLUT", 0.0)
-        shader.set_float("uUseVertexColor", 0.0)
-        shader.set_int("uExecutedVertexCount", -1)

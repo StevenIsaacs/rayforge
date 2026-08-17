@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING
 
 from raygeo.geo.types import Point as GeoPoint
 
@@ -39,10 +39,10 @@ class EllipsePreviewState(PreviewState):
         self.radius_y_id = radius_y_id
         self.entity_id = entity_id
 
-    def get_preview_point_ids(self) -> Set[EntityID]:
+    def get_preview_point_ids(self) -> set[EntityID]:
         return {self.center_id, self.radius_x_id, self.radius_y_id}
 
-    def get_hidden_point_ids(self) -> Set[EntityID]:
+    def get_hidden_point_ids(self) -> set[EntityID]:
         return {self.start_id}
 
 
@@ -54,7 +54,7 @@ class EllipseCommand(SketchChangeCommand):
         sketch: Sketch,
         start_id: EntityID,
         end_pos: GeoPoint,
-        end_pid: Optional[EntityID] = None,
+        end_pid: EntityID | None = None,
         is_start_temp: bool = False,
         center_on_start: bool = False,
         constrain_circle: bool = False,
@@ -66,7 +66,7 @@ class EllipseCommand(SketchChangeCommand):
         self.is_start_temp = is_start_temp
         self.center_on_start = center_on_start
         self.constrain_circle = constrain_circle
-        self.add_cmd: Optional[AddItemsCommand] = None
+        self.add_cmd: AddItemsCommand | None = None
 
     @staticmethod
     def _calculate_ellipse_params(
@@ -76,7 +76,7 @@ class EllipseCommand(SketchChangeCommand):
         y2: float,
         center_on_start: bool,
         constrain_circle: bool,
-    ) -> Tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float]:
         if center_on_start:
             cx, cy = x1, y1
             rx = abs(x2 - x1)
@@ -109,7 +109,7 @@ class EllipseCommand(SketchChangeCommand):
         registry: EntityRegistry,
         x: float,
         y: float,
-        snapped_pid: Optional[EntityID] = None,
+        snapped_pid: EntityID | None = None,
         **kwargs,
     ) -> EllipsePreviewState:
         if snapped_pid is not None:
@@ -143,7 +143,7 @@ class EllipseCommand(SketchChangeCommand):
         constrain_circle: bool = False,
     ) -> None:
         if not isinstance(preview_state, EllipsePreviewState):
-            raise AttributeError("Expected EllipsePreviewState")
+            raise TypeError("Expected EllipsePreviewState")
 
         try:
             start_p = registry.get_point(preview_state.start_id)
@@ -169,7 +169,7 @@ class EllipseCommand(SketchChangeCommand):
         registry: EntityRegistry, preview_state: PreviewState
     ) -> None:
         if not isinstance(preview_state, EllipsePreviewState):
-            raise AttributeError("Expected EllipsePreviewState")
+            raise TypeError("Expected EllipsePreviewState")
 
         if preview_state.entity_id is not None:
             registry.entities = [
@@ -263,7 +263,7 @@ class EllipseCommand(SketchChangeCommand):
             line_x_id, line_y_id, user_visible=False
         )
 
-        constraints: List[Constraint] = [perp_constraint]
+        constraints: list[Constraint] = [perp_constraint]
         if self.constrain_circle:
             constraints.append(
                 EqualDistanceConstraint(

@@ -1,11 +1,8 @@
-from gettext import gettext as _
-from typing import Any, Optional, Tuple
-
-from gi.repository import Adw, Gtk
+from typing import Any
 
 from ....context import get_context
 from ....core.varset import SpeedVar, Var
-from ...shared.unit_spin_row import UnitSpinRowHelper
+from ...shared.pref_rows.speed_spin_row import SpeedSpinRow
 from .base import RowAdapter, escape_title, register_adapter
 
 _DEFAULT_MAX_SPEED = 3000
@@ -25,59 +22,47 @@ def _resolve_max_speed(var: SpeedVar) -> int:
 @register_adapter(SpeedVar)
 class SpeedRowAdapter(RowAdapter):
     """
-    Adapts an Adw.SpinRow for speed values with unit conversion.
+    Adapts a SpeedSpinRow for speed values with unit conversion.
 
     Values are always read/written in base units (mm/min).
     """
 
-    def __init__(self, row: Adw.SpinRow, helper: UnitSpinRowHelper) -> None:
+    def __init__(self, row: SpeedSpinRow) -> None:
         super().__init__()
         self._row = row
-        self._helper = helper
-        self._row.connect(
-            "notify::value", lambda r, p: self.changed.send(self)
-        )
+        row.value_changed.connect(lambda r: self.changed.send(self))
 
     @classmethod
     def create(
         cls, var: Var, target_property: str
-    ) -> Tuple[Adw.PreferencesRow, "SpeedRowAdapter"]:
+    ) -> tuple[SpeedSpinRow, "SpeedRowAdapter"]:
         assert isinstance(var, SpeedVar)
         max_speed = _resolve_max_speed(var)
         initial_val = getattr(var, target_property)
         min_val = var.min_val or 0
 
-        adj = Gtk.Adjustment(
-            value=int(initial_val) if initial_val is not None else 0,
+        # Speed values are integers in mm/min; the row must not show
+        # fractional digits (UnitSpinRow defaults to 2).
+        row = SpeedSpinRow(
+            escape_title(var.label),
+            var.description or None,
             lower=min_val,
             upper=max_speed,
-            step_increment=10,
-            page_increment=100,
+            value_in_base=(int(initial_val) if initial_val is not None else 0),
+            digits=0,
         )
-        row = Adw.SpinRow(
-            adjustment=adj,
-            title=escape_title(var.label),
-            subtitle=_("Max: {max_speed}"),
-        )
-        helper = UnitSpinRowHelper(
-            spin_row=row,
-            quantity="speed",
-            max_value_in_base=max_speed,
-        )
-        return row, cls(row, helper)
+        return row, cls(row)
 
-    def get_value(self) -> Optional[Any]:
-        return int(self._helper.get_value_in_base_units())
+    def get_value(self) -> Any | None:
+        return int(self._row.get_value_in_base_units())
 
     def set_value(self, value: Any) -> None:
-        self._helper.set_value_in_base_units(value)
+        self._row.set_value_in_base_units(value)
 
     def update_from_var(self, var: Var):
         assert isinstance(var, SpeedVar)
         if var.label:
             self._row.set_title(escape_title(var.label))
-        adj = self._row.get_adjustment()
-        if var.min_val is not None:
-            adj.set_lower(float(var.min_val))
-        if var.max_val is not None:
-            adj.set_upper(float(var.max_val))
+        if var.description:
+            self._row.set_subtitle(var.description)
+        self._row.set_range(var.min_val or 0, _resolve_max_speed(var))

@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class LicenseStatus(Enum):
@@ -24,15 +24,15 @@ class LicenseResult:
     status: LicenseStatus
     message: str = ""
     license_type: LicenseType = LicenseType.UNKNOWN
-    expires_at: Optional[datetime] = None
-    customer_email: Optional[str] = None
-    last_validated: Optional[datetime] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    expires_at: datetime | None = None
+    customer_email: str | None = None
+    last_validated: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def is_expired(self) -> bool:
         if self.expires_at is None:
             return False
-        return datetime.now() >= self.expires_at
+        return datetime.now(tz=timezone.utc) >= self.expires_at
 
     def is_valid_for_offline(self) -> bool:
         if self.status != LicenseStatus.VALID:
@@ -45,7 +45,10 @@ class LicenseResult:
             if not self.last_validated:
                 return False
             grace_period = timedelta(days=30)
-            return datetime.now() - self.last_validated < grace_period
+            return (
+                datetime.now(tz=timezone.utc) - self.last_validated
+                < grace_period
+            )
         return False
 
 
@@ -60,5 +63,5 @@ class LicenseProvider(ABC):
         pass
 
     @abstractmethod
-    def validate(self, config: Dict[str, Any]) -> LicenseResult:
+    def validate(self, config: dict[str, Any]) -> LicenseResult:
         pass

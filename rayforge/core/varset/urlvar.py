@@ -1,12 +1,13 @@
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Optional, Tuple
+from typing import Any
 from urllib.parse import urlparse
 
 from .var import ValidationError, Var
 
 
 def url_validator(
-    url: Optional[str], allowed_schemes: Optional[Tuple[str, ...]] = None
+    url: str | None, allowed_schemes: tuple[str, ...] | None = None
 ):
     """
     Raises ValidationError if the string is not a valid URL.
@@ -35,7 +36,7 @@ def url_validator(
             )
     except ValidationError:
         raise
-    except Exception as e:
+    except (ValueError, TypeError) as e:
         raise ValidationError(_("Invalid URL: {error}").format(error=str(e)))
 
 
@@ -46,14 +47,16 @@ class UrlVar(Var[str]):
         self,
         key: str,
         label: str,
-        description: Optional[str] = None,
-        default: Optional[str] = None,
-        value: Optional[str] = None,
-        allowed_schemes: Optional[Tuple[str, ...]] = None,
+        description: str | None = None,
+        default: str | None = None,
+        value: str | None = None,
+        allowed_schemes: tuple[str, ...] | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
         self.allowed_schemes = allowed_schemes
 
-        def validator(url: Optional[str]):
+        def validator(url: str | None):
             url_validator(url, allowed_schemes=allowed_schemes)
 
         super().__init__(
@@ -64,6 +67,7 @@ class UrlVar(Var[str]):
             default=default,
             value=value,
             validator=validator,
+            visible_when=visible_when,
         )
 
 
@@ -74,11 +78,13 @@ class WebsocketUrlVar(Var[str]):
         self,
         key: str,
         label: str,
-        description: Optional[str] = None,
-        default: Optional[str] = None,
-        value: Optional[str] = None,
+        description: str | None = None,
+        default: str | None = None,
+        value: str | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
-        def validator(url: Optional[str]):
+        def validator(url: str | None):
             url_validator(url, allowed_schemes=("ws", "wss"))
 
         super().__init__(
@@ -89,4 +95,5 @@ class WebsocketUrlVar(Var[str]):
             default=default,
             value=value,
             validator=validator,
+            visible_when=visible_when,
         )

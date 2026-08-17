@@ -1,7 +1,7 @@
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Mapping, Optional
 
 import yaml
 
@@ -26,16 +26,14 @@ class AddonConfigEntry:
     """
 
     state: str
-    version: Optional[str] = None
+    version: str | None = None
 
-    def to_dict(self) -> Dict[str, Optional[str]]:
+    def to_dict(self) -> dict[str, str | None]:
         """Convert to a dictionary for YAML serialization."""
         return {"state": self.state, "version": self.version}
 
     @classmethod
-    def from_dict(
-        cls, data: Mapping[str, Optional[str]]
-    ) -> "AddonConfigEntry":
+    def from_dict(cls, data: Mapping[str, str | None]) -> "AddonConfigEntry":
         """
         Create an AddonConfigEntry from a dictionary.
 
@@ -54,7 +52,7 @@ class AddonConfig:
 
     def __init__(self, config_dir: Path):
         self.config_file = config_dir / "addons.yaml"
-        self._entries: Dict[str, AddonConfigEntry] = {}
+        self._entries: dict[str, AddonConfigEntry] = {}
 
     def load(self):
         """Load addon configuration from the config file."""
@@ -79,7 +77,7 @@ class AddonConfig:
                             state=entry_data, version=None
                         )
             logger.debug(f"Loaded addon config from {self.config_file}")
-        except (yaml.YAMLError, IOError) as e:
+        except (OSError, yaml.YAMLError) as e:
             logger.warning(f"Failed to load addon config: {e}")
             self._entries = {}
 
@@ -97,14 +95,21 @@ class AddonConfig:
             elif self.config_file.exists():
                 self.config_file.unlink()
             logger.debug(f"Saved addon config to {self.config_file}")
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to save addon config: {e}")
 
-    def get_state(self, addon_name: str) -> str:
-        """Get the state of an addon. Defaults to ENABLED."""
+    def get_state(self, addon_name: str, default: str | None = None) -> str:
+        """
+        Get the state of an addon.
+
+        Args:
+            addon_name: The canonical name of the addon.
+            default: The state to return if no config entry exists.
+                If None, defaults to ENABLED.
+        """
         entry = self._entries.get(addon_name)
         if entry is None:
-            return AddonState.ENABLED
+            return default if default is not None else AddonState.ENABLED
         if entry.state not in (AddonState.ENABLED, AddonState.DISABLED):
             logger.warning(
                 f"Invalid state '{entry.state}' for addon '{addon_name}', "
@@ -125,7 +130,7 @@ class AddonConfig:
         self.save()
         logger.info(f"Set addon '{addon_name}' state to '{state}'")
 
-    def get_version(self, addon_name: str) -> Optional[str]:
+    def get_version(self, addon_name: str) -> str | None:
         """Get the stored version string of an addon."""
         entry = self._entries.get(addon_name)
         if entry is None:
@@ -145,7 +150,7 @@ class AddonConfig:
         logger.debug(f"Set addon '{addon_name}' version to '{version}'")
 
     def set_entry(
-        self, addon_name: str, state: str, version: Optional[str] = None
+        self, addon_name: str, state: str, version: str | None = None
     ):
         """Set both state and version for an addon in one operation."""
         if state not in (AddonState.ENABLED, AddonState.DISABLED):
@@ -165,6 +170,6 @@ class AddonConfig:
             self.save()
             logger.info(f"Removed addon '{addon_name}' from config")
 
-    def get_entry(self, addon_name: str) -> Optional[AddonConfigEntry]:
+    def get_entry(self, addon_name: str) -> AddonConfigEntry | None:
         """Get the full configuration entry for an addon."""
         return self._entries.get(addon_name)

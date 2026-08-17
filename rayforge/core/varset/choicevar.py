@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .var import Var
 
@@ -15,11 +16,15 @@ class ChoiceVar(Var[str]):
         self,
         key: str,
         label: str,
-        choices: List[str],
-        description: Optional[str] = None,
-        default: Optional[str] = None,
-        value: Optional[str] = None,
+        choices: list[str],
+        description: str | None = None,
+        default: str | None = None,
+        value: str | None = None,
         allow_none: bool = True,
+        null_label: str | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
+        sensitive_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
         """
         Initializes a new ChoiceVar instance.
@@ -32,6 +37,15 @@ class ChoiceVar(Var[str]):
             default: The default value. Must be one of the choices.
             value: The initial value. If provided, it overrides the default.
             allow_none: Whether to include a "None Selected" option in UI.
+            null_label: Overrides the default "None Selected" option label
+                (e.g. "Standard" for a protocol variant whose unset value
+                means "use the standard/default option").
+            visible_when: Optional callable that receives a dict of all
+                          current var values in the widget and returns True
+                          when this var's row should be visible.
+            sensitive_when: Optional callable that receives a dict of all
+                            current var values in the widget and returns
+                            True when this var's row should be interactive.
         """
         super().__init__(
             key=key,
@@ -40,12 +54,15 @@ class ChoiceVar(Var[str]):
             description=description,
             default=default,
             value=value,
+            visible_when=visible_when,
+            sensitive_when=sensitive_when,
         )
         self.choices = choices
         self.allow_none = allow_none
+        self.null_label = null_label
 
         # Validator to ensure the value is always one of the allowed choices.
-        def _choice_validator(val: Optional[str]):
+        def _choice_validator(val: str | None):
             if val is not None and val not in self.choices:
                 raise ValueError(
                     f"Value '{val}' is not a valid choice for '{self.key}'"
@@ -53,19 +70,19 @@ class ChoiceVar(Var[str]):
 
         self.validator = _choice_validator
 
-    def to_dict(self, include_value: bool = False) -> Dict[str, Any]:
+    def to_dict(self, include_value: bool = False) -> dict[str, Any]:
         data = super().to_dict(include_value=include_value)
         data.update({"choices": self.choices})
         return data
 
-    def get_display_for_value(self, value: Optional[str]) -> Optional[str]:
+    def get_display_for_value(self, value: str | None) -> str | None:
         """
         For simple ChoiceVar, the display value is the same as the stored
         value. Subclasses can override this for mapping.
         """
         return value
 
-    def get_value_for_display(self, display: Optional[str]) -> Optional[str]:
+    def get_value_for_display(self, display: str | None) -> str | None:
         """
         For simple ChoiceVar, the stored value is the same as the display
         value. Subclasses can override this for mapping.

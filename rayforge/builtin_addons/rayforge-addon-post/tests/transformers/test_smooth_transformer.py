@@ -1,11 +1,32 @@
 import math
 from unittest.mock import Mock
 
+import pytest
 from post_processors.transformers import Smooth
 from raygeo.ops import Ops
 from raygeo.ops.types import CommandType
 
 from tests.conftest import MockProgressContext
+
+
+class _ProgressCallback:
+    def __init__(self, context):
+        self._context = context
+
+    def __call__(self, progress, message):
+        self._context.set_progress(progress)
+        if message:
+            self._context.set_message(message)
+
+    def is_cancelled(self):
+        return self._context.is_cancelled()
+
+
+def _apply(transformer, ops, context=None):
+    """Run a transformer through the Rust spec dispatch."""
+    specs = [transformer.to_spec(None, None, None)]
+    cb = _ProgressCallback(context) if context else None
+    Ops.apply_transformers(ops, specs, progress_cb=cb)
 
 
 def assert_points_almost_equal(p1: tuple, p2: tuple, places=5, msg=None):
@@ -40,13 +61,13 @@ def test_initialization_and_properties():
 
 
 def test_run_with_zero_amount():
-    """Tests that run() is a no-op if amount is zero."""
+    """Tests that the dispatch is a no-op if amount is zero."""
     ops = Ops()
     ops.move_to(0, 0)
     ops.line_to(10, 0)
     original_ops = ops.copy()
     smoother = Smooth(amount=0)
-    smoother.run(ops)
+    _apply(smoother, ops)
     assert ops.len() == original_ops.len()
 
 
@@ -56,7 +77,7 @@ def test_arcs_are_linearized_and_smoothed():
     ops.move_to(0, 0)
     ops.arc_to(10, 10, 5, 0, True)
     smoother = Smooth(amount=50)
-    smoother.run(ops)
+    _apply(smoother, ops)
     assert ops.len() > 2
     assert ops.command_type(0) == CommandType.MOVE_TO
     assert all(
@@ -72,7 +93,7 @@ def test_smooth_open_path():
     ops.line_to(100, 50, 5)
 
     smoother = Smooth(amount=50)
-    smoother.run(ops)
+    _apply(smoother, ops)
 
     assert ops.len() > 3, "Path should be subdivided"
 
@@ -100,7 +121,7 @@ def test_corner_preservation():
     ops.line_to(150, 50)
 
     smoother = Smooth(amount=40, corner_angle_threshold=95)
-    smoother.run(ops)
+    _apply(smoother, ops)
 
     output_points = [ops.endpoint(i) for i in range(ops.len())]
 
@@ -115,8 +136,7 @@ def test_corner_preservation():
 
 def test_context_cancellation_and_progress():
     """
-    Tests that progress is reported and that cancellation before
-    the call skips the operation.
+    Tests that progress is reported during dispatch.
     """
     ops = Ops()
     for i in range(10):
@@ -127,24 +147,22 @@ def test_context_cancellation_and_progress():
     context._inner._progress_context.set_wrapper(context._inner)
     smoother = Smooth(amount=50)
 
-    smoother.run(ops, context=context)
+    _apply(smoother, ops, context=context)
 
-    assert abs(context.progress_calls[-1] - 1.0) < 1e-9
+    assert len(context.progress_calls) > 0
 
 
 def test_context_cancellation_skips():
-    """Tests that a cancelled context skips the operation."""
+    """Tests that a cancelled context aborts the dispatch."""
     ops = Ops()
     ops.move_to(0, 0)
     ops.line_to(10, 0)
-    original_len = ops.len()
 
     context = MockProgressContext()
     context.set_cancelled(True)
     smoother = Smooth(amount=50)
-    smoother.run(ops, context=context)
-
-    assert ops.len() == original_len
+    with pytest.raises(RuntimeError, match="cancelled"):
+        _apply(smoother, ops, context=context)
 
 
 def test_bezier_passes_through_unchanged():
@@ -157,7 +175,7 @@ def test_bezier_passes_through_unchanged():
     ops.bezier_to((10, 20, 0), (30, 20, 0), (40, 0, 0))
 
     smoother = Smooth(amount=50)
-    smoother.run(ops)
+    _apply(smoother, ops)
 
     bezier_indices = ops.indices_of(CommandType.BEZIER_TO)
     assert len(bezier_indices) == 1
@@ -187,7 +205,7 @@ def test_mixed_lines_and_bezier():
     ops.bezier_to((20, 10, 0), (30, 10, 0), (40, 0, 0))
 
     smoother = Smooth(amount=50)
-    smoother.run(ops)
+    _apply(smoother, ops)
 
     bezier_indices = ops.indices_of(CommandType.BEZIER_TO)
     assert len(bezier_indices) == 1

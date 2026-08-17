@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import locale
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from gettext import gettext as _
-from typing import Callable, List, Optional, Tuple, Union, cast
+from typing import cast
 
 
 @dataclass
@@ -16,9 +17,9 @@ class DimensionInputHandler:
     """
 
     field_count: int = 1
-    field_labels: Optional[List[str]] = None
+    field_labels: list[str] | None = None
     decimal_sep: str = field(default=".", init=False)
-    buffers: List[str] = field(default_factory=list, init=False)
+    buffers: list[str] = field(default_factory=list, init=False)
     current_field: int = field(default=0, init=False)
     _is_active: bool = field(default=False, init=False)
 
@@ -47,9 +48,7 @@ class DimensionInputHandler:
         self._init_buffers()
         self._is_active = False
 
-    def get_display_text(
-        self, field_index: Optional[int] = None
-    ) -> Optional[str]:
+    def get_display_text(self, field_index: int | None = None) -> str | None:
         """
         Returns the current buffer text for display.
 
@@ -104,13 +103,11 @@ class DimensionInputHandler:
                 if dot_count + comma_count == 0:
                     return True
             return False
-        if char == " ":
-            if (
-                self.field_count > 1
-                and self.current_field < self.field_count - 1
-            ):
-                self.current_field += 1
-                return True
+        if char == " " and (
+            self.field_count > 1 and self.current_field < self.field_count - 1
+        ):
+            self.current_field += 1
+            return True
         return False
 
     def handle_backspace(self) -> bool:
@@ -132,9 +129,7 @@ class DimensionInputHandler:
     def handle_delete(self) -> bool:
         return self.handle_backspace()
 
-    def handle_tab(
-        self, shift: bool = False
-    ) -> Tuple[bool, bool, Optional[int]]:
+    def handle_tab(self, shift: bool = False) -> tuple[bool, bool, int | None]:
         """
         Handle Tab key press.
 
@@ -167,7 +162,7 @@ class DimensionInputHandler:
 
         return (False, False, None)
 
-    def get_field_value(self, field_index: int) -> Optional[float]:
+    def get_field_value(self, field_index: int) -> float | None:
         """
         Parse and return the value for a specific field.
 
@@ -187,7 +182,7 @@ class DimensionInputHandler:
         except ValueError:
             return None
 
-    def parse_values(self) -> Optional[List[float]]:
+    def parse_values(self) -> list[float] | None:
         values = []
 
         for buf in self.buffers:
@@ -208,7 +203,7 @@ class DimensionInputHandler:
 
         return values
 
-    def commit(self) -> Optional[Tuple[Optional[float], ...]]:
+    def commit(self) -> tuple[float | None, ...] | None:
         values = self.parse_values()
         self._is_active = False
         self._init_buffers()
@@ -218,7 +213,7 @@ class DimensionInputHandler:
 
     def get_active_shortcuts(
         self,
-    ) -> List[Tuple[Union[str, List[str]], str, Optional[Callable[[], bool]]]]:
+    ) -> list[tuple[str | list[str], str, Callable[[], bool] | None]]:
         if not self._is_active:
             return []
 
@@ -233,8 +228,6 @@ class DimensionInputHandler:
             shortcuts.append(("⇧Tab", _("Prev field"), None))
 
         return cast(
-            List[
-                Tuple[Union[str, List[str]], str, Optional[Callable[[], bool]]]
-            ],
+            list[tuple[str | list[str], str, Callable[[], bool] | None]],
             shortcuts,
         )

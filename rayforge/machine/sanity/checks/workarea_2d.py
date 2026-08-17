@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Set
+from typing import TYPE_CHECKING
 
 from raygeo.ops.types import CommandCategory
 
@@ -16,12 +16,12 @@ class WorkareaCheck2D(BaseCheck):
     def category(self) -> IssueCategory:
         return IssueCategory.WORKAREA
 
-    def run(self, context: "SanityContext") -> List[SanityIssue]:
+    def run(self, context: "SanityContext") -> list[SanityIssue]:
         wa = context.work_area
         x_min, y_min = wa[0], wa[1]
         x_max, y_max = wa[0] + wa[2], wa[1] + wa[3]
-        seen: Set[str] = set()
-        issues: List[SanityIssue] = []
+        seen: set[str] = set()
+        issues: list[SanityIssue] = []
         ops = context.ops
         for i in range(ops.len()):
             if ops.category(i) != CommandCategory.MOVING:
@@ -32,8 +32,8 @@ class WorkareaCheck2D(BaseCheck):
 
     @staticmethod
     def _check_point(
-        issues: List[SanityIssue],
-        seen: Set[str],
+        issues: list[SanityIssue],
+        seen: set[str],
         point,
         x_min: float,
         y_min: float,
@@ -65,5 +65,5 @@ class WorkareaCheck2D(BaseCheck):
 def _workarea_msg(axis: str, val: float, limit: float) -> str:
     axis_name = axis[0]
     if axis[1] == "-":
-        return "{}={:.1f} < {:.1f} (work area)".format(axis_name, val, limit)
-    return "{}={:.1f} > {:.1f} (work area)".format(axis_name, val, limit)
+        return f"{axis_name}={val:.1f} < {limit:.1f} (work area)"
+    return f"{axis_name}={val:.1f} > {limit:.1f} (work area)"

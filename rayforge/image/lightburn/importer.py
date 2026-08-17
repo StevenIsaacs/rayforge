@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import logging
 import math
 import re
@@ -8,7 +9,7 @@ import warnings
 from dataclasses import dataclass
 from gettext import gettext as _
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, ClassVar
 from xml.etree import ElementTree as ET
 
 from raygeo.geo import Geometry
@@ -51,7 +52,7 @@ _VERTLIST_RE = re.compile(
     r"(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"
     r"\s*"
     r"((?:c0[xXyY]-?(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)?"
-    r"|c1[xXyY]-?(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)?)*)"  # noqa: E501
+    r"|c1[xXyY]-?(?:\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)?)*)"
 )
 _CONTROL_PT_RE = re.compile(
     r"(c0[xXyY]|c1[xXyY])(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"
@@ -78,12 +79,12 @@ def _parse_xform(text: str) -> Matrix:
     )
 
 
-def _parse_verts(text: str) -> List[Dict[str, float]]:
-    verts: List[Dict[str, float]] = []
+def _parse_verts(text: str) -> list[dict[str, float]]:
+    verts: list[dict[str, float]] = []
     for match in _VERTLIST_RE.finditer(text):
         x = float(match.group(1))
         y = float(match.group(2))
-        v: Dict[str, float] = {"x": x, "y": y}
+        v: dict[str, float] = {"x": x, "y": y}
         cp_str = match.group(3)
         for cp_match in _CONTROL_PT_RE.finditer(cp_str):
             key = cp_match.group(1).lower()
@@ -93,8 +94,8 @@ def _parse_verts(text: str) -> List[Dict[str, float]]:
     return verts
 
 
-def _parse_prims(text: str) -> List[Tuple[str, int, int]]:
-    prims: List[Tuple[str, int, int]] = []
+def _parse_prims(text: str) -> list[tuple[str, int, int]]:
+    prims: list[tuple[str, int, int]] = []
     for match in _PRIMLIST_ITEM_RE.finditer(text):
         prim_type = match.group(1)
         args_str = match.group(2)
@@ -142,8 +143,8 @@ def _build_rect(w: float, h: float, cr: float) -> Geometry:
 
 def _rounded_rect_points(
     x: float, y: float, w: float, h: float, r: float, seg: int
-) -> List[Tuple[float, float]]:
-    pts: List[Tuple[float, float]] = []
+) -> list[tuple[float, float]]:
+    pts: list[tuple[float, float]] = []
     for i in range(seg + 1):
         a = (math.pi / 2) * (i / seg)
         pts.append((x + r - r * math.cos(a), y + r - r * math.sin(a)))
@@ -165,7 +166,7 @@ def _build_ellipse(rx: float, ry: float) -> Geometry:
         return geo
 
     n_segments = 32
-    pts: List[Tuple[float, float]] = []
+    pts: list[tuple[float, float]] = []
     for i in range(n_segments):
         a = 2 * math.pi * i / n_segments
         pts.append((rx * math.cos(a), ry * math.sin(a)))
@@ -180,8 +181,8 @@ def _build_ellipse(rx: float, ry: float) -> Geometry:
 
 
 def _build_path_from_verts_and_prims(
-    verts: List[Dict[str, float]],
-    prims: List[Tuple[str, int, int]],
+    verts: list[dict[str, float]],
+    prims: list[tuple[str, int, int]],
     prim_list_raw: str,
 ) -> Geometry:
     geo = Geometry()
@@ -237,7 +238,7 @@ def _build_path_from_verts_and_prims(
     return geo
 
 
-def _build_path_text(shape_elem: ET.Element) -> Optional[Geometry]:
+def _build_path_text(shape_elem: ET.Element) -> Geometry | None:
     backup_path = shape_elem.find("BackupPath")
     if backup_path is None:
         return None
@@ -271,9 +272,9 @@ class BitmapInfo:
 
 def _shape_to_geometry(
     shape_elem: ET.Element,
-    cut_settings: Dict[int, Dict[str, Any]],
-    bitmaps: Optional[List[BitmapInfo]] = None,
-) -> Optional[Tuple[int, Geometry]]:
+    cut_settings: dict[int, dict[str, Any]],
+    bitmaps: list[BitmapInfo] | None = None,
+) -> tuple[int, Geometry] | None:
     shape_type = shape_elem.get("Type")
     cut_index = int(shape_elem.get("CutIndex", "0"))
 
@@ -282,7 +283,7 @@ def _shape_to_geometry(
     if xform_el is not None and xform_el.text:
         xform = _parse_xform(xform_el.text)
 
-    geo: Optional[Geometry] = None
+    geo: Geometry | None = None
 
     if shape_type == "Rect":
         w = float(shape_elem.get("W", "0"))
@@ -322,7 +323,7 @@ def _shape_to_geometry(
             for child in children_elem.findall("Shape"):
                 child_result = _shape_to_geometry(child, cut_settings, bitmaps)
                 if child_result is not None:
-                    child_cut_idx, child_geo = child_result
+                    _child_cut_idx, child_geo = child_result
                     child_geo = _apply_xform_to_geo(child_geo, xform)
                     combined.extend(child_geo)
             if not combined.is_empty():
@@ -336,7 +337,7 @@ def _shape_to_geometry(
         if w > 0 and h > 0 and data_b64:
             try:
                 png_bytes = base64.b64decode(data_b64)
-            except Exception:
+            except (binascii.Error, ValueError):
                 logger.warning("Failed to decode Bitmap data")
                 return None
             if bitmaps is not None:
@@ -361,19 +362,37 @@ def _shape_to_geometry(
 
 
 def _build_step_config(
-    cs: Dict[str, Any],
-) -> Optional[Dict[str, Any]]:
+    cs: dict[str, Any],
+) -> dict[str, Any] | None:
     """Translate LightBurn cut settings to generic step configuration."""
-    config: Dict[str, Any] = {}
+    config: dict[str, Any] = {}
     max_power = cs.get("maxPower")
     if max_power is not None:
         config["power"] = float(max_power) / 100.0
+    min_power = cs.get("minPower")
+    if min_power is not None:
+        config["min_power_level"] = float(min_power) / 100.0
     speed = cs.get("speed")
     if speed is not None:
         config["cut_speed"] = round(float(speed) * 60.0)
     kerf = cs.get("kerf")
     if kerf is not None:
-        config["kerf_mm"] = float(kerf)
+        # LightBurn's kerf is the full beam width; rayforge's offset_mm
+        # is the displacement applied to the path (half the width), so
+        # halve the imported value to preserve behaviour.
+        config["offset_mm"] = float(kerf) / 2.0
+    dot_width = cs.get("dotWidth")
+    if dot_width is not None:
+        # LightBurn's dotWidth is the total amount shortened per run;
+        # raygeo's dot_width_correction_mm is applied at each end, so
+        # halve the imported value to preserve behaviour.
+        config["dot_width_correction_mm"] = float(dot_width) / 2.0
+    interval = cs.get("interval")
+    if interval is not None:
+        config["line_interval_mm"] = float(interval)
+    angle = cs.get("angle")
+    if angle is not None:
+        config["scan_angle"] = float(angle)
     num_passes = cs.get("numPasses")
     if num_passes is not None:
         config["passes"] = int(num_passes)
@@ -384,25 +403,26 @@ class LightBurnImporter(Importer):
     label = "LightBurn project files"
     mime_types = ("application/x-lightburn",)
     extensions = (".lbrn", ".lbrn2")
-    features = {
+    features: ClassVar[set[ImporterFeature]] = {
         ImporterFeature.DIRECT_VECTOR,
         ImporterFeature.LAYER_SELECTION,
         ImporterFeature.BITMAP_TRACING,
     }
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._geometries_by_layer: Dict[str, Geometry] = {}
-        self._cut_settings: Dict[int, Dict[str, Any]] = {}
+        self._geometries_by_layer: dict[str, Geometry] = {}
+        self._cut_settings: dict[int, dict[str, Any]] = {}
+        self._cut_setting_kinds: dict[int, str] = {}
         self._project_title: str = ""
-        self._bitmaps: List[BitmapInfo] = []
+        self._bitmaps: list[BitmapInfo] = []
 
     def scan(self) -> ImportManifest:
         try:
             root = ET.fromstring(self.raw_data)
         except ET.ParseError as e:
             logger.warning("LightBurn scan failed: %s", e)
-            self.add_error(_(f"LightBurn file is invalid XML: {e}"))
+            self.add_error(_("LightBurn file is invalid XML: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
@@ -412,7 +432,7 @@ class LightBurnImporter(Importer):
             project = root
 
         title = project.get("AppVersion", self.source_file.stem)
-        layers: List[LayerInfo] = []
+        layers: list[LayerInfo] = []
         cut_settings = self._parse_cut_settings(project)
 
         for cs in cut_settings.values():
@@ -435,8 +455,8 @@ class LightBurnImporter(Importer):
 
     def _parse_cut_settings(
         self, project: ET.Element
-    ) -> Dict[int, Dict[str, Any]]:
-        cut_settings: Dict[int, Dict[str, Any]] = {}
+    ) -> dict[int, dict[str, Any]]:
+        cut_settings: dict[int, dict[str, Any]] = {}
         for cs_elem in list(project.findall("CutSetting")) + list(
             project.findall("CutSetting_Img")
         ):
@@ -444,7 +464,7 @@ class LightBurnImporter(Importer):
             if index_el is None:
                 continue
             idx = int(index_el.get("Value", "0"))
-            params: Dict[str, Any] = {"index": idx}
+            params: dict[str, Any] = {"index": idx}
             for child in cs_elem:
                 tag = child.tag
                 val = child.get("Value")
@@ -459,9 +479,12 @@ class LightBurnImporter(Importer):
                 else:
                     params[tag] = child.text or ""
             cut_settings[idx] = params
+            self._cut_setting_kinds[idx] = (
+                "image" if cs_elem.tag == "CutSetting_Img" else "cut"
+            )
         return cut_settings
 
-    def _render_bitmaps_to_svg(self) -> Optional[bytes]:
+    def _render_bitmaps_to_svg(self) -> bytes | None:
         if not self._bitmaps:
             return None
 
@@ -469,7 +492,7 @@ class LightBurnImporter(Importer):
         min_y = float("inf")
         max_x = float("-inf")
         max_y = float("-inf")
-        image_tags: List[str] = []
+        image_tags: list[str] = []
 
         for bm in self._bitmaps:
             hw, hh = bm.width / 2.0, bm.height / 2.0
@@ -502,9 +525,11 @@ class LightBurnImporter(Importer):
         vw = max(max_x - min_x, 1.0)
         vh = max(max_y - min_y, 1.0)
         svg_parts = [
-            '<svg xmlns="http://www.w3.org/2000/svg"'
-            ' xmlns:xlink="http://www.w3.org/1999/xlink"'
-            f' viewBox="{min_x} {min_y} {vw} {vh}">'
+            (
+                '<svg xmlns="http://www.w3.org/2000/svg"'
+                ' xmlns:xlink="http://www.w3.org/1999/xlink"'
+                f' viewBox="{min_x} {min_y} {vw} {vh}">'
+            )
         ]
         svg_parts.extend(image_tags)
         svg_parts.append("</svg>")
@@ -530,7 +555,7 @@ class LightBurnImporter(Importer):
 
         # Store LightBurn cut settings in source asset metadata so they
         # survive project save/load and can be re-applied on re-import.
-        cut_settings_by_name: Dict[str, Dict[str, Any]] = {}
+        cut_settings_by_name: dict[str, dict[str, Any]] = {}
         for idx, cs in self._cut_settings.items():
             name = cs.get("name", str(idx))
             cut_settings_by_name[name] = dict(cs)
@@ -556,8 +581,8 @@ class LightBurnImporter(Importer):
         self,
         parse_result: ParsingResult,
         spec: TraceSpec,
-    ) -> Dict[Optional[str], Geometry]:
-        geometries_by_layer: Dict[Optional[str], Geometry] = {}
+    ) -> dict[str | None, Geometry]:
+        geometries_by_layer: dict[str | None, Geometry] = {}
         for bm in self._bitmaps:
             layer_id = str(bm.cut_index)
             try:
@@ -616,7 +641,7 @@ class LightBurnImporter(Importer):
             if spec.active_layer_ids:
                 active_layers_set = set(spec.active_layer_ids)
 
-        geometries: Dict[Optional[str], Geometry]
+        geometries: dict[str | None, Geometry]
         if active_layers_set:
             geometries = {
                 layer_id: geo
@@ -624,7 +649,7 @@ class LightBurnImporter(Importer):
                 if layer_id in active_layers_set
             }
         else:
-            g: Dict[Optional[str], Geometry] = {}
+            g: dict[str | None, Geometry] = {}
             for k, v in self._geometries_by_layer.items():
                 g[k] = v
             geometries = g
@@ -634,26 +659,35 @@ class LightBurnImporter(Importer):
             merged_geo.extend(geo)
 
         if split_layers:
-            final_geometries: Dict[Optional[str], Geometry] = geometries or {
+            final_geometries: dict[str | None, Geometry] = geometries or {
                 None: merged_geo
             }
         else:
             final_geometries = {None: merged_geo}
 
         # Build per-layer settings from cut settings for the assembler.
-        layer_settings: Dict[Optional[str], Dict[str, Any]] = {}
+        layer_settings: dict[str | None, dict[str, Any]] = {}
         for layer_id in final_geometries:
             if layer_id is None:
                 continue
             try:
-                cs = self._cut_settings.get(int(layer_id))
+                layer_idx = int(layer_id)
             except (ValueError, TypeError):
-                cs = None
+                continue
+            cs = self._cut_settings.get(layer_idx)
             if cs is None:
                 continue
             config = _build_step_config(cs)
-            if config:
-                layer_settings[layer_id] = config
+            if not config:
+                continue
+            if self._cut_setting_kinds.get(layer_idx) == "image":
+                config["_is_image_layer"] = True
+                # EngraveStep modulates between min_power_level /
+                # max_power_level; LightBurn's power is the raster
+                # ceiling, so mirror it into max_power_level as well.
+                if "power" in config:
+                    config["max_power_level"] = config["power"]
+            layer_settings[layer_id] = config
 
         return VectorizationResult(
             geometries_by_layer=final_geometries,
@@ -661,11 +695,13 @@ class LightBurnImporter(Importer):
             layer_settings=layer_settings,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         try:
             root = ET.fromstring(self.raw_data)
         except ET.ParseError as e:
-            self.add_error(_(f"LightBurn file is corrupt or invalid: {e}"))
+            self.add_error(
+                _("LightBurn file is corrupt or invalid: {}").format(e)
+            )
             return None
 
         project = root.find("LightBurnProject")
@@ -675,8 +711,8 @@ class LightBurnImporter(Importer):
         self._cut_settings = self._parse_cut_settings(project)
         self._bitmaps = []
 
-        geometries_by_layer: Dict[str, Geometry] = {}
-        shape_count_by_layer: Dict[int, int] = {}
+        geometries_by_layer: dict[str, Geometry] = {}
+        shape_count_by_layer: dict[int, int] = {}
 
         for shape_elem in project.findall("Shape"):
             result = _shape_to_geometry(
@@ -723,7 +759,7 @@ class LightBurnImporter(Importer):
             document_bounds, temp_result
         )
 
-        layer_geometries: List[LayerGeometry] = []
+        layer_geometries: list[LayerGeometry] = []
         for layer_id, geo in geometries_by_layer.items():
             if geo.is_empty():
                 continue

@@ -3,11 +3,13 @@ from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from raygeo.geo import Matrix
 
 from rayforge.core.doc import Doc
 from rayforge.core.layer import Layer
 from rayforge.core.source_asset import SourceAsset
 from rayforge.core.step import Step
+from rayforge.core.step_registry import step_registry
 from rayforge.core.stock import StockItem
 from rayforge.core.stock_asset import StockAsset
 from rayforge.image.registry import renderer_registry
@@ -33,6 +35,28 @@ def test_doc_initialization(doc):
     assert doc.stock_assets == {}
     assert doc.stock_items == []
     assert doc.get_assets_by_type("sketch") == {}
+
+
+def test_has_rotary_layer_reflects_layer_flags(doc):
+    """has_rotary_layer tracks whether any layer enables rotary."""
+    assert doc.has_rotary_layer is False
+
+    doc.active_layer.set_rotary_enabled(True)
+    assert doc.has_rotary_layer is True
+
+    doc.active_layer.set_rotary_enabled(False)
+    assert doc.has_rotary_layer is False
+
+
+def test_is_default_layer_name():
+    """Auto-generated names match the doc's layer naming scheme."""
+    assert Doc.is_default_layer_name("Layer")
+    assert Doc.is_default_layer_name("Layer 1")
+    assert Doc.is_default_layer_name("Layer 42")
+
+    assert not Doc.is_default_layer_name("My Layer")
+    assert not Doc.is_default_layer_name("Layer Alpha")
+    assert not Doc.is_default_layer_name("Layer-1")
 
 
 @pytest.mark.parametrize(
@@ -149,6 +173,73 @@ def test_remove_layer_fires_descendant_removed(doc):
     )
 
 
+def test_missing_step_types_reports_original_type(doc):
+    """
+    A step whose class is not registered is reported by its stored
+    step type name instead of the generic base Step name.
+    """
+    step_dict = {
+        "uid": "missing-uid",
+        "type": "step",
+        "step_type": "NonExistentStepClass",
+        "name": "Missing Step",
+        "matrix": Matrix.identity().to_list(),
+        "typelabel": "Unknown Type",
+        "visible": True,
+        "per_workpiece_transformers_dicts": [],
+        "per_step_transformers_dicts": [],
+        "children": [],
+    }
+
+    workflow = doc.active_layer.workflow
+    workflow.add_step(Step.from_dict(step_dict))
+
+    assert doc.missing_step_types == {"NonExistentStepClass"}
+
+
+def test_missing_step_types_falls_back_to_typelabel(doc):
+    """
+    Old documents without a step_type field fall back to the stored
+    typelabel instead of the generic base Step name.
+    """
+    step_dict = {
+        "uid": "legacy-uid",
+        "type": "step",
+        "name": "Old Step",
+        "matrix": Matrix.identity().to_list(),
+        "typelabel": "SomeCustomStep",
+        "visible": True,
+        "per_workpiece_transformers_dicts": [],
+        "per_step_transformers_dicts": [],
+        "children": [],
+    }
+
+    workflow = doc.active_layer.workflow
+    workflow.add_step(Step.from_dict(step_dict))
+
+    assert doc.missing_step_types == {"SomeCustomStep"}
+
+
+def test_missing_step_types_empty_for_registered_steps(doc):
+    """
+    Steps whose classes are registered are not reported as missing.
+    """
+
+    class RegisteredStep(Step):
+        @classmethod
+        def create(cls, context=None, name=None, **kwargs):
+            return cls(typelabel="Registered")
+
+    step_registry.register(RegisteredStep)
+    try:
+        workflow = doc.active_layer.workflow
+        workflow.add_step(RegisteredStep(typelabel="Registered"))
+
+        assert doc.missing_step_types == set()
+    finally:
+        step_registry.unregister("RegisteredStep")
+
+
 def test_descendant_updated_bubbles_up_to_doc(doc):
     """A descendant_updated signal from a Step should bubble up to the Doc."""
     handler = MagicMock()
@@ -164,7 +255,7 @@ def test_descendant_updated_bubbles_up_to_doc(doc):
     handler.reset_mock()  # Ignore the 'add' event
 
     # Act
-    step.set_power(0.5)
+    step.set_cut_speed(2000)
 
     # Assert
     handler.assert_called_once_with(
@@ -802,7 +893,7 @@ def test_get_laser_uid_for_step_returns_laser_uid(doc):
     layer = doc.active_layer
     workflow = layer.workflow
     step = Step(typelabel="test")
-    step.selected_laser_uid = "laser-42"
+    step.selected_head_uid = "laser-42"
     workflow.add_step(step)
 
     assert doc.get_laser_uid_for_step(step.uid) == "laser-42"
@@ -827,12 +918,12 @@ def test_get_laser_uid_for_step_finds_step_in_second_layer(doc):
     doc.add_layer(layer2)
 
     step1 = Step(typelabel="step1")
-    step1.selected_laser_uid = "laser-a"
+    step1.selected_head_uid = "laser-a"
     layer1.workflow.add_step(step1)
 
     assert layer2.workflow is not None
     step2 = Step(typelabel="step2")
-    step2.selected_laser_uid = "laser-b"
+    step2.selected_head_uid = "laser-b"
     layer2.workflow.add_step(step2)
 
     assert doc.get_laser_uid_for_step(step2.uid) == "laser-b"

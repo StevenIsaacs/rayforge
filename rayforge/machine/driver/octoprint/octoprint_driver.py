@@ -2,16 +2,11 @@ import asyncio
 import inspect
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -49,7 +44,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_STATE_MAP: Dict[str, DeviceStatus] = {
+_STATE_MAP: dict[str, DeviceStatus] = {
     "Operational": DeviceStatus.IDLE,
     "Printing": DeviceStatus.RUN,
     "Pausing": DeviceStatus.HOLD,
@@ -85,16 +80,16 @@ class OctoPrintDriver(Driver):
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
-        self.host: Optional[str] = None
+        self.host: str | None = None
         self.port: int = 80
-        self._api_key: Optional[str] = None
-        self._base_url: Optional[str] = None
+        self._api_key: str | None = None
+        self._base_url: str | None = None
         self.keep_running: bool = False
-        self._connection_task: Optional[asyncio.Task] = None
+        self._connection_task: asyncio.Task | None = None
         self._job_active: bool = False
         self._job_done_event = asyncio.Event()
-        self._session_key: Optional[str] = None
-        self._user_name: Optional[str] = None
+        self._session_key: str | None = None
+        self._user_name: str | None = None
         self._auth_retried: bool = False
 
     @property
@@ -106,7 +101,7 @@ class OctoPrintDriver(Driver):
         return _("Machine Coordinates (G53)")
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         if self.host:
             return f"tcp://{self.host}:{self.port}"
         return None
@@ -160,7 +155,7 @@ class OctoPrintDriver(Driver):
         return GcodeEncoder(machine.dialect)
 
     @staticmethod
-    def _extract_api_key(data: Optional[str]) -> Optional[str]:
+    def _extract_api_key(data: str | None) -> str | None:
         if not data:
             return None
         try:
@@ -222,28 +217,30 @@ class OctoPrintDriver(Driver):
         )
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.request(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.request(
                     method, url, headers=headers, **kwargs
-                ) as response:
-                    if response.status == 403:
-                        await self._handle_auth_error()
-                        raise DeviceConnectionError(
-                            _(
-                                "Authentication failed. "
-                                "API key may be invalid or expired."
-                            )
+                ) as response,
+            ):
+                if response.status == 403:
+                    await self._handle_auth_error()
+                    raise DeviceConnectionError(
+                        _(
+                            "Authentication failed. "
+                            "API key may be invalid or expired."
                         )
-                    response.raise_for_status()
+                    )
+                response.raise_for_status()
 
-                    if response.status == 204:
-                        return None
+                if response.status == 204:
+                    return None
 
-                    ct = response.content_type or ""
-                    if "json" in ct:
-                        data = await response.json()
-                    else:
-                        data = await response.text()
+                ct = response.content_type or ""
+                if "json" in ct:
+                    data = await response.json()
+                else:
+                    data = await response.text()
 
             logger.debug(
                 f"Response ({response.status}): {str(data)[:200]}"
@@ -278,7 +275,7 @@ class OctoPrintDriver(Driver):
                     self._user_name = login.get("name")
                     return
             except Exception:
-                pass
+                logger.debug("Passive login attempt failed", exc_info=True)
 
         self.state.error = DeviceError(
             code=403,
@@ -318,7 +315,7 @@ class OctoPrintDriver(Driver):
                 await self._verify_connection()
                 try:
                     await self._run_websocket()
-                except Exception as ws_err:
+                except DeviceConnectionError as ws_err:
                     logger.info(
                         f"WebSocket unavailable, using polling: {ws_err}"
                     )
@@ -327,7 +324,7 @@ class OctoPrintDriver(Driver):
                 return
             except DeviceConnectionError as e:
                 self._update_connection_status(TransportStatus.ERROR, str(e))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - connection loop boundary
                 self._update_connection_status(TransportStatus.ERROR, str(e))
 
             if self.keep_running:
@@ -407,7 +404,7 @@ class OctoPrintDriver(Driver):
                 continue
             self._process_push_message(payload)
 
-    def _process_push_message(self, payload: Dict[str, Any]) -> None:
+    def _process_push_message(self, payload: dict[str, Any]) -> None:
         if "current" in payload:
             self._handle_current_update(payload["current"])
         elif "history" in payload:
@@ -415,7 +412,7 @@ class OctoPrintDriver(Driver):
         elif "event" in payload:
             self._handle_event(payload["event"])
 
-    def _handle_current_update(self, data: Dict[str, Any]) -> None:
+    def _handle_current_update(self, data: dict[str, Any]) -> None:
         state = data.get("state")
         if state:
             self._update_state_from_octoprint(state)
@@ -426,7 +423,7 @@ class OctoPrintDriver(Driver):
             if completion is not None:
                 self._update_job_progress(completion)
 
-    def _handle_event(self, event: Dict[str, Any]) -> None:
+    def _handle_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type", "")
         if event_type == "PrintDone":
             self._on_job_completed(success=True)
@@ -499,12 +496,12 @@ class OctoPrintDriver(Driver):
 
             except DeviceConnectionError:
                 raise
-            except Exception as e:
+            except (aiohttp.ClientError, ValueError) as e:
                 logger.warning(f"Polling error: {e}")
 
             await asyncio.sleep(_POLL_INTERVAL)
 
-    def _update_state_from_octoprint(self, state_data: Dict[str, Any]) -> None:
+    def _update_state_from_octoprint(self, state_data: dict[str, Any]) -> None:
         flags = state_data.get("flags", {})
         text = state_data.get("text", "Unknown")
 
@@ -514,9 +511,7 @@ class OctoPrintDriver(Driver):
             new_status = DeviceStatus.UNKNOWN
         elif flags.get("printing"):
             new_status = DeviceStatus.RUN
-        elif flags.get("paused"):
-            new_status = DeviceStatus.HOLD
-        elif flags.get("pausing"):
+        elif flags.get("paused") or flags.get("pausing"):
             new_status = DeviceStatus.HOLD
         elif flags.get("cancelling"):
             new_status = DeviceStatus.RUN
@@ -545,9 +540,7 @@ class OctoPrintDriver(Driver):
         encoded: "EncodedOutput",
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         if not self.host:
             raise DeviceConnectionError(
@@ -559,9 +552,7 @@ class OctoPrintDriver(Driver):
         try:
             if on_command_done is not None:
                 op_map = encoded.op_map
-                num_ops = 0
-                if op_map and op_map.op_to_machine_code:
-                    num_ops = max(op_map.op_to_machine_code.keys()) + 1
+                num_ops = op_map.op_count if op_map else 0
                 for i in range(num_ops):
                     result = on_command_done(i)
                     if inspect.isawaitable(result):
@@ -599,7 +590,7 @@ class OctoPrintDriver(Driver):
 
         url = f"{self._base_url}/api/files/local"
         assert self._api_key is not None
-        headers: Dict[str, str] = {"X-Api-Key": self._api_key}
+        headers: dict[str, str] = {"X-Api-Key": self._api_key}
 
         log_data = f"POST {url} with file '{filename}' size {len(gcode)}"
         logger.debug(
@@ -612,24 +603,24 @@ class OctoPrintDriver(Driver):
         )
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, data=form, headers=headers
-                ) as response:
-                    if response.status == 403:
-                        await self._handle_auth_error()
-                        raise DeviceConnectionError(
-                            _("Authentication failed during upload.")
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(url, data=form, headers=headers) as response,
+            ):
+                if response.status == 403:
+                    await self._handle_auth_error()
+                    raise DeviceConnectionError(
+                        _("Authentication failed during upload.")
+                    )
+                if response.status == 409:
+                    raise DeviceConnectionError(
+                        _(
+                            "Printer is busy or not operational. "
+                            "Cannot start a new job."
                         )
-                    if response.status == 409:
-                        raise DeviceConnectionError(
-                            _(
-                                "Printer is busy or not operational. "
-                                "Cannot start a new job."
-                            )
-                        )
-                    response.raise_for_status()
-                    data = await response.json()
+                    )
+                response.raise_for_status()
+                data = await response.json()
 
             logger.debug(
                 f"Upload response: {data}",
@@ -709,10 +700,10 @@ class OctoPrintDriver(Driver):
         self._job_done_event.set()
         self.job_finished.send(self)
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         return True
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         if axes is None:
             axis_list = ["x", "y", "z"]
         else:
@@ -730,21 +721,23 @@ class OctoPrintDriver(Driver):
             "/api/printer/printhead",
             json={
                 "command": "jog",
-                "x": pos_x,
-                "y": pos_y,
+                "x": self._to_machine_length(pos_x),
+                "y": self._to_machine_length(pos_y),
                 "absolute": True,
             },
         )
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         return True
 
     async def jog(self, speed: int, **deltas: float) -> None:
-        params: Dict[str, Any] = {
+        params: dict[str, Any] = {
             "command": "jog",
-            "speed": speed,
+            "speed": self._to_machine_speed(speed),
         }
-        params.update(deltas)
+        params.update(
+            {k: self._to_machine_length(v) for k, v in deltas.items()}
+        )
         await self._api_request(
             "POST",
             "/api/printer/printhead",
@@ -769,7 +762,7 @@ class OctoPrintDriver(Driver):
             )
         )
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return []
 
     async def clear_alarm(self) -> None:
@@ -798,7 +791,7 @@ class OctoPrintDriver(Driver):
         await self.set_power(head, percent)
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         p_map = {
             "G54": 1,
@@ -811,14 +804,20 @@ class OctoPrintDriver(Driver):
         p_num = p_map.get(wcs_slot)
         if p_num is None:
             raise ValueError(f"Invalid WCS slot: {wcs_slot}")
-        cmd = f"G10 L2 P{p_num} X{x:.3f} Y{y:.3f} Z{z:.3f}"
+        cmd = (
+            f"G10 L2 P{p_num} "
+            f"X{self._to_machine_length(x):.3f} "
+            f"Y{self._to_machine_length(y):.3f}"
+        )
+        if z is not None:
+            cmd += f" Z{self._to_machine_length(z):.3f}"
         await self._api_request(
             "POST",
             "/api/printer/command",
             json={"command": cmd},
         )
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         return {}
 
     async def run_probe_cycle(
@@ -826,10 +825,14 @@ class OctoPrintDriver(Driver):
         axis: Axis,
         max_travel: float,
         feed_rate: int,
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         assert axis.name, "Probing requires a named axis."
         axis_letter = axis.name.upper()
-        cmd = f"G38.2 {axis_letter}{max_travel:.3f} F{feed_rate}"
+        cmd = (
+            f"G38.2 {axis_letter}"
+            f"{self._to_machine_length(max_travel):.3f} "
+            f"F{self._to_machine_speed(feed_rate)}"
+        )
         self.probe_status_changed.send(
             self, message=f"Probing {axis_letter}..."
         )
@@ -850,7 +853,7 @@ class OctoPrintDriver(Driver):
     def _update_command_status(
         self,
         status: TransportStatus,
-        message: Optional[str] = None,
+        message: str | None = None,
     ) -> None:
         log_data = f"Command status: {status.name}"
         if message:
@@ -861,7 +864,7 @@ class OctoPrintDriver(Driver):
     def _update_connection_status(
         self,
         status: TransportStatus,
-        message: Optional[str] = None,
+        message: str | None = None,
     ) -> None:
         log_data = f"Connection status: {status.name}"
         if message:

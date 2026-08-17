@@ -1,7 +1,7 @@
 import logging
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, ClassVar, Union
 
 from ...core.commands import ChamferCommand
 from ...core.entities import Entity, Line, Point
@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 class ChamferTool(SketchTool):
     ICON = "sketch-chamfer-symbolic"
     LABEL = _("Chamfer")
-    SHORTCUTS = ["ch"]
+    SHORTCUTS: ClassVar[list[str]] = ["ch"]
     DEFAULT_DISTANCE_RATIO = 0.15
 
     def is_available(
         self,
-        target: Optional[Union[Point, Entity, "Constraint"]],
-        target_type: Optional[str],
+        target: Union[Point, Entity, "Constraint"] | None,
+        target_type: str | None,
     ) -> bool:
         if target_type != "junction":
             return False
@@ -45,7 +45,7 @@ class ChamferTool(SketchTool):
         self._add_chamfer()
         self.element.set_tool("select")
 
-    def _get_lines_at_point(self, pid: EntityID) -> List[Line]:
+    def _get_lines_at_point(self, pid: EntityID) -> list[Line]:
         sketch = self.element.sketch
         return [
             e

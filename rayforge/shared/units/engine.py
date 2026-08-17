@@ -1,13 +1,14 @@
 import re
-from typing import Dict, Optional, Tuple
+from typing import ClassVar
 
-meters_to_inch = 39.37007874
-meters_to_feet = 3.280839895
-kw_to_hp = 1.34102
+METERS_TO_INCH = 39.37007874
+METERS_TO_FEET = 3.280839895
+KW_TO_HP = 1.34102
+MM_PER_INCH = 25.4
 
 
 class ConversionEngine:
-    _symbols = {
+    _symbols: ClassVar[dict[str, str]] = {
         # SI units.
         "nanometer": "nm",
         "nanometers": "nm",
@@ -43,16 +44,16 @@ class ConversionEngine:
         "miles": "mi",
     }
 
-    _base_conversions = {
-        ("m", "in"): meters_to_inch,
-        ("m", "ft"): meters_to_feet,
-        ("kW", "HP"): kw_to_hp,
+    _base_conversions: ClassVar[dict[tuple[str, str], float]] = {
+        ("m", "in"): METERS_TO_INCH,
+        ("m", "ft"): METERS_TO_FEET,
+        ("kW", "HP"): KW_TO_HP,
         ("min", "s"): 60,
         ("hr", "s"): 3600,
         ("hr", "min"): 60,
     }
 
-    _si_prefixes = {
+    _si_prefixes: ClassVar[dict[str, float]] = {
         "n": 1e-9,
         "μ": 1e-6,
         "m": 1e-3,
@@ -62,12 +63,12 @@ class ConversionEngine:
         "k": 1e3,
     }
 
-    _length_units = {"m", "in", "ft", "yd", "mi"}
-    _time_units = {"s", "min", "hr"}
-    _time_squared_units = {"s²", "min²", "hr²"}
+    _length_units: ClassVar[set[str]] = {"m", "in", "ft", "yd", "mi"}
+    _time_units: ClassVar[set[str]] = {"s", "min", "hr"}
+    _time_squared_units: ClassVar[set[str]] = {"s²", "min²", "hr²"}
 
     def __init__(self):
-        self.unitmap: Dict[Tuple[str, str], float] = {}
+        self.unitmap: dict[tuple[str, str], float] = {}
         self._value_split_re = re.compile(r"^([\d\.\-eE]+)\s*(\S*)$")
         self._build_unit_map()
 
@@ -102,13 +103,11 @@ class ConversionEngine:
                 self.unitmap[(t2_squared, t1_squared)] = 1 / squared_factor
 
         # Add identity conversions
-        all_units = set(k[0] for k in self.unitmap) | set(
-            k[1] for k in self.unitmap
-        )
+        all_units = {k[0] for k in self.unitmap} | {k[1] for k in self.unitmap}
         for unit in all_units:
             self.unitmap[(unit, unit)] = 1.0
 
-    def _suffix_split(self, unit: str) -> Tuple[str, Optional[str]]:
+    def _suffix_split(self, unit: str) -> tuple[str, str | None]:
         if "/" in unit:
             base, suffix = unit.split("/", 1)
             return base, suffix
@@ -127,7 +126,7 @@ class ConversionEngine:
             return f"{normalized_base}/{normalized_suffix}"
         return normalized_base
 
-    def parse_value(self, value_str: str) -> Tuple[float, Optional[str]]:
+    def parse_value(self, value_str: str) -> tuple[float, str | None]:
         if not isinstance(value_str, str):
             return value_str, None
         match = self._value_split_re.match(value_str.strip())
@@ -139,7 +138,7 @@ class ConversionEngine:
 
     def convert(
         self, value: float, from_unit: str, to_unit: str
-    ) -> Tuple[float, str]:
+    ) -> tuple[float, str]:
         if from_unit == to_unit:
             return value, to_unit
 

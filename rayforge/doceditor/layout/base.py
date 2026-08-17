@@ -2,17 +2,20 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Dict, Optional, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from blinker import Signal
 from raygeo.geo import Matrix
 from raygeo.geo.types import Rect
 
+from ...context import get_context
 from ...core.group import Group
 from ...core.item import DocItem
 from ...core.layer import Layer
 from ...core.stock import StockItem
 from ...core.workpiece import WorkPiece
+from ...machine.models.machine_panel import PanelOrientation
 
 if TYPE_CHECKING:
     from ...shared.tasker.context import ExecutionContext
@@ -65,7 +68,7 @@ class LayoutStrategy(ABC):
     @staticmethod
     def _get_item_world_bbox(
         item: DocItem,
-    ) -> Optional[Rect]:
+    ) -> Rect | None:
         """
         Calculates the axis-aligned bounding box (min_x, min_y, max_x, max_y)
         of a single DocItem (WorkPiece, Group, or StockItem) in world (mm)
@@ -75,9 +78,7 @@ class LayoutStrategy(ABC):
         items_to_measure = []
         if isinstance(item, WorkPiece):
             items_to_measure.append(item)
-        elif isinstance(item, Group):
-            items_to_measure.extend(item.get_descendants(of_type=WorkPiece))
-        elif isinstance(item, Layer):
+        elif isinstance(item, (Group, Layer)):
             items_to_measure.extend(item.get_descendants(of_type=WorkPiece))
         elif isinstance(item, StockItem):
             items_to_measure.append(item)
@@ -107,7 +108,7 @@ class LayoutStrategy(ABC):
 
     def _get_selection_world_bbox(
         self,
-    ) -> Optional[Rect]:
+    ) -> Rect | None:
         """
         Calculates the collective world-space bounding box for all
         items. Returns (min_x, min_y, max_x, max_y).
@@ -129,10 +130,80 @@ class LayoutStrategy(ABC):
             return None
         return (overall_min_x, overall_min_y, overall_max_x, overall_max_y)
 
+    # -- Panel-aware helpers ------------------------------------------
+    #
+    # The document model lives in WORLD space while the 2D canvas
+    # presents PANEL space (the optional 90-degree presentation
+    # rotation). Layout operations act on what the user sees, so the
+    # bounding boxes and targets are computed in PANEL space and the
+    # resulting deltas are un-rotated back into WORLD space before they
+    # are applied to the item matrices.
+
+    def _get_panel(self):
+        """The machine's display panel, or ``None`` when no machine is
+        configured."""
+        machine = get_context().machine
+        if machine is None:
+            return None
+        return getattr(machine, "panel", None)
+
+    def _get_item_panel_bbox(self, item: DocItem) -> Rect | None:
+        """Panel-space bounding box of a single item.
+
+        Projects the item's WORLD bounding box through the presentation
+        rotation. Falls back to the world box when the panel is
+        unavailable or unrotated.
+        """
+        bbox = self._get_item_world_bbox(item)
+        if bbox is None:
+            return None
+        panel = self._get_panel()
+        if panel is None or not self._is_panel_rotated(panel):
+            return bbox
+        return panel.world_bbox_to_panel(bbox)
+
+    def _get_selection_panel_bbox(self) -> Rect | None:
+        """Collective PANEL-space bounding box for all items."""
+        overall: Rect | None = None
+        for item in self.items:
+            bbox = self._get_item_panel_bbox(item)
+            if bbox is None:
+                continue
+            if overall is None:
+                overall = bbox
+            else:
+                overall = (
+                    min(overall[0], bbox[0]),
+                    min(overall[1], bbox[1]),
+                    max(overall[2], bbox[2]),
+                    max(overall[3], bbox[3]),
+                )
+        return overall
+
+    @staticmethod
+    def _is_panel_rotated(panel) -> bool:
+        """True when the panel presents a rotated bed."""
+        orientation = getattr(panel, "orientation", None)
+        return isinstance(orientation, PanelOrientation) and (
+            orientation is not PanelOrientation.NATIVE
+        )
+
+    def _world_delta(self, dx: float, dy: float) -> Matrix:
+        """Delta matrix for a PANEL-space translation.
+
+        The delta is un-rotated into WORLD space so it composes with the
+        item's canonical matrix the same way it would move on screen.
+        """
+        panel = self._get_panel()
+        if panel is not None and self._is_panel_rotated(panel):
+            wx, wy = panel.panel_delta_to_world(dx, dy)
+            return Matrix.translation(wx, wy)
+        return Matrix.translation(dx, dy)
+
     @abstractmethod
     def calculate_deltas(
-        self, context: Optional[ExecutionContext] = None
-    ) -> Dict[DocItem, Matrix]:
+        self, context: ExecutionContext | None = None
+    ) -> dict[DocItem, Matrix]:
         """
         Calculates the required delta transformation matrix for each
         item.
@@ -142,13 +213,12 @@ class LayoutStrategy(ABC):
             when pre-multiplied with the item's current matrix, will
             move it to the target position.
         """
-        pass
 
     async def calculate_deltas_async(
         self,
-        context: Optional[ExecutionContext] = None,
-        task_manager: "Optional[TaskManager]" = None,
-    ) -> Dict[DocItem, Matrix]:
+        context: ExecutionContext | None = None,
+        task_manager: TaskManager | None = None,
+    ) -> dict[DocItem, Matrix]:
         """
         Asynchronous version of calculate_deltas.
 

@@ -3,7 +3,7 @@ import json
 import logging
 import uuid
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from blinker import Signal
 from gi.repository import Gdk, Gio, GLib, Graphene, Gtk, Pango
@@ -82,7 +82,7 @@ class AssetCard(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.asset = asset
         self.add_css_class("asset-card")
-        self._texture: Optional[Gdk.Texture] = None
+        self._texture: Gdk.Texture | None = None
         self.set_size_request(CARD_SIZE, CARD_SIZE)
         self.set_halign(Gtk.Align.CENTER)
         self.set_valign(Gtk.Align.START)
@@ -239,8 +239,8 @@ class AssetBrowser(Gtk.Box):
 
         self._cards: dict[str, list] = {}
         self._selected_uids: set[str] = set()
-        self._asset_clipboard: List[Dict] = []
-        self._context_popover: Optional[Gtk.PopoverMenu] = None
+        self._asset_clipboard: list[dict] = []
+        self._context_popover: Gtk.PopoverMenu | None = None
         self._connect_signals()
         self._sync_cards(self.doc)
 
@@ -309,7 +309,7 @@ class AssetBrowser(Gtk.Box):
         self._cards[asset.uid] = [card, asset.updated, handler]
 
     def _disconnect_all_asset_signals(self):
-        for uid, (card, signal, handler) in self._cards.items():
+        for card, signal, handler in self._cards.values():
             signal.disconnect(handler)
         self._cards.clear()
 
@@ -557,7 +557,7 @@ class AssetBrowser(Gtk.Box):
         menu.append_item(Gio.MenuItem.new(_("Delete"), "win.asset-delete"))
         self._popup_context_menu(menu, gesture)
 
-    def get_selected_assets(self) -> List[IAsset]:
+    def get_selected_assets(self) -> list[IAsset]:
         assets = []
         for uid in self._selected_uids:
             entry = self._cards.get(uid)

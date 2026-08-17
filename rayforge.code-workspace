@@ -4,6 +4,9 @@
 			"path": "."
 		},
 		{
+			"path": "external/raygeo"
+		},
+		{
 			"path": "rayforge/private_addons"
 		}
 	],

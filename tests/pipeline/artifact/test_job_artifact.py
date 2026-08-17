@@ -1,8 +1,14 @@
-import numpy as np
 from raygeo.ops import Ops
 
 from rayforge.pipeline.artifact.job import JobArtifact
-from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
+
+
+def _ops_with_line():
+    ops = Ops()
+    ops.move_to(0.0, 0.0, 0.0)
+    ops.set_power(1.0)
+    ops.line_to(5.0, 0.0, 0.0)
+    return ops
 
 
 def test_artifact_type_property():
@@ -17,24 +23,44 @@ def test_artifact_type_property():
 
 def test_final_job_serialization_round_trip():
     """Tests serialization for a final_job artifact."""
-    encoded = EncodedOutput(text="G1 X10", op_map=MachineCodeOpMap())
-    encoded_output_bytes = np.frombuffer(encoded.to_json().encode(), np.uint8)
-
     artifact = JobArtifact(
         ops=Ops(),
         distance=42.5,
-        encoded_output_bytes=encoded_output_bytes,
         time_estimate=123.45,
         generation_id=1,
     )
 
     reconstructed = JobArtifact.from_dict(artifact.to_dict())
 
-    assert reconstructed.encoded_output_bytes is not None
     assert reconstructed.time_estimate == 123.45
     assert reconstructed.distance == 42.5
+    assert reconstructed.generation_id == 1
 
-    assert artifact.encoded_output_bytes is not None
-    np.testing.assert_array_equal(
-        reconstructed.encoded_output_bytes, artifact.encoded_output_bytes
+
+def test_preview_ops_prefers_mapped_ops():
+    """preview_ops returns mapped_ops when it is set."""
+    ops = _ops_with_line()
+    mapped = _ops_with_line()
+    mapped.set_power(0.9)
+
+    artifact = JobArtifact(
+        ops=ops,
+        mapped_ops=mapped,
+        distance=0.0,
+        generation_id=1,
     )
+
+    assert artifact.preview_ops is mapped
+
+
+def test_preview_ops_falls_back_to_ops():
+    """preview_ops falls back to ops when mapped_ops is None."""
+    ops = _ops_with_line()
+
+    artifact = JobArtifact(
+        ops=ops,
+        distance=0.0,
+        generation_id=1,
+    )
+
+    assert artifact.preview_ops is ops

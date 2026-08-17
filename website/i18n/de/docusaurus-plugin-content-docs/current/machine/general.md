@@ -7,7 +7,7 @@ description: "Allgemeine Maschineneinstellungen in Rayforge konfigurieren — Ma
 Die Seite „Allgemein" in den Maschineneinstellungen enthält den Maschinennamen,
 die Treiberauswahl und Verbindungseinstellungen sowie die Geschwindigkeitsparameter.
 
-![Allgemeine Einstellungen](/screenshots/machine-general.png)
+![Allgemeine Einstellungen](/screenshots/machine-settings-general.png)
 
 ## Maschinenname
 
@@ -87,8 +87,8 @@ anderen System importiert werden.
 
 ## Siehe auch
 
-- [Konfigurations-Assistent](config-wizard) – Ein angeschlossenes Gerät
-  automatisch erkennen und konfigurieren
+- [Ersteinrichtung](../getting-started/first-time-setup.md) – Eine Maschine
+  Schritt für Schritt mit dem Konfigurations-Assistenten erstellen
 - [Hardware-Einstellungen](hardware) – Arbeitsflächenabmessungen und
   Achsenkonfiguration
 - [Geräte-Einstellungen](device) – Firmware-Einstellungen auf dem Controller

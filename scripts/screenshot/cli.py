@@ -16,9 +16,6 @@ TEST_CONFIG_DIR = PROJECT_ROOT / "tests" / "config"
 
 TARGETS = {
     "addon:ai-workpiece-generator": "ai_workpiece_generator",
-    "main:array:grid": "array_grid",
-    "main:array:point-rotation": "array_point_rotation",
-    "main:array:circular": "array_circular",
     "addon:deepnest": "deepnest",
     "addon:print-and-cut:pick": "print_and_cut",
     "addon:print-and-cut:jog": "print_and_cut",
@@ -27,14 +24,23 @@ TARGETS = {
     "app-settings:general": "app_settings_general",
     "app-settings:machines": "app_settings_machines",
     "app-settings:machines:add": "add_machine_dialog",
-    "app-settings:machines:wizard:connect": "config_wizard",
-    "app-settings:machines:wizard:review": "config_wizard",
     "app-settings:materials": "app_settings_materials",
     "app-settings:recipes": "app_settings_recipes",
     "app-settings:addons": "app_settings_addons",
     "app-settings:ai": "app_settings_ai",
     "bottom-panel:console": "bottom_panel",
     "bottom-panel:layers": "bottom_panel",
+    "config-wizard:ai-lookup": "config_wizard",
+    "config-wizard:ai-provider": "config_wizard",
+    "config-wizard:camera": "config_wizard",
+    "config-wizard:controller": "config_wizard",
+    "config-wizard:connect": "config_wizard",
+    "config-wizard:probe": "config_wizard",
+    "config-wizard:profile": "config_wizard",
+    "config-wizard:hardware": "config_wizard",
+    "config-wizard:head": "config_wizard",
+    "config-wizard:review": "config_wizard",
+    "config-wizard:rotary": "config_wizard",
     "import-dialog": "import_dialog",
     "machine-settings:general": "machine_settings_general",
     "machine-settings:hardware": "machine_settings_hardware",
@@ -47,31 +53,47 @@ TARGETS = {
     "machine-settings:camera": "machine_settings_camera",
     "machine-settings:camera:image-settings": "machine_settings_camera",
     "machine-settings:camera:lens-calibration": "machine_settings_camera",
-    "machine-settings:camera:lens-calibration:wizard-card": "machine_settings_camera",
-    "machine-settings:camera:lens-calibration:wizard-capture": "machine_settings_camera",
+    "machine-settings:camera:lens-calibration:wizard-card": (
+        "machine_settings_camera"
+    ),
+    "machine-settings:camera:lens-calibration:wizard-capture": (
+        "machine_settings_camera"
+    ),
     "machine-settings:camera:image-alignment": "machine_settings_camera",
     "machine-settings:maintenance": "machine_settings_maintenance",
     "machine-settings:nogo-zones": "machine_settings_nogo_zones",
     "main:standard": "main_standard",
     "main:3d": "main_3d",
     "main:3d-rotary": "main_3d_rotary",
+    "main:array:grid": "array_grid",
+    "main:array:point-rotation": "array_point_rotation",
+    "main:array:circular": "array_circular",
     "material-test": "material_test",
     "operations:wavefront": "wavefront",
     "recipe-editor:general": "recipe_editor_general",
     "recipe-editor:applicability": "recipe_editor_applicability",
-    "recipe-editor:settings": "recipe_editor_settings",
+    "recipe-editor:laser": "recipe_editor_settings",
+    "recipe-editor:step-settings": "recipe_editor_settings",
+    "recipe-editor:post-processing": "recipe_editor_settings",
     "sanity-check": "sanity_check",
     "step-settings:contour:general": "step_settings",
+    "step-settings:contour:laser": "step_settings",
     "step-settings:contour:post": "step_settings",
     "step-settings:engrave:general:constant_power": "step_settings",
     "step-settings:engrave:general:dither": "step_settings",
     "step-settings:engrave:general:multi_pass": "step_settings",
     "step-settings:engrave:general:variable": "step_settings",
+    "step-settings:engrave:laser": "step_settings",
     "step-settings:engrave:post": "step_settings",
     "step-settings:frame-outline:general": "step_settings",
+    "step-settings:frame-outline:laser": "step_settings",
     "step-settings:frame-outline:post": "step_settings",
     "step-settings:shrink-wrap:general": "step_settings",
+    "step-settings:shrink-wrap:laser": "step_settings",
     "step-settings:shrink-wrap:post": "step_settings",
+    "step-settings:wavefront:general": "step_settings",
+    "step-settings:wavefront:laser": "step_settings",
+    "step-settings:wavefront:post": "step_settings",
 }
 
 
@@ -118,7 +140,11 @@ def run_script(script_name: str, target: str) -> int:
         print(f"Running: {' '.join(cmd)} (TARGET={target})")
         env = os.environ.copy()
         env["TARGET"] = target
-        return subprocess.run(cmd, env=env).returncode
+        # Force the isolated test config even if the --config argument
+        # were ever dropped or parsed by a wrapping command, so screenshots
+        # never depend on the developer's personal machine configuration.
+        env["RAYFORGE_CONFIG_DIR"] = tmpdir
+        return subprocess.run(cmd, env=env, check=False).returncode
 
 
 def generate_help_text() -> str:

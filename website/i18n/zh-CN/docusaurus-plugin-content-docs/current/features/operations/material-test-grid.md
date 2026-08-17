@@ -37,7 +37,7 @@ Rayforge 包含常见场景的预设：
 
 在设置对话框中调整测试网格参数：
 
-![材料测试网格设置](/screenshots/material-test-grid.png)
+![材料测试网格设置](/screenshots/material-test.png)
 
 #### 测试类型
 
@@ -241,6 +241,6 @@ Rayforge 以 **风险优化的顺序** 执行测试单元，以防止材料损�
 
 ## 相关主题
 
-- **[3D 预览](../ui/3d-preview)** - 在运行前预览测试执行
+- **[3D 预览](../../ui/3d-preview.md)** - 在运行前预览测试执行
 - **[雕刻](engrave)** - 理解雕刻操作
 - **[轮廓切割](contour)** - 理解切割操作

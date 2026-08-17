@@ -2,7 +2,7 @@ import logging
 from dataclasses import replace
 from gettext import gettext as _
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 import yaml
 from blinker import Signal
@@ -23,7 +23,7 @@ class DialectManager:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._registry: Dict[str, GcodeDialect] = {}
+        self._registry: dict[str, GcodeDialect] = {}
         self.dialects_changed = Signal()
         self.load_all()
 
@@ -40,7 +40,7 @@ class DialectManager:
             )
         return dialect
 
-    def get_all(self) -> List[GcodeDialect]:
+    def get_all(self) -> list[GcodeDialect]:
         """Returns a list of all registered GcodeDialect instances."""
         return sorted(self._registry.values(), key=lambda d: d.label)
 
@@ -57,8 +57,8 @@ class DialectManager:
         self._registry[uid_key] = dialect
 
     def migrate_builtin_dialect_to_copy(
-        self, dialect_uid: Optional[str], machine_name: str
-    ) -> Tuple[Optional[str], bool]:
+        self, dialect_uid: str | None, machine_name: str
+    ) -> tuple[str | None, bool]:
         """
         If dialect_uid references a built-in dialect, creates an isolated
         copy and returns the new UID with migrated=True. Otherwise returns
@@ -131,7 +131,7 @@ class DialectManager:
         try:
             with open(file_path, "w") as f:
                 yaml.safe_dump(dialect.to_dict(), f, sort_keys=False)
-        except (IOError, yaml.YAMLError) as e:
+        except (OSError, yaml.YAMLError) as e:
             logger.error(f"Failed to save custom dialect to {file_path}: {e}")
 
     def _delete_dialect_file(self, dialect: GcodeDialect):
@@ -167,12 +167,12 @@ class DialectManager:
         self.dialects_changed.send(self)
 
     def get_machines_using_dialect(
-        self, dialect: GcodeDialect, machines: List["Machine"]
-    ) -> List["Machine"]:
+        self, dialect: GcodeDialect, machines: list["Machine"]
+    ) -> list["Machine"]:
         """Returns a list of machines that use the given dialect."""
         return [m for m in machines if m.dialect_uid == dialect.uid]
 
-    def delete_dialect(self, dialect: GcodeDialect, machines: List["Machine"]):
+    def delete_dialect(self, dialect: GcodeDialect, machines: list["Machine"]):
         """Deletes a custom dialect, saves, and signals."""
         if not dialect.is_custom:
             raise ValueError("Cannot delete a built-in dialect.")

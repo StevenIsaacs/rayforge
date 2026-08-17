@@ -10,9 +10,9 @@ import logging
 import tempfile
 from gettext import gettext as _
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
-from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 from raygeo.geo import Matrix
 
 from ...context import get_context
@@ -48,9 +48,9 @@ class DragDropCmd:
         """
         self.main_window = main_window
         self.surface = surface
-        self._drop_overlay_label: Optional[Gtk.Label] = None
+        self._drop_overlay_label: Gtk.Label | None = None
 
-        self._drop_target: Optional[Gtk.DropTarget] = None
+        self._drop_target: Gtk.DropTarget | None = None
 
         self._apply_drop_overlay_css()
 
@@ -90,9 +90,7 @@ class DragDropCmd:
         rather than strings.
         """
         self._drop_target = Gtk.DropTarget.new(Gio.File, Gdk.DragAction.COPY)
-        self._drop_target.set_gtypes(
-            [Gio.File, Gdk.FileList, GObject.TYPE_STRING]
-        )
+        self._drop_target.set_gtypes([Gio.File, Gdk.FileList, str])
         self._drop_target.connect("drop", self._on_drop)
         self._drop_target.connect("enter", self._on_drag_enter)
         self._drop_target.connect("leave", self._on_drag_leave)
@@ -137,7 +135,7 @@ class DragDropCmd:
         return False
 
     def _handle_asset_drop(
-        self, data: str, position_mm: Tuple[float, float]
+        self, data: str, position_mm: tuple[float, float]
     ) -> bool:
         try:
             uids = json.loads(data)
@@ -188,7 +186,7 @@ class DragDropCmd:
         return success
 
     def _create_stock_item_instance(
-        self, asset_uid: str, position_mm: Tuple[float, float]
+        self, asset_uid: str, position_mm: tuple[float, float]
     ):
         """
         Creates a new StockItem instance from a StockAsset.
@@ -215,20 +213,20 @@ class DragDropCmd:
             position_mm[1] - h / 2,
         )
 
-        with history.transaction(_(f"Add {asset.name} Instance")) as t:
+        with history.transaction(_("Add {} Instance").format(asset.name)) as t:
             command = ListItemCommand(
                 owner_obj=doc,
                 item=stock_item,
                 undo_command="remove_child",
                 redo_command="add_child",
-                name=_(f"Add {asset.name} Instance"),
+                name=_("Add {} Instance").format(asset.name),
             )
             t.execute(command)
 
         return stock_item
 
     def _create_source_workpiece_instance(
-        self, asset_uid: str, position_mm: Tuple[float, float]
+        self, asset_uid: str, position_mm: tuple[float, float]
     ):
         """
         Creates a new WorkPiece instance from a SourceAsset by re-running
@@ -337,7 +335,7 @@ class DragDropCmd:
                 overlay_parent.remove_overlay(self._drop_overlay_label)
             self._drop_overlay_label = None
             logger.debug("Drop overlay removed")
-        except Exception as e:
+        except GLib.Error as e:
             logger.warning(f"Error removing drop overlay: {e}")
             self._drop_overlay_label = None  # Clear reference anyway
 
@@ -350,7 +348,7 @@ class DragDropCmd:
             widget = widget.get_parent()
         return None
 
-    def _extract_files_from_drop_value(self, value) -> List[Gio.File]:
+    def _extract_files_from_drop_value(self, value) -> list[Gio.File]:
         """Extract file list from drop value."""
         files = []
         if isinstance(value, Gdk.FileList):
@@ -367,7 +365,7 @@ class DragDropCmd:
 
         return files
 
-    def _get_file_infos(self, files: List[Gio.File]) -> List[Tuple[Path, str]]:
+    def _get_file_infos(self, files: list[Gio.File]) -> list[tuple[Path, str]]:
         """Get file path and MIME type information for dropped files."""
         editor = self.main_window.doc_editor
         file_infos = []
@@ -385,7 +383,7 @@ class DragDropCmd:
                     None,
                 )
                 mime_type = file_info.get_content_type()
-            except Exception as e:
+            except GLib.Error as e:
                 logger.warning(
                     f"Could not query file info for {file_path}: {e}"
                 )
@@ -407,8 +405,8 @@ class DragDropCmd:
 
     def _import_dropped_files(
         self,
-        file_infos: List[Tuple[Path, str]],
-        position_mm: Tuple[float, float],
+        file_infos: list[tuple[Path, str]],
+        position_mm: tuple[float, float],
     ):
         """
         Import dropped files, routing them to individual or batch import
@@ -419,7 +417,7 @@ class DragDropCmd:
             position_mm: (x, y) tuple in world coordinates
         """
         editor = self.main_window.doc_editor
-        files_for_batch_import: List[Tuple[Path, str]] = []
+        files_for_batch_import: list[tuple[Path, str]] = []
 
         for file_path, mime_type in file_infos:
             action = editor.file.analyze_import_target(file_path, mime_type)
@@ -526,14 +524,14 @@ class DragDropCmd:
                 # This can happen if clipboard content changes during read.
                 logger.warning(f"GLib error reading clipboard texture: {e}")
                 self._show_clipboard_error()
-            except Exception as e:
-                logger.exception(f"Failed to process clipboard texture: {e}")
+            except Exception:
+                logger.exception("Failed to process clipboard texture")
                 self._show_clipboard_error()
 
         # Start the asynchronous clipboard read.
         clipboard.read_texture_async(None, on_texture_ready)
 
-    def _save_texture_to_temp_file(self, texture) -> Optional[Path]:
+    def _save_texture_to_temp_file(self, texture) -> Path | None:
         """
         Save GdkTexture to a temporary PNG file.
         MUST be called from the main GTK thread.
@@ -559,7 +557,7 @@ class DragDropCmd:
             pixbuf.savev(str(temp_path), "png", [], [])
             return temp_path
 
-        except Exception as e:
+        except (GLib.Error, OSError) as e:
             logger.error(f"Failed to save texture: {e}")
             return None
 
@@ -577,17 +575,7 @@ class DragDropCmd:
         try:
             machine = get_context().machine
             if machine:
-                work_area = machine.work_area
-                wa_w, wa_h = work_area[2], work_area[3]
-                origin_x, origin_y = machine.get_reference_position_world()
-                space = machine.get_coordinate_space()
-                bottom_left_x, bottom_left_y = (
-                    space.world_position_from_origin(
-                        origin_x, origin_y, (wa_w, wa_h)
-                    )
-                )
-                center_x = bottom_left_x + wa_w / 2
-                center_y = bottom_left_y + wa_h / 2
+                center_x, center_y = machine.panel.work_area_center()
             else:
                 center_x, center_y = 50.0, 50.0  # Fallback
 
@@ -608,8 +596,8 @@ class DragDropCmd:
                 Adw.Toast.new(_("Image imported from clipboard"))
             )
 
-        except Exception as e:
-            logger.exception(f"Failed to import from clipboard: {e}")
+        except Exception:
+            logger.exception("Failed to import from clipboard")
             self._show_clipboard_error()
 
         return False  # Don't repeat
@@ -627,7 +615,7 @@ class DragDropCmd:
         try:
             temp_path.unlink()
             logger.debug(f"Cleaned up clipboard temp file: {temp_path}")
-        except Exception as e:
+        except OSError as e:
             logger.warning(f"Failed to clean up temp file: {e}")
 
         return False  # Don't repeat

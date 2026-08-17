@@ -1,5 +1,4 @@
 from gettext import gettext as _
-from typing import Set
 
 from gi.repository import Adw, Gtk
 
@@ -13,14 +12,14 @@ class MissingFeaturesDialog(Adw.MessageDialog):
     installed).
     """
 
-    def __init__(self, parent: Gtk.Window, missing_types: Set[str]):
+    def __init__(self, parent: Gtk.Window, missing_types: set[str]):
         super().__init__(transient_for=parent, modal=True)
         self.set_heading(_("Missing Features"))
 
         if len(missing_types) == 1:
             msg = _(
                 "This document uses a feature that is not available: {}"
-            ).format(list(missing_types)[0])
+            ).format(next(iter(missing_types)))
         else:
             types_list = ", ".join(sorted(missing_types))
             msg = _(

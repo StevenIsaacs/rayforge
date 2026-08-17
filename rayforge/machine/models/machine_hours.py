@@ -1,7 +1,7 @@
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any
 
 from blinker import Signal
 
@@ -24,11 +24,11 @@ class ResettableCounter:
     uid: str = field(default_factory=lambda: str(uuid.uuid4()))
     name: str = "Counter"
     value: float = 0.0
-    notify_at: Optional[float] = None
+    notify_at: float | None = None
     notification_sent: bool = False
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize counter to dictionary."""
         result = {
             "uid": self.uid,
@@ -40,7 +40,7 @@ class ResettableCounter:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ResettableCounter":
+    def from_dict(cls, data: dict[str, Any]) -> "ResettableCounter":
         """Deserialize counter from dictionary."""
         known_keys = {"uid", "name", "value", "notify_at"}
         extra = {k: v for k, v in data.items() if k not in known_keys}
@@ -83,9 +83,9 @@ class MachineHours:
 
     def __init__(self):
         self.total_hours: float = 0.0
-        self.counters: Dict[str, ResettableCounter] = {}
+        self.counters: dict[str, ResettableCounter] = {}
         self.changed = Signal()
-        self.extra: Dict[str, Any] = {}
+        self.extra: dict[str, Any] = {}
 
     def add_hours(self, hours: float) -> None:
         """
@@ -157,7 +157,7 @@ class MachineHours:
             del self.counters[counter_uid]
             self.changed.send(self)
 
-    def get_counter(self, counter_uid: str) -> Optional[ResettableCounter]:
+    def get_counter(self, counter_uid: str) -> ResettableCounter | None:
         """Get a counter by its UID."""
         return self.counters.get(counter_uid)
 
@@ -180,7 +180,7 @@ class MachineHours:
             counter.reset()
         self.changed.send(self)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize to dictionary."""
         result = {
             "total_hours": self.total_hours,
@@ -193,7 +193,7 @@ class MachineHours:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MachineHours":
+    def from_dict(cls, data: dict[str, Any]) -> "MachineHours":
         """Deserialize from dictionary."""
         known_keys = {"total_hours", "counters"}
         extra = {k: v for k, v in data.items() if k not in known_keys}

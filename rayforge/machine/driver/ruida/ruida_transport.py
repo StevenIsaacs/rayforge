@@ -6,7 +6,6 @@ Wraps a generic transport (UDP, serial) to provide Ruida-specific encoding.
 """
 
 import logging
-from typing import Tuple
 
 from blinker import Signal
 
@@ -148,9 +147,8 @@ class RuidaTransport(Transport):
                 self.magic_changed.send(self, magic=detected)
         else:
             detected = self._codec.detect_magic_from_mem_request(unswizzled)
-            if detected is not None:
-                if self._codec.set_magic(detected):
-                    self.magic_changed.send(self, magic=detected)
+            if detected is not None and self._codec.set_magic(detected):
+                self.magic_changed.send(self, magic=detected)
 
         self.decoded_received.send(self, data=unswizzled)
 
@@ -200,7 +198,7 @@ class RuidaServerTransport:
     async def disconnect(self) -> None:
         await self._transport.disconnect()
 
-    async def send_to(self, data: bytes, addr: Tuple[str, int]) -> None:
+    async def send_to(self, data: bytes, addr: tuple[str, int]) -> None:
         """
         Send raw data to a specific client.
 
@@ -209,7 +207,7 @@ class RuidaServerTransport:
         await self._transport.send_to(data, addr)
 
     async def send_response(
-        self, response: bytes, addr: Tuple[str, int]
+        self, response: bytes, addr: tuple[str, int]
     ) -> None:
         """
         Send a Ruida response (swizzled, no checksum prefix).
@@ -230,7 +228,7 @@ class RuidaServerTransport:
         await self._transport.send_to(swizzled, addr)
 
     async def send_command(
-        self, command: bytes, addr: Tuple[str, int]
+        self, command: bytes, addr: tuple[str, int]
     ) -> None:
         """
         Send a framed command to a specific client.
@@ -252,7 +250,7 @@ class RuidaServerTransport:
         await self._transport.send_to(framed, addr)
 
     def _on_raw_received(
-        self, sender, data: bytes, addr: Tuple[str, int]
+        self, sender, data: bytes, addr: tuple[str, int]
     ) -> None:
         """Handle raw data from underlying transport."""
         is_valid, payload, recv_cksum, calc_cksum = validate_packet(data)
@@ -287,9 +285,10 @@ class RuidaServerTransport:
             if detected is not None:
                 magic_detected = detected
 
-        if magic_detected is not None:
-            if self._codec.set_magic(magic_detected):
-                self.magic_changed.send(self, magic=magic_detected)
+        if magic_detected is not None and self._codec.set_magic(
+            magic_detected
+        ):
+            self.magic_changed.send(self, magic=magic_detected)
 
         self.decoded_received.send(self, data=unswizzled, addr=addr)
 

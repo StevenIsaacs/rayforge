@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
 )
 
 from raygeo.geo.shape.line import get_line_segment_closest_point
@@ -35,8 +31,8 @@ class DistanceConstraint(Constraint):
         self,
         p1: EntityID,
         p2: EntityID,
-        value: Union[str, float],
-        expression: Optional[str] = None,
+        value: str | float,
+        expression: str | None = None,
         user_visible: bool = True,
     ):
         super().__init__(user_visible=user_visible)
@@ -59,7 +55,7 @@ class DistanceConstraint(Constraint):
 
     @classmethod
     def can_apply_to(
-        cls, selection: "SketchSelection", sketch: Optional["Sketch"] = None
+        cls, selection: SketchSelection, sketch: Sketch | None = None
     ) -> bool:
         if len(selection.point_ids) == 2 and not selection.entity_ids:
             return True
@@ -85,7 +81,7 @@ class DistanceConstraint(Constraint):
         """Returns a human-readable title for this constraint."""
         return f"{self.get_type_name()} {self._format_value()}"
 
-    def get_subtitle(self, registry: "EntityRegistry") -> str:
+    def get_subtitle(self, registry: EntityRegistry) -> str:
         """Returns a subtitle describing the constrained points."""
         p1 = registry.get_point(self.p1)
         p2 = registry.get_point(self.p2)
@@ -97,11 +93,11 @@ class DistanceConstraint(Constraint):
         return ""
 
     def targets_segment(
-        self, p1: EntityID, p2: EntityID, entity_id: Optional[EntityID]
+        self, p1: EntityID, p2: EntityID, entity_id: EntityID | None
     ) -> bool:
         return {self.p1, self.p2} == {p1, p2}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = {
             "type": "DistanceConstraint",
             "p1": self.p1,
@@ -114,7 +110,7 @@ class DistanceConstraint(Constraint):
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "DistanceConstraint":
+    def from_dict(cls, data: dict[str, Any]) -> DistanceConstraint:
         return cls(
             p1=data["p1"],
             p2=data["p2"],
@@ -123,9 +119,7 @@ class DistanceConstraint(Constraint):
             user_visible=data.get("user_visible", True),
         )
 
-    def error(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> float:
+    def error(self, reg: EntityRegistry, params: ParameterContext) -> float:
         pt1 = reg.get_point(self.p1)
         pt2 = reg.get_point(self.p2)
         # We use self.value which is cached/updated via update_from_context
@@ -134,8 +128,8 @@ class DistanceConstraint(Constraint):
         return dist - target
 
     def gradient(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> Dict[EntityID, List[Point]]:
+        self, reg: EntityRegistry, params: ParameterContext
+    ) -> dict[EntityID, list[Point]]:
         pt1 = reg.get_point(self.p1)
         pt2 = reg.get_point(self.p2)
         dx = pt2.x - pt1.x
@@ -154,7 +148,7 @@ class DistanceConstraint(Constraint):
 
     def get_label_pos(
         self,
-        reg: "EntityRegistry",
+        reg: EntityRegistry,
         to_screen: Callable[[Point], Point],
         element: Any,
     ):
@@ -175,7 +169,7 @@ class DistanceConstraint(Constraint):
         self,
         sx: float,
         sy: float,
-        reg: "EntityRegistry",
+        reg: EntityRegistry,
         to_screen: Callable[[Point], Point],
         element: Any,
         threshold: float,
@@ -187,10 +181,15 @@ class DistanceConstraint(Constraint):
         if p1 and p2:
             entities = reg.entities or []
             for entity in entities:
-                if isinstance(entity, Line):
-                    if {entity.p1_idx, entity.p2_idx} == {self.p1, self.p2}:
-                        has_geometry = True
-                        break
+                if isinstance(entity, Line) and {
+                    entity.p1_idx,
+                    entity.p2_idx,
+                } == {
+                    self.p1,
+                    self.p2,
+                }:
+                    has_geometry = True
+                    break
 
             if not has_geometry:
                 s1 = to_screen((p1.x, p1.y))
@@ -220,8 +219,8 @@ class DistanceConstraint(Constraint):
 
     def draw(
         self,
-        ctx: "cairo.Context",
-        registry: "EntityRegistry",
+        ctx: cairo.Context,
+        registry: EntityRegistry,
         to_screen: Callable[[Point], Point],
         is_selected: bool = False,
         is_hovered: bool = False,
@@ -281,10 +280,12 @@ class DistanceConstraint(Constraint):
         has_geometry = False
         entities = registry.entities or []
         for entity in entities:
-            if isinstance(entity, Line):
-                if {entity.p1_idx, entity.p2_idx} == {self.p1, self.p2}:
-                    has_geometry = True
-                    break
+            if isinstance(entity, Line) and {entity.p1_idx, entity.p2_idx} == {
+                self.p1,
+                self.p2,
+            }:
+                has_geometry = True
+                break
 
         if not has_geometry:
             ctx.set_line_width(1)

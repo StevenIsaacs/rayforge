@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Dict, Tuple
+from typing import TYPE_CHECKING, ClassVar
 
 from raygeo.geo.types import Rect
 from raygeo.ops import Ops
@@ -22,17 +22,17 @@ class SanityContext:
     ops: Ops
     machine: Machine
     work_area: Rect
-    axis_extents: Tuple[float, float]
-    enabled_zones: Dict[str, Zone]
+    axis_extents: tuple[float, float]
+    enabled_zones: dict[str, Zone]
 
 
 class SanityChecker:
-    FAST_CHECKS = [
+    FAST_CHECKS: ClassVar[list[type]] = [
         WorkareaCheck2D,
         ExtentCheck2D,
         NoGoZoneCheck2D,
     ]
-    COMPLETE_CHECKS = [
+    COMPLETE_CHECKS: ClassVar[list[type]] = [
         WorkareaCheck2D,
         ExtentCheck2D,
         NoGoZoneCheck2D,

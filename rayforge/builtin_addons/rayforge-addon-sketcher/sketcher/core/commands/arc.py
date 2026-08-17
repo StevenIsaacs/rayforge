@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Set
+from typing import TYPE_CHECKING
 
 from raygeo.geo.shape.arc import get_arc_direction
 from raygeo.geo.shape.circle import project_point_onto_circle
@@ -27,10 +27,10 @@ class ArcPreviewState(PreviewState):
         self,
         center_id: EntityID,
         center_temp: bool,
-        start_id: Optional[EntityID] = None,
+        start_id: EntityID | None = None,
         start_temp: bool = False,
-        temp_end_id: Optional[EntityID] = None,
-        temp_entity_id: Optional[EntityID] = None,
+        temp_end_id: EntityID | None = None,
+        temp_entity_id: EntityID | None = None,
     ):
         self.center_id = center_id
         self.center_temp = center_temp
@@ -39,9 +39,9 @@ class ArcPreviewState(PreviewState):
         self.temp_end_id = temp_end_id
         self.temp_entity_id = temp_entity_id
         self.clockwise = False
-        self.locked_radius: Optional[float] = None
+        self.locked_radius: float | None = None
 
-    def get_preview_point_ids(self) -> Set[EntityID]:
+    def get_preview_point_ids(self) -> set[EntityID]:
         """
         Returns IDs of temp preview points that shouldn't be snapped to.
 
@@ -57,7 +57,7 @@ class ArcPreviewState(PreviewState):
         """Returns True if start point has been set."""
         return self.start_id is not None
 
-    def set_radius(self, registry: "EntityRegistry", radius: float) -> None:
+    def set_radius(self, registry: EntityRegistry, radius: float) -> None:
         """
         Sets the arc radius from numeric input.
 
@@ -85,9 +85,7 @@ class ArcPreviewState(PreviewState):
         end.x = center.x + radius * math.cos(end_angle)
         end.y = center.y + radius * math.sin(end_angle)
 
-    def get_dimensions(
-        self, registry: "EntityRegistry"
-    ) -> List[DimensionData]:
+    def get_dimensions(self, registry: EntityRegistry) -> list[DimensionData]:
         """
         Returns the arc radius dimension for preview.
 
@@ -141,11 +139,11 @@ class ArcCommand(SketchChangeCommand):
         center_id: EntityID,
         start_id: EntityID,
         end_pos: GeoPoint,
-        end_pid: Optional[EntityID] = None,
+        end_pid: EntityID | None = None,
         is_center_temp: bool = False,
         is_start_temp: bool = False,
         clockwise: bool = False,
-        fixed_radius: Optional[float] = None,
+        fixed_radius: float | None = None,
     ):
         super().__init__(sketch, _("Add Arc"))
         self.center_id = center_id
@@ -156,11 +154,11 @@ class ArcCommand(SketchChangeCommand):
         self.is_start_temp = is_start_temp
         self.clockwise = clockwise
         self.fixed_radius = fixed_radius
-        self.add_cmd: Optional[AddItemsCommand] = None
-        self._committed_end_id: Optional[EntityID] = None
+        self.add_cmd: AddItemsCommand | None = None
+        self._committed_end_id: EntityID | None = None
 
     @property
-    def committed_end_id(self) -> Optional[EntityID]:
+    def committed_end_id(self) -> EntityID | None:
         """The final end point ID after execute(), or None."""
         return self._committed_end_id
 
@@ -169,7 +167,7 @@ class ArcCommand(SketchChangeCommand):
         registry: EntityRegistry,
         x: float,
         y: float,
-        snapped_pid: Optional[EntityID] = None,
+        snapped_pid: EntityID | None = None,
         **kwargs,
     ) -> ArcPreviewState:
         """
@@ -201,7 +199,7 @@ class ArcCommand(SketchChangeCommand):
         preview_state: PreviewState,
         x: float,
         y: float,
-        snapped_pid: Optional[EntityID] = None,
+        snapped_pid: EntityID | None = None,
     ) -> None:
         """
         Sets the start point and creates the preview arc entity.
@@ -213,10 +211,10 @@ class ArcCommand(SketchChangeCommand):
             snapped_pid: An existing point ID to snap to, or None.
 
         Raises:
-            AttributeError: If preview_state is not an ArcPreviewState.
+            TypeError: If preview_state is not an ArcPreviewState.
         """
         if not isinstance(preview_state, ArcPreviewState):
-            raise AttributeError("Expected ArcPreviewState")
+            raise TypeError("Expected ArcPreviewState")
 
         if snapped_pid is not None and snapped_pid != preview_state.center_id:
             start_id = snapped_pid
@@ -240,7 +238,7 @@ class ArcCommand(SketchChangeCommand):
         registry: EntityRegistry,
         x: float,
         y: float,
-        snapped_pid: Optional[EntityID] = None,
+        snapped_pid: EntityID | None = None,
         **kwargs,
     ) -> ArcPreviewState:
         """
@@ -293,10 +291,10 @@ class ArcCommand(SketchChangeCommand):
             x, y: The new cursor coordinates.
 
         Raises:
-            AttributeError: If preview_state is not an ArcPreviewState.
+            TypeError: If preview_state is not an ArcPreviewState.
         """
         if not isinstance(preview_state, ArcPreviewState):
-            raise AttributeError("Expected ArcPreviewState")
+            raise TypeError("Expected ArcPreviewState")
         if (
             preview_state.temp_end_id is None
             or preview_state.temp_entity_id is None
@@ -350,10 +348,10 @@ class ArcCommand(SketchChangeCommand):
             preview_state: The preview state from start_preview.
 
         Raises:
-            AttributeError: If preview_state is not an ArcPreviewState.
+            TypeError: If preview_state is not an ArcPreviewState.
         """
         if not isinstance(preview_state, ArcPreviewState):
-            raise AttributeError("Expected ArcPreviewState")
+            raise TypeError("Expected ArcPreviewState")
 
         if preview_state.temp_entity_id is not None:
             try:
@@ -387,10 +385,10 @@ class ArcCommand(SketchChangeCommand):
             preview_state: The preview state from start_center_preview.
 
         Raises:
-            AttributeError: If preview_state is not an ArcPreviewState.
+            TypeError: If preview_state is not an ArcPreviewState.
         """
         if not isinstance(preview_state, ArcPreviewState):
-            raise AttributeError("Expected ArcPreviewState")
+            raise TypeError("Expected ArcPreviewState")
 
     def _do_execute(self) -> None:
         if self.add_cmd:
@@ -443,7 +441,7 @@ class ArcCommand(SketchChangeCommand):
             clockwise=self.clockwise,
         )
 
-        constraints: List = [
+        constraints: list = [
             EqualDistanceConstraint(
                 self.center_id, self.start_id, self.center_id, end_pid
             )
@@ -454,7 +452,7 @@ class ArcCommand(SketchChangeCommand):
                 RadiusConstraint(temp_arc_id, self.fixed_radius)
             )
 
-        points_to_add: List[Point] = [new_point] if new_point else []
+        points_to_add: list[Point] = [new_point] if new_point else []
 
         if self.is_center_temp:
             try:

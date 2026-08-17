@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Callable, List, Optional, Tuple, Union
+from typing import ClassVar
 
 from ...core.commands import (
     RoundedRectCommand,
@@ -14,13 +15,13 @@ class RoundedRectTool(SketchTool):
 
     ICON = "sketch-rounded-rect-symbolic"
     LABEL = _("Rounded Rectangle")
-    SHORTCUTS = ["go"]
+    SHORTCUTS: ClassVar[list[str]] = ["go"]
     CURSOR_ICON = "sketch-rounded-rect-symbolic"
     DEFAULT_RADIUS = 10.0
 
     def __init__(self, element):
         super().__init__(element)
-        self._preview_state: Optional[RoundedRectPreviewState] = None
+        self._preview_state: RoundedRectPreviewState | None = None
         self._dim_input = DimensionInputHandler(
             field_count=3, field_labels=[_("W"), _("H"), _("R")]
         )
@@ -31,7 +32,7 @@ class RoundedRectTool(SketchTool):
     def shortcut_is_active(self) -> bool:
         return True
 
-    def get_preview_state(self) -> Optional[RoundedRectPreviewState]:
+    def get_preview_state(self) -> RoundedRectPreviewState | None:
         return self._preview_state
 
     def on_deactivate(self):
@@ -83,9 +84,7 @@ class RoundedRectTool(SketchTool):
         except (IndexError, KeyError):
             self.on_deactivate()
 
-    def _handle_click(
-        self, pid_hit: Optional[int], mx: float, my: float
-    ) -> bool:
+    def _handle_click(self, pid_hit: int | None, mx: float, my: float) -> bool:
         if self._preview_state is None:
             # --- First Click: Start preview ---
             self._preview_state = RoundedRectCommand.start_preview(
@@ -231,9 +230,9 @@ class RoundedRectTool(SketchTool):
 
     def _finalize_shape(
         self,
-        fixed_width: Optional[float] = None,
-        fixed_height: Optional[float] = None,
-        fixed_radius: Optional[float] = None,
+        fixed_width: float | None = None,
+        fixed_height: float | None = None,
+        fixed_radius: float | None = None,
     ):
         if self._preview_state is None:
             return
@@ -275,7 +274,7 @@ class RoundedRectTool(SketchTool):
 
     def get_active_shortcuts(
         self,
-    ) -> List[Tuple[Union[str, List[str]], str, Optional[Callable[[], bool]]]]:
+    ) -> list[tuple[str | list[str], str, Callable[[], bool] | None]]:
         """Returns shortcuts for the status bar."""
         if self._preview_state is not None:
             if self._dim_input.is_active():

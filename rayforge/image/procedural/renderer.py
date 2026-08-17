@@ -2,7 +2,8 @@ import importlib
 import json
 import logging
 import warnings
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import cairo
 
@@ -30,8 +31,8 @@ class ProceduralRenderer(Renderer):
     """
 
     def _get_recipe_and_func_internal(
-        self, source_original_data: Optional[bytes], func_key: str
-    ) -> Tuple[Optional[dict], Optional[dict], Optional[Callable]]:
+        self, source_original_data: bytes | None, func_key: str
+    ) -> tuple[dict | None, dict | None, Callable | None]:
         """Helper to deserialize the recipe and import a function."""
         if not source_original_data:
             logger.warning("Procedural source has no original_data.")
@@ -56,10 +57,8 @@ class ProceduralRenderer(Renderer):
             KeyError,
             ImportError,
             AttributeError,
-        ) as e:
-            logger.error(
-                f"Failed to load procedural function: {e}", exc_info=True
-            )
+        ):
+            logger.exception("Failed to load procedural function")
             return None, None, None
 
     def render_preview_image(
@@ -67,7 +66,7 @@ class ProceduralRenderer(Renderer):
         import_result: "ImportResult",
         target_width: int,
         target_height: int,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         """Renders the procedural recipe at the target preview dimensions."""
         if not import_result.payload:
             return None
@@ -84,7 +83,7 @@ class ProceduralRenderer(Renderer):
         width: int,
         height: int,
         **kwargs,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         _, params, draw_func = self._get_recipe_and_func_internal(
             data, "drawing_function_path"
         )
@@ -96,11 +95,8 @@ class ProceduralRenderer(Renderer):
 
         try:
             draw_func(ctx, width, height, params)
-        except Exception as e:
-            logger.error(
-                f"Error executing procedural drawing function: {e}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception("Error executing procedural drawing function")
             return None
 
         h, w = surface.get_height(), surface.get_width()

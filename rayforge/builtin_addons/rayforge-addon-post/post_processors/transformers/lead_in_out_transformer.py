@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
-from raygeo.ops import Ops
+from raygeo.ops.transform.lead_in_out import LeadInOutSpec
 
-from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
-from rayforge.shared.tasker.progress import ProgressContext
+from rayforge.pipeline.transformer.base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
@@ -30,6 +29,8 @@ class LeadInOutTransformer(OpsTransformer):
     before the actual cut begins and to decelerate after the cut ends,
     improving cut quality at start/end points.
     """
+
+    SPEC_NAME = "lead_in_out"
 
     def __init__(
         self,
@@ -68,11 +69,7 @@ class LeadInOutTransformer(OpsTransformer):
         distance_mm = (speed_mm_per_sec**2) / (
             2 * max_acceleration * safety_factor
         )
-        return max(0.5, distance_mm)
-
-    @property
-    def execution_phase(self) -> ExecutionPhase:
-        return ExecutionPhase.POST_PROCESSING
+        return distance_mm
 
     @property
     def lead_in_mm(self) -> float:
@@ -116,22 +113,17 @@ class LeadInOutTransformer(OpsTransformer):
             "Adds zero-power lead-in and lead-out moves to vector contours."
         )
 
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        has_lead_in = self.enabled and not math.isclose(self.lead_in_mm, 0.0)
-        has_lead_out = self.enabled and not math.isclose(self.lead_out_mm, 0.0)
-        if not has_lead_in and not has_lead_out:
-            return
+        workpiece: WorkPiece | None,
+        stock_geometries: list[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ) -> LeadInOutSpec:
+        return LeadInOutSpec(
+            lead_in_mm=self.lead_in_mm, lead_out_mm=self.lead_out_mm
+        )
 
-        ops.apply_lead_in_out(self.lead_in_mm, self.lead_out_mm)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             **super().to_dict(),
             "lead_in_mm": self.lead_in_mm,
@@ -140,7 +132,7 @@ class LeadInOutTransformer(OpsTransformer):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LeadInOutTransformer":
+    def from_dict(cls, data: dict[str, Any]) -> LeadInOutTransformer:
         return cls(
             enabled=data.get("enabled", True),
             lead_in_mm=data.get("lead_in_mm", 2.0),

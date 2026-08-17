@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from ..core.color import pick_unused_color
 from ..core.group import Group
@@ -29,10 +29,10 @@ class MoveWorkpiecesLayerCommand(Command):
 
     def __init__(
         self,
-        workpieces: List[WorkPiece],
+        workpieces: list[WorkPiece],
         new_layer: Layer,
         old_layer: Layer,
-        name: Optional[str] = None,
+        name: str | None = None,
     ):
         super().__init__(name)
         self.workpieces = workpieces
@@ -66,10 +66,10 @@ class MoveItemsLayerCommand(Command):
 
     def __init__(
         self,
-        items: List[DocItem],
+        items: list[DocItem],
         new_layer: Layer,
         old_layer: Layer,
-        name: Optional[str] = None,
+        name: str | None = None,
     ):
         super().__init__(name)
         self.items = items
@@ -96,14 +96,14 @@ class AddLayerAndSetActiveCommand(Command):
 
     def __init__(
         self,
-        editor: "DocEditor",
-        new_layer: Optional[Layer] = None,
+        editor: DocEditor,
+        new_layer: Layer | None = None,
         name: str = "Add layer",
     ):
         super().__init__(name=name)
         self._editor = editor
         self.new_layer = new_layer or self._create_default_layer()
-        self._old_active_layer: Optional[Layer] = None
+        self._old_active_layer: Layer | None = None
 
     def _create_default_layer(self) -> Layer:
         """Creates a new layer with a default, unique name and color."""
@@ -160,11 +160,11 @@ class AddLayerAndSetActiveCommand(Command):
 class LayerCmd:
     """Handles commands related to layer manipulation."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
 
     def move_workpieces_to_layer(
-        self, workpieces: List[WorkPiece], target_layer: Layer
+        self, workpieces: list[WorkPiece], target_layer: Layer
     ):
         """
         Creates an undoable command to move workpieces to a specific layer.
@@ -184,7 +184,7 @@ class LayerCmd:
         self._editor.history_manager.execute(cmd)
 
     def move_selected_to_adjacent_layer(
-        self, surface: "WorkSurface", direction: int
+        self, surface: WorkSurface, direction: int
     ):
         """
         Creates an undoable command to move selected workpieces to the
@@ -244,7 +244,7 @@ class LayerCmd:
                 "workpiece layer list."
             )
 
-    def add_layer_and_set_active(self, new_layer: Optional[Layer] = None):
+    def add_layer_and_set_active(self, new_layer: Layer | None = None):
         """Adds a new layer to the document and sets it as the active layer."""
         cmd = AddLayerAndSetActiveCommand(self._editor, new_layer)
         self._editor.history_manager.execute(cmd)
@@ -275,6 +275,19 @@ class LayerCmd:
         )
         self._editor.history_manager.execute(cmd)
 
+    def set_layer_stock_material(self, layer: Layer, material_uid: str | None):
+        """Sets a layer's rotary stock material with an undoable command."""
+        if material_uid == layer.stock_material_uid:
+            return
+        cmd = ChangePropertyCommand(
+            target=layer,
+            property_name="stock_material_uid",
+            new_value=material_uid,
+            setter_method_name="set_stock_material_uid",
+            name=_("Change layer stock material"),
+        )
+        self._editor.history_manager.execute(cmd)
+
     def set_active_layer(self, layer: Layer):
         """Sets the active layer."""
         if self._editor.doc.active_layer is layer:
@@ -301,7 +314,7 @@ class LayerCmd:
         )
         self._editor.history_manager.execute(cmd)
 
-    def reorder_layers(self, new_order: List[Layer]):
+    def reorder_layers(self, new_order: list[Layer]):
         """Reorders layers with an undoable command."""
         cmd = ReorderListCommand(
             target_obj=self._editor.doc,
@@ -311,7 +324,7 @@ class LayerCmd:
         )
         self._editor.history_manager.execute(cmd)
 
-    def reorder_workpieces(self, layer: Layer, new_order: List[WorkPiece]):
+    def reorder_workpieces(self, layer: Layer, new_order: list[WorkPiece]):
         """Reorders workpieces within a layer with an undoable command."""
         cmd = ReorderListCommand(
             target_obj=layer,
@@ -322,12 +335,12 @@ class LayerCmd:
         )
         self._editor.history_manager.execute(cmd)
 
-    def move_items_to_layer(self, items: List[DocItem], target_layer: Layer):
+    def move_items_to_layer(self, items: list[DocItem], target_layer: Layer):
         """Creates an undoable command to move items to a specific layer."""
         if not items:
             return
 
-        by_layer: Dict[Layer, List[DocItem]] = {}
+        by_layer: dict[Layer, list[DocItem]] = {}
         for item in items:
             if isinstance(item, (WorkPiece, Group)):
                 layer = item.layer
@@ -348,7 +361,7 @@ class LayerCmd:
                 )
                 t.execute(cmd)
 
-    def reorder_content_items(self, layer: Layer, new_order: List[DocItem]):
+    def reorder_content_items(self, layer: Layer, new_order: list[DocItem]):
         """Reorders content items within a layer with an undoable command."""
         cmd = ReorderListCommand(
             target_obj=layer,

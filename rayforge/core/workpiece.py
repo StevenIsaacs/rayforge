@@ -3,19 +3,14 @@ from __future__ import annotations
 import logging
 import math
 import warnings
+from collections.abc import Generator
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    Generator,
-    List,
     NamedTuple,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -27,8 +22,8 @@ with warnings.catch_warnings():
     import pyvips
 
 from raygeo.geo import Geometry, Matrix
-from raygeo.ops.part import Part
 from raygeo.geo.types import Point, Rect
+from raygeo.ops.part import Part
 
 from ..context import get_context
 from .asset_registry import asset_type_registry
@@ -54,13 +49,13 @@ CAIRO_MAX_DIMENSION = 16384
 class RenderContext(NamedTuple):
     """Encapsulates the resources required for rendering."""
 
-    data: Union[bytes, Any]
-    original_data: Optional[bytes]
-    renderer: "Renderer"
-    source_pixel_dims: Optional[Tuple[int, int]]
-    metadata: Dict[str, Any]
-    boundaries: Optional[Geometry]
-    fills: Optional[List["FillRenderData"]]
+    data: bytes | Any
+    original_data: bytes | None
+    renderer: Renderer
+    source_pixel_dims: tuple[int, int] | None
+    metadata: dict[str, Any]
+    boundaries: Geometry | None
+    fills: list[FillRenderData] | None
 
 
 class WorkPiece(DocItem):
@@ -73,12 +68,12 @@ class WorkPiece(DocItem):
     def __init__(
         self,
         name: str,
-        source_segment: Optional[SourceAssetSegment] = None,
+        source_segment: SourceAssetSegment | None = None,
     ):
         super().__init__(name=name)
         self._source_segment = source_segment
-        self._boundaries_cache: Optional[Geometry] = None
-        self._fills_cache: Optional[List["FillRenderData"]] = None
+        self._boundaries_cache: Geometry | None = None
+        self._fills_cache: list[FillRenderData] | None = None
 
         # Natural (untransformed) dimensions of the workpiece content.
         self.natural_width_mm: float = 0.0
@@ -88,38 +83,38 @@ class WorkPiece(DocItem):
         # precedence over the source_segment's geometry. It allows for
         # non-destructive editing (like splitting) without modifying the
         # shared source segment.
-        self._edited_boundaries: Optional[Geometry] = None
+        self._edited_boundaries: Geometry | None = None
 
         # The cache for rendered vips images. Key is (width, height).
-        self._render_cache: Dict[Tuple[int, int], pyvips.Image] = {}
+        self._render_cache: dict[tuple[int, int], pyvips.Image] = {}
 
         # Transient attributes for deserialized instances in subprocesses
-        self._data: Optional[bytes] = None
-        self._original_data: Optional[bytes] = None
-        self._renderer: Optional["Renderer"] = None
-        self._transient_source_px_dims: Optional[Tuple[int, int]] = None
+        self._data: bytes | None = None
+        self._original_data: bytes | None = None
+        self._renderer: Renderer | None = None
+        self._transient_source_px_dims: tuple[int, int] | None = None
 
-        self.geometry_provider_uid: Optional[str] = None
-        self._geometry_provider_params: Dict[str, Any] = {}
-        self._transient_geometry_provider: Optional["IGeometryProvider"] = None
-        self._geometry_provider_connection: Optional[Any] = None
+        self.geometry_provider_uid: str | None = None
+        self._geometry_provider_params: dict[str, Any] = {}
+        self._transient_geometry_provider: IGeometryProvider | None = None
+        self._geometry_provider_connection: Any | None = None
 
-        self._resolved_text_cache: Dict = {}
+        self._resolved_text_cache: dict = {}
 
-        self.source_asset_uid: Optional[str] = None
+        self.source_asset_uid: str | None = None
 
-        self._tabs: List[Tab] = []
+        self._tabs: list[Tab] = []
         self._tabs_enabled: bool = True
 
         # Transient cache for UI view artifacts (Cairo surfaces, etc.)
         # This persists across view element destruction/creation
         # (e.g. Grouping) but is not serialized to disk.
-        self._view_cache: Dict[str, Any] = {}
+        self._view_cache: dict[str, Any] = {}
 
         # Forward compatibility: store unknown attributes
-        self.extra: Dict[str, Any] = {}
+        self.extra: dict[str, Any] = {}
 
-    def depends_on_asset(self, asset: "IAsset") -> bool:
+    def depends_on_asset(self, asset: IAsset) -> bool:
         """
         Checks if this workpiece depends on the given asset, either through
         its geometry provider or its source file.
@@ -129,17 +124,13 @@ class WorkPiece(DocItem):
             and self.geometry_provider_uid == asset.uid
         ):
             return True
-        if (
+        return bool(
             self.source_segment
             and self.source_segment.source_asset_uid == asset.uid
-        ):
-            return True
-        return False
+        )
 
     @classmethod
-    def from_geometry_provider(
-        cls, provider: "IGeometryProvider"
-    ) -> "WorkPiece":
+    def from_geometry_provider(cls, provider: IGeometryProvider) -> WorkPiece:
         """
         Factory method to create a WorkPiece from an IGeometryProvider.
 
@@ -151,7 +142,7 @@ class WorkPiece(DocItem):
         fill_data = []
         min_x, min_y = 0.0, 0.0
 
-        instance_cache: Dict = {}
+        instance_cache: dict = {}
 
         try:
             geometry, fill_data = provider.get_geometry(
@@ -168,7 +159,7 @@ class WorkPiece(DocItem):
                 height = max(max_y - min_y, 1e-9)
             else:
                 width, height = 0.0, 0.0
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - plugin provider boundary
             logger.warning(
                 f"Failed to calculate initial geometry for provider "
                 f"{provider.provider_type_name}: {e}"
@@ -209,12 +200,12 @@ class WorkPiece(DocItem):
         return instance
 
     @property
-    def source_segment(self) -> Optional[SourceAssetSegment]:
+    def source_segment(self) -> SourceAssetSegment | None:
         """The source data definition for this workpiece."""
         return self._source_segment
 
     @source_segment.setter
-    def source_segment(self, new_segment: Optional[SourceAssetSegment]):
+    def source_segment(self, new_segment: SourceAssetSegment | None):
         """
         Sets a new source segment, clearing caches and signaling an update.
         This is the correct way to modify a workpiece's source data.
@@ -228,14 +219,14 @@ class WorkPiece(DocItem):
             self.updated.send(self)
 
     @property
-    def natural_size(self) -> Tuple[float, float]:
+    def natural_size(self) -> tuple[float, float]:
         """
         Returns the natural (untransformed) size of the content in mm.
         This is the authoritative source for the workpiece's intrinsic size.
         """
         return (self.natural_width_mm, self.natural_height_mm)
 
-    def get_local_bbox(self) -> Optional[Rect]:
+    def get_local_bbox(self) -> Rect | None:
         """
         WorkPieces are geometrically defined as a unit square (0,0,1,1) that is
         scaled by their matrix.
@@ -255,7 +246,7 @@ class WorkPiece(DocItem):
         self._fills_cache = None
 
     @property
-    def source(self) -> "Optional[SourceAsset]":
+    def source(self) -> SourceAsset | None:
         """
         Convenience property to retrieve the full SourceAsset object from the
         document's central registry.
@@ -267,7 +258,7 @@ class WorkPiece(DocItem):
         return None
 
     @property
-    def original_data(self) -> Optional[bytes]:
+    def original_data(self) -> bytes | None:
         """
         Retrieves the original, unmodified data from the source asset.
         """
@@ -278,7 +269,7 @@ class WorkPiece(DocItem):
         return source.original_data if source else None
 
     @property
-    def data(self) -> Optional[bytes]:
+    def data(self) -> bytes | None:
         """
         Retrieves the appropriate source data for rendering.
 
@@ -305,7 +296,7 @@ class WorkPiece(DocItem):
         return source.original_data
 
     @property
-    def source_file(self) -> Optional[Path]:
+    def source_file(self) -> Path | None:
         """
         Retrieves the source file path from the linked SourceAsset.
 
@@ -323,7 +314,7 @@ class WorkPiece(DocItem):
         return None
 
     @property
-    def _active_renderer(self) -> "Optional[Renderer]":
+    def _active_renderer(self) -> Renderer | None:
         """Retrieves the renderer (internal use)."""
         if self._renderer is not None:
             return self._renderer
@@ -337,7 +328,7 @@ class WorkPiece(DocItem):
         return source.renderer if source else None
 
     @property
-    def boundaries(self) -> Optional[Geometry]:
+    def boundaries(self) -> Geometry | None:
         """
         The normalized vector geometry defining the workpiece shape.
 
@@ -455,7 +446,7 @@ class WorkPiece(DocItem):
         return None
 
     @property
-    def fills(self) -> Optional[List["FillRenderData"]]:
+    def fills(self) -> list[FillRenderData] | None:
         """
         The fill geometry data for this workpiece, if any.
 
@@ -466,11 +457,11 @@ class WorkPiece(DocItem):
         Accessing this property triggers boundary computation, which also
         populates the fills cache.
         """
-        self.boundaries
+        _ = self.boundaries  # trigger boundary computation
         return self._fills_cache
 
     @property
-    def world_space_boundaries(self) -> Optional[Geometry]:
+    def world_space_boundaries(self) -> Geometry | None:
         """
         The geometry scaled to world-space dimensions (millimeters).
 
@@ -490,13 +481,17 @@ class WorkPiece(DocItem):
         scaled.transform(scale_matrix)
         return scaled
 
-    def to_part(self) -> Optional[Part]:
+    def to_part(self) -> Part | None:
         """
         Create a :class:`raygeo.Part` from this workpiece's geometry and size.
 
         The resulting ``Part`` carries the workpiece's vector geometry scaled
         to physical millimetre dimensions, ready for use with any raygeo
         assembler (``profile_inner_part``, ``Workplan.from_part``, …).
+
+        Disjoint pockets in the geometry are exposed as separate faces via
+        ``Part.from_geometry_multi_face``; a single-contour workpiece yields
+        the single default face ``""``.
 
         Returns ``None`` if the workpiece has no boundaries.
         """
@@ -507,10 +502,10 @@ class WorkPiece(DocItem):
         geo = boundaries.copy()
         if w > 0 and h > 0:
             geo.transform(Matrix.scale(w, h))
-        return Part(geometry=geo, size_mm=(w, h))
+        return Part.from_geometry_multi_face(geometry=geo, size_mm=(w, h))
 
     @property
-    def _boundaries_y_down(self) -> Optional[Geometry]:
+    def _boundaries_y_down(self) -> Geometry | None:
         """
         Internal helper to get the Y-DOWN normalized geometry for use in
         image masking, which operates in a Y-down pixel space.
@@ -528,12 +523,12 @@ class WorkPiece(DocItem):
         return y_down_geo
 
     @property
-    def tabs(self) -> List[Tab]:
+    def tabs(self) -> list[Tab]:
         """The list of Tab objects for this workpiece."""
         return self._tabs
 
     @tabs.setter
-    def tabs(self, new_tabs: List[Tab]):
+    def tabs(self, new_tabs: list[Tab]):
         if self._tabs != new_tabs:
             self._tabs = new_tabs
             self.updated.send(self)
@@ -549,14 +544,14 @@ class WorkPiece(DocItem):
             self.updated.send(self)
 
     @property
-    def layer(self) -> Optional["Layer"]:
+    def layer(self) -> Layer | None:
         """Traverses the hierarchy to find the parent Layer."""
         from .layer import Layer  # Local import to avoid circular dependency
 
         ancestor = self.get_ancestor_by_type(Layer)
         return ancestor if isinstance(ancestor, Layer) else None
 
-    def in_world(self) -> "WorkPiece":
+    def in_world(self) -> WorkPiece:
         """
         Returns a new, unparented WorkPiece instance whose local
         transformation matrix is the world transformation matrix of this one.
@@ -611,7 +606,7 @@ class WorkPiece(DocItem):
 
         return world_wp
 
-    def get_geometry_provider(self) -> Optional["IGeometryProvider"]:
+    def get_geometry_provider(self) -> IGeometryProvider | None:
         """
         Retrieves the geometry provider for this workpiece, if applicable.
         Prioritizes the transient provider (subprocesses), then checks
@@ -630,7 +625,7 @@ class WorkPiece(DocItem):
         return None
 
     def _subscribe_to_geometry_provider(
-        self, provider: "IGeometryProvider"
+        self, provider: IGeometryProvider
     ) -> None:
         """
         Subscribe to geometry provider updates.
@@ -648,7 +643,7 @@ class WorkPiece(DocItem):
         self._resolved_text_cache = {}
         self.updated.send(self)
 
-    def _resolve_render_context(self) -> Optional[RenderContext]:
+    def _resolve_render_context(self) -> RenderContext | None:
         """
         Resolves the data, renderer, and metadata needed for rendering.
         Unifies logic for transient (subprocess) vs. managed (document) states.
@@ -690,15 +685,18 @@ class WorkPiece(DocItem):
 
         # 3. Source Pixel Dimensions
         source_px_dims = self._transient_source_px_dims
-        if not source_px_dims and self.source:
-            if (
+        if (
+            not source_px_dims
+            and self.source
+            and (
                 self.source.width_px is not None
                 and self.source.height_px is not None
-            ):
-                source_px_dims = (
-                    self.source.width_px,
-                    self.source.height_px,
-                )
+            )
+        ):
+            source_px_dims = (
+                self.source.width_px,
+                self.source.height_px,
+            )
 
         # 4. Original Data (for cropping)
         original_data = self.original_data
@@ -719,10 +717,10 @@ class WorkPiece(DocItem):
     def _process_rendered_image_from_spec(
         self,
         image: pyvips.Image,
-        spec: "RenderSpecification",
-        target_size: Tuple[int, int],
-        source_px_dims: Optional[Tuple[int, int]],
-    ) -> Optional[pyvips.Image]:
+        spec: RenderSpecification,
+        target_size: tuple[int, int],
+        source_px_dims: tuple[int, int] | None,
+    ) -> pyvips.Image | None:
         """
         Applies post-processing based on a RenderSpecification.
         """
@@ -788,21 +786,22 @@ class WorkPiece(DocItem):
 
         # 4. Final Resize Check
         if (
-            processed_image.width != target_w
-            or processed_image.height != target_h
+            (
+                processed_image.width != target_w
+                or processed_image.height != target_h
+            )
+            and processed_image.width > 0
+            and processed_image.height > 0
         ):
-            if processed_image.width > 0 and processed_image.height > 0:
-                h_scale = target_w / processed_image.width
-                v_scale = target_h / processed_image.height
-                processed_image = util.resize_linear(
-                    processed_image, h_scale, vscale=v_scale
-                )
+            h_scale = target_w / processed_image.width
+            v_scale = target_h / processed_image.height
+            processed_image = util.resize_linear(
+                processed_image, h_scale, vscale=v_scale
+            )
 
         return processed_image
 
-    def get_vips_image(
-        self, width: int, height: int
-    ) -> Optional[pyvips.Image]:
+    def get_vips_image(self, width: int, height: int) -> pyvips.Image | None:
         """
         The central hub for rendering a vips image for this workpiece.
         Orchestrates data retrieval, rendering, cropping, and masking.
@@ -855,7 +854,7 @@ class WorkPiece(DocItem):
 
         return final_image
 
-    def get_local_size(self) -> Tuple[float, float]:
+    def get_local_size(self) -> tuple[float, float]:
         """
         The local-space size (width, height) in mm, as absolute values,
         decomposed from the local transformation matrix. This is used for
@@ -863,7 +862,7 @@ class WorkPiece(DocItem):
         """
         return self.matrix.get_abs_scale()
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Serializes the WorkPiece state to a dictionary. Includes transient
         data if it has been hydrated.
@@ -914,7 +913,7 @@ class WorkPiece(DocItem):
         return state
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "WorkPiece":
+    def from_dict(cls, data: dict[str, Any]) -> WorkPiece:
         """
         Restores a WorkPiece instance from a dictionary.
         """
@@ -965,7 +964,7 @@ class WorkPiece(DocItem):
         wp.tabs = loaded_tabs
         wp.tabs_enabled = data.get("tabs_enabled", True)
 
-        if "edited_boundaries" in data and data["edited_boundaries"]:
+        if data.get("edited_boundaries"):
             wp._edited_boundaries = Geometry.from_dict(
                 data["edited_boundaries"]
             )
@@ -1013,12 +1012,12 @@ class WorkPiece(DocItem):
         return wp
 
     @property
-    def geometry_provider_params(self) -> Dict[str, Any]:
+    def geometry_provider_params(self) -> dict[str, Any]:
         """Get the geometry provider parameters for this workpiece."""
         return self._geometry_provider_params
 
     @geometry_provider_params.setter
-    def geometry_provider_params(self, new_params: Dict[str, Any]):
+    def geometry_provider_params(self, new_params: dict[str, Any]):
         """
         Set the geometry provider parameters and trigger regeneration if
         needed.
@@ -1029,7 +1028,7 @@ class WorkPiece(DocItem):
                 # Regenerate the internal geometry and natural size
                 self.regenerate_from_geometry_provider()
 
-    def get_natural_aspect_ratio(self) -> Optional[float]:
+    def get_natural_aspect_ratio(self) -> float | None:
         size = self.natural_size
         if size:
             w, h = size
@@ -1047,12 +1046,12 @@ class WorkPiece(DocItem):
 
     def get_default_size(
         self, bounds_width: float, bounds_height: float
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Calculates a sensible default size based on the content's aspect
         ratio and the provided container bounds."""
         size = self.natural_size
         if size and size[0] > 0 and size[1] > 0:
-            return cast(Tuple[float, float], size)
+            return cast(tuple[float, float], size)
 
         aspect = self.get_natural_aspect_ratio()
         if aspect is None:
@@ -1068,7 +1067,7 @@ class WorkPiece(DocItem):
 
     def render_to_pixels(
         self, width: int, height: int
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         from ..image import util
 
         # This now uses the central hub for rendering.
@@ -1084,7 +1083,7 @@ class WorkPiece(DocItem):
         self,
         pixels_per_mm_x: float,
         pixels_per_mm_y: float,
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         """Renders to a pixel surface at the workpiece's current size.
         Returns None if size is not valid."""
         # Use the final world-space size for rendering resolution.
@@ -1102,10 +1101,10 @@ class WorkPiece(DocItem):
         self,
         real_width: int,
         real_height: int,
-        max_chunk_width: Optional[int],
-        max_chunk_height: Optional[int],
-        max_memory_size: Optional[int],
-    ) -> Tuple[int, int, int, int]:
+        max_chunk_width: int | None,
+        max_chunk_height: int | None,
+        max_memory_size: int | None,
+    ) -> tuple[int, int, int, int]:
         bytes_per_pixel = 4
         effective_max_width = min(
             max_chunk_width
@@ -1138,10 +1137,10 @@ class WorkPiece(DocItem):
         self,
         pixels_per_mm_x: float,
         pixels_per_mm_y: float,
-        max_chunk_width: Optional[int] = None,
-        max_chunk_height: Optional[int] = None,
-        max_memory_size: Optional[int] = None,
-    ) -> Generator[Tuple[cairo.ImageSurface, Tuple[float, float]], None, None]:
+        max_chunk_width: int | None = None,
+        max_chunk_height: int | None = None,
+        max_memory_size: int | None = None,
+    ) -> Generator[tuple[cairo.ImageSurface, tuple[float, float]], None, None]:
         """Renders in chunks at the workpiece's current size.
         Yields nothing if size is not valid."""
         from ..image import util
@@ -1207,7 +1206,7 @@ class WorkPiece(DocItem):
 
     def get_geometry_world_bbox(
         self,
-    ) -> Optional[Rect]:
+    ) -> Rect | None:
         """
         Calculates the bounding box of the workpiece's geometry in world
         coordinates.
@@ -1234,7 +1233,7 @@ class WorkPiece(DocItem):
         # Return the bounding box of the transformed geometry
         return world_geometry.rect()
 
-    def get_world_geometry(self) -> Optional["Geometry"]:
+    def get_world_geometry(self) -> Geometry | None:
         """
         Returns the final, world-space geometry of the workpiece in
         millimeters.
@@ -1270,7 +1269,7 @@ class WorkPiece(DocItem):
 
         return None
 
-    def get_tab_direction(self, tab: Tab) -> Optional[Tuple[float, float]]:
+    def get_tab_direction(self, tab: Tab) -> tuple[float, float] | None:
         """
         Calculates the "outside" direction vector for a given tab in world
         coordinates.
@@ -1323,7 +1322,7 @@ class WorkPiece(DocItem):
         print("  " * indent, source_file, renderer_name)
 
     @property
-    def pos_machine(self) -> Optional[Point]:
+    def pos_machine(self) -> Point | None:
         """
         Gets the workpiece's anchor position in the machine's native
         coordinate system.
@@ -1384,7 +1383,7 @@ class WorkPiece(DocItem):
 
         self.pos = (model_x, model_y)
 
-    def apply_split(self, fragments: List[Geometry]) -> List["WorkPiece"]:
+    def apply_split(self, fragments: list[Geometry]) -> list[WorkPiece]:
         """
         Creates new WorkPiece instances from a list of normalized geometry
         fragments. Each fragment represents a subset of this workpiece's

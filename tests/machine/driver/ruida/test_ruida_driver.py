@@ -7,14 +7,13 @@ not mocks, ensuring end-to-end protocol compliance.
 
 import asyncio
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
-from rayforge.core.varset import IntVar
 from rayforge.machine.driver.driver import Axis
 from rayforge.machine.driver.ruida.ruida_driver import RuidaDriver
 from rayforge.machine.driver.ruida.ruida_encoder import RuidaEncoder
@@ -100,7 +99,7 @@ async def driver(
 
     Uses the host/port from the running simulator fixture.
     """
-    sim, host, port, jog_port = ruida_simulator
+    _sim, host, port, jog_port = ruida_simulator
 
     machine = Machine(lite_context)
     machine.driver_name = "RuidaDriver"
@@ -139,7 +138,7 @@ async def test_connect_to_simulator(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_move_to_updates_position(driver, ruida_simulator):
     """Test that move_to command updates simulator position."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -158,7 +157,7 @@ async def test_move_to_updates_position(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_move_to_negative_position(driver, ruida_simulator):
     """Test that move_to works with negative coordinates."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -177,7 +176,7 @@ async def test_move_to_negative_position(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_home_xy_resets_position(driver, ruida_simulator):
     """Test that home_xy command resets position to zero."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -196,7 +195,7 @@ async def test_home_xy_resets_position(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_home_z_axis(driver, ruida_simulator):
     """Test that home command with Z only does not move axes."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -213,7 +212,7 @@ async def test_home_z_axis(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_home_all_axes(driver, ruida_simulator):
     """Test that home with None moves to origin (soft home)."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -234,7 +233,7 @@ async def test_home_all_axes(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_home_xy_only(driver, ruida_simulator):
     """Test that home can target only XY axes."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -255,7 +254,7 @@ async def test_home_xy_only(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_set_power(driver, ruida_simulator):
     """Test that set_power command works correctly."""
-    sim, host, port, jog_port = ruida_simulator
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -272,7 +271,7 @@ async def test_set_power(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_set_power_zero(driver, ruida_simulator):
     """Test that set_power(0) disables power."""
-    sim, host, port, jog_port = ruida_simulator
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -289,7 +288,7 @@ async def test_set_power_zero(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_jog_x_axis(driver, ruida_simulator):
     """Test that jog command works for X axis."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -306,7 +305,7 @@ async def test_jog_x_axis(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_jog_y_axis(driver, ruida_simulator):
     """Test that jog command works for Y axis."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -323,7 +322,7 @@ async def test_jog_y_axis(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_jog_both_axes(driver, ruida_simulator):
     """Test that jog can move both axes simultaneously."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -342,7 +341,7 @@ async def test_jog_both_axes(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_jog_negative_direction(driver, ruida_simulator):
     """Test that jog works in negative direction."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -359,7 +358,7 @@ async def test_jog_negative_direction(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_set_hold(driver, ruida_simulator):
     """Test that set_hold pauses the process."""
-    sim, host, port, jog_port = ruida_simulator
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -375,7 +374,7 @@ async def test_set_hold(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_cancel(driver, ruida_simulator):
     """Test that cancel stops the process."""
-    sim, host, port, jog_port = ruida_simulator
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -388,7 +387,7 @@ async def test_cancel(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_clear_alarm(driver, ruida_simulator):
     """Test that clear_alarm works."""
-    sim, host, port, jog_port = ruida_simulator
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -451,7 +450,7 @@ async def test_set_wcs_offset_noop(driver):
 @pytest.mark.asyncio
 async def test_read_wcs_offsets(driver, ruida_simulator):
     """Test that read_wcs_offsets returns ref point offsets."""
-    sim, host, port, jog_port = ruida_simulator
+    _sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -501,14 +500,14 @@ async def test_run_probe_cycle_not_supported(driver):
 @pytest.mark.asyncio
 async def test_run_with_machine_code(driver, ruida_simulator):
     """Test that run method executes encoded commands on the simulator."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     doc = Doc()
     ops = Ops()
     ops.move_to(10.0, 20.0)
     ops.line_to(30.0, 40.0)
 
-    encoded = driver._machine.encode_ops(ops, doc)
+    encoded = driver.get_encoder().encode(ops, driver._machine, doc)
 
     assert await wait_for_connection(driver)
 
@@ -565,7 +564,7 @@ async def test_connection_status_signals(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_unit_conversion_mm_to_um(driver, ruida_simulator):
     """Test that mm values are correctly converted to µm."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -584,7 +583,7 @@ async def test_unit_conversion_mm_to_um(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_unit_conversion_small_values(driver, ruida_simulator):
     """Test unit conversion with sub-millimeter values."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -603,7 +602,7 @@ async def test_unit_conversion_small_values(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_multiple_moves_in_sequence(driver, ruida_simulator):
     """Test that multiple move commands work in sequence."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -628,7 +627,7 @@ async def test_multiple_moves_in_sequence(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_home_then_move(driver, ruida_simulator):
     """Test that home followed by move works correctly."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -653,7 +652,7 @@ async def test_home_then_move(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_multiple_jogs_in_sequence(driver, ruida_simulator):
     """Test that multiple jog commands work in sequence."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     assert await wait_for_connection(driver)
 
@@ -766,7 +765,7 @@ async def test_disconnect_when_not_connected(driver):
 @pytest.mark.asyncio
 async def test_cleanup_resets_transport(driver, ruida_simulator):
     """Test that cleanup properly resets transport objects."""
-    _, host, port, jog_port = ruida_simulator
+    _, host, port, _jog_port = ruida_simulator
     driver._setup_implementation(host=host, port=port, response_port=0)
 
     await driver.cleanup()
@@ -847,7 +846,7 @@ async def test_keepalive_timeout_behavior(driver, ruida_simulator):
 @pytest.mark.asyncio
 async def test_position_polling_updates_state(driver, ruida_simulator):
     """Test that position polling reads current position from controller."""
-    sim, host, port, jog_port = ruida_simulator
+    sim, _host, _port, _jog_port = ruida_simulator
 
     sim.x = 50000
     sim.y = 75000
@@ -882,17 +881,16 @@ async def test_multiple_keepalive_cycles(driver, ruida_simulator):
     await driver.cleanup()
 
 
-def test_get_laser_capabilities_returns_empty_for_diode():
+def test_supports_pwm_false_for_diode():
     driver = RuidaDriver.__new__(RuidaDriver)
     laser = Laser()
     laser.laser_type = LaserType.DIODE
 
-    result = driver.get_laser_capabilities(laser)
+    assert driver.supports_pwm(laser) is False
+    assert driver.get_pwm_params(laser) is None
 
-    assert result == ()
 
-
-def test_get_laser_capabilities_returns_pwm_for_co2():
+def test_supports_pwm_true_for_co2():
     driver = RuidaDriver.__new__(RuidaDriver)
     laser = Laser()
     laser.laser_type = LaserType.CO2
@@ -902,35 +900,26 @@ def test_get_laser_capabilities_returns_pwm_for_co2():
     laser.min_pulse_width = 5
     laser.max_pulse_width = 500
 
-    result = driver.get_laser_capabilities(laser)
-
-    assert len(result) == 1
-    cap = result[0]
-    assert cap.name == "PWM"
-    vs = cap.varset
-    freq_var = next(v for v in vs if v.key == "frequency")
-    assert isinstance(freq_var, IntVar)
-    assert freq_var.default == 1000
-    assert freq_var.max_val == 5000
-    pw_var = next(v for v in vs if v.key == "pulse_width")
-    assert isinstance(pw_var, IntVar)
-    assert pw_var.default == 50
-    assert pw_var.min_val == 5
-    assert pw_var.max_val == 500
+    assert driver.supports_pwm(laser) is True
+    params = driver.get_pwm_params(laser)
+    assert params is not None
+    assert params.frequency == 1000
+    assert params.max_frequency == 5000
+    assert params.pulse_width == 50
+    assert params.min_pulse_width == 5
+    assert params.max_pulse_width == 500
 
 
-def test_get_laser_capabilities_returns_pwm_for_fiber():
+def test_supports_pwm_true_for_fiber():
     driver = RuidaDriver.__new__(RuidaDriver)
     laser = Laser()
     laser.laser_type = LaserType.FIBER
 
-    result = driver.get_laser_capabilities(laser)
-
-    assert len(result) == 1
-    assert result[0].name == "PWM"
+    assert driver.supports_pwm(laser) is True
+    assert driver.get_pwm_params(laser) is not None
 
 
-def test_get_laser_capabilities_co2_with_zero_frequency():
+def test_supports_pwm_co2_with_zero_frequency():
     driver = RuidaDriver.__new__(RuidaDriver)
     laser = Laser()
     laser.laser_type = LaserType.CO2
@@ -938,9 +927,6 @@ def test_get_laser_capabilities_co2_with_zero_frequency():
     laser.max_pwm_frequency = 0
     laser.pulse_width = 0
     laser.min_pulse_width = 0
-    laser.max_pwm_frequency = 0
 
-    result = driver.get_laser_capabilities(laser)
-
-    assert len(result) == 1
-    assert result[0].name == "PWM"
+    assert driver.supports_pwm(laser) is True
+    assert driver.get_pwm_params(laser) is not None

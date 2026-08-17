@@ -3,7 +3,7 @@ import json
 import logging
 from gettext import gettext as _
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import ClassVar
 
 from raygeo.geo import Geometry
 
@@ -36,17 +36,19 @@ class ProceduralImporter(Importer):
     It generates the SourceAsset and WorkPiece on the fly.
     """
 
-    features = {ImporterFeature.PROCEDURAL_GENERATION}
+    features: ClassVar[set[ImporterFeature]] = {
+        ImporterFeature.PROCEDURAL_GENERATION
+    }
     label = "Procedural"
-    mime_types: Tuple[str, ...] = ()
-    extensions: Tuple[str, ...] = ()
+    mime_types: tuple[str, ...] = ()
+    extensions: tuple[str, ...] = ()
 
     def __init__(
         self,
         *,
         drawing_function_path: str,
         size_function_path: str,
-        params: Dict,
+        params: dict,
         name: str,
     ):
         """
@@ -92,10 +94,8 @@ class ProceduralImporter(Importer):
                 errors=self._errors,
             )
         except (ImportError, AttributeError, ValueError) as e:
-            logger.error(
-                f"Failed to calculate procedural size: {e}", exc_info=True
-            )
-            self.add_error(_(f"Failed to calculate parameters: {e}"))
+            logger.exception("Failed to calculate procedural size")
+            self.add_error(_("Failed to calculate parameters: {}").format(e))
             return ImportManifest(title=self.name, errors=self._errors)
 
     def create_source_asset(self, parse_result: ParsingResult) -> SourceAsset:
@@ -130,7 +130,7 @@ class ProceduralImporter(Importer):
 
         return payload
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         """
         Phase 2: "Parse" the procedural parameters to determine geometric
         properties.
@@ -141,16 +141,14 @@ class ProceduralImporter(Importer):
             size_func = getattr(module, func_name)
             width_mm, height_mm = size_func(self.params)
         except (ImportError, AttributeError, ValueError) as e:
-            logger.error(
-                f"Failed to load procedural size function: {e}", exc_info=True
-            )
-            self.add_error(_(f"Failed to execute generator: {e}"))
+            logger.exception("Failed to load procedural size function")
+            self.add_error(_("Failed to execute generator: {}").format(e))
             return None
 
         # Define the native coordinate system as 1 unit = 1 mm.
         # This preserves the aspect ratio in the parsing result.
         document_bounds = (0.0, 0.0, float(width_mm), float(height_mm))
-        x, y, w, h = document_bounds
+        x, _y, w, h = document_bounds
 
         # World frame is Y-Up and already in mm.
         world_frame = (x, 0.0, w, h)

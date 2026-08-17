@@ -4,15 +4,92 @@ A renderer for visualizing texture-based artifacts using GPU texture rendering.
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from OpenGL import GL
+from OpenGL.error import GLError
 
 from ....pipeline.artifact.base import TextureData
-from ..gl_utils import BaseRenderer, RenderContext, Shader
+from ....simulator.scene3d import CompiledSceneArtifact, TextureLayer
+from ...shared.color_lut_provider import ColorLutProvider
+from ..gl_utils import ShaderSet
+from ..render_context import RenderContext
+from .base import BaseRenderer
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreparedTextureLayer:
+    """Texture data ready for GL upload, built off the main thread."""
+
+    mips: list[np.ndarray]
+    model_matrix: np.ndarray
+    rotary_enabled: bool = False
+    rotary_diameter: float = 0.0
+    cylinder_vertices: np.ndarray | None = None
+    laser_index: int = 0
+
+
+def _downsample_texture(
+    data: np.ndarray, new_height: int, new_width: int
+) -> np.ndarray:
+    """Downsamples texture data using nearest-neighbor sampling."""
+    h, w = data.shape
+    y_step = h / new_height
+    x_step = w / new_width
+    y_coords = (np.arange(new_height) * y_step).astype(int)
+    x_coords = (np.arange(new_width) * x_step).astype(int)
+    return data[y_coords][:, x_coords].astype(np.uint8)
+
+
+def _build_mipmap_levels(
+    power_data: np.ndarray, max_texture_size: int
+) -> list[np.ndarray]:
+    """Downsamples if needed and builds the mip pyramid."""
+    height, width = power_data.shape
+    if width > max_texture_size or height > max_texture_size:
+        scale = min(
+            max_texture_size / width,
+            max_texture_size / height,
+        )
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        logger.warning(
+            f"Texture size {width}x{height} exceeds max "
+            f"{max_texture_size}, downsampling to "
+            f"{new_width}x{new_height}"
+        )
+        power_data = _downsample_texture(power_data, new_height, new_width)
+    return TextureArtifactRenderer._build_mipmaps(power_data)
+
+
+def prepare_texture_layer(
+    tl: "TextureLayer",
+    laser_uid_order: list[str] | None,
+    max_texture_size: int,
+) -> PreparedTextureLayer:
+    """Decompresses and mip-maps a texture layer without touching GL.
+
+    Runs in a worker thread; the result is uploaded with GL calls on
+    the main thread.
+    """
+    laser_index = 0
+    if tl.laser_uid and laser_uid_order and tl.laser_uid in laser_uid_order:
+        laser_index = laser_uid_order.index(tl.laser_uid)
+
+    power_data = tl.power_texture.to_numpy()
+    mips = _build_mipmap_levels(power_data, max_texture_size)
+    return PreparedTextureLayer(
+        mips=mips,
+        model_matrix=tl.model_matrix,
+        rotary_enabled=tl.rotary_enabled,
+        rotary_diameter=tl.rotary_diameter,
+        cylinder_vertices=tl.cylinder_vertices,
+        laser_index=laser_index,
+    )
 
 
 class TextureArtifactRenderer(BaseRenderer):
@@ -25,6 +102,8 @@ class TextureArtifactRenderer(BaseRenderer):
     otherwise require millions of individual lines.
     """
 
+    visibility_key = "show_ops_underlay"
+
     def __init__(self):
         """Initializes the TextureArtifactRenderer."""
         super().__init__()
@@ -34,10 +113,17 @@ class TextureArtifactRenderer(BaseRenderer):
         self.color_lut_texture: int = 0
         self.is_initialized: bool = False
         self.max_texture_size: int = 0
-        self.instances: List[Dict[str, Any]] = []
+        self.instances: list[dict[str, Any]] = []
         self.cylinder_vao: int = 0
         self.cylinder_vbo: int = 0
         self._num_laser_luts: int = 1
+        self._flat_mvp: np.ndarray | None = None
+        self._cyl_mvp: np.ndarray | None = None
+
+    def prepare(self, ctx: RenderContext) -> None:
+        """Caches the per-frame MVP matrices for the texture quads."""
+        self._flat_mvp = ctx.camera.mvp_ui
+        self._cyl_mvp = ctx.kinematics.cylinder_mesh_mvp()
 
     def init_gl(self):
         """
@@ -146,19 +232,53 @@ class TextureArtifactRenderer(BaseRenderer):
         try:
             self.clear()
             self.is_initialized = False
-        except Exception as e:
+        except GLError as e:
             logger.warning(f"TextureArtifactRenderer cleanup warning: {e}")
 
-    def _downsample_texture(
-        self, data: np.ndarray, new_height: int, new_width: int
-    ) -> np.ndarray:
-        """Downsamples texture data using nearest-neighbor sampling."""
+    @staticmethod
+    def _max_reduce(data: np.ndarray) -> np.ndarray:
+        """Halves a power map taking the 2x2 block maximum.
+
+        Level sizes must follow the GL floor-halving rule
+        (``max(1, size // 2)``) exactly: any level whose dimensions
+        deviate (e.g. from padding odd edges before halving) makes the
+        whole mip chain inconsistent, and the driver then treats the
+        texture as incomplete - every lookup including ``textureSize``
+        returns zero and the texture renders fully transparent.  Odd
+        trailing rows/columns are therefore dropped, not merged.
+        """
         h, w = data.shape
-        y_step = h / new_height
-        x_step = w / new_width
-        y_coords = (np.arange(new_height) * y_step).astype(int)
-        x_coords = (np.arange(new_width) * x_step).astype(int)
-        return data[y_coords][:, x_coords].astype(np.uint8)
+        out = data
+        if h > 1:
+            out = out[: 2 * (h // 2)].reshape(h // 2, 2, w).max(axis=1)
+        if w > 1:
+            out = (
+                out[:, : 2 * (w // 2)]
+                .reshape(out.shape[0], w // 2, 2)
+                .max(axis=2)
+            )
+        return out
+
+    @classmethod
+    def _build_mipmaps(cls, data: np.ndarray) -> list[np.ndarray]:
+        """Builds a max-reduction mip pyramid of a power map.
+
+        Down-sampling with the maximum (rather than the average) keeps
+        the scanline structure intact at every zoom level, so the shader
+        can pick a mip level that matches its texel footprint instead of
+        aliasing between rows when the texture is minified.
+        """
+        mips = [data]
+        level = data
+        # Reduce until BOTH dimensions reach 1: stopping when only the
+        # smaller one hits 1 (e.g. at shape (1, 2)) leaves the mip
+        # chain without its final 1x1 level, which makes the texture
+        # incomplete and every lookup - texelFetch included - return
+        # black.
+        while max(level.shape) > 1:
+            level = cls._max_reduce(level)
+            mips.append(level)
+        return mips
 
     def clear(self):
         """Clears all instances and their associated textures."""
@@ -178,17 +298,44 @@ class TextureArtifactRenderer(BaseRenderer):
         final_model_matrix: np.ndarray,
         rotary_enabled: bool = False,
         rotary_diameter: float = 25.0,
-        cylinder_vertices: Optional[np.ndarray] = None,
+        cylinder_vertices: np.ndarray | None = None,
         laser_index: int = 0,
     ):
-        """Adds a texture artifact to be rendered in the next frame."""
+        """Adds a texture artifact to be rendered in the next frame.
+
+        Prepares the mip pyramid and uploads synchronously.  The chunked
+        upload path prepares in a worker thread and calls
+        ``upload_prepared`` from the main thread instead.
+        """
         if not self.is_initialized:
             return
 
+        mips = _build_mipmap_levels(
+            texture_data.power_texture_data, self.max_texture_size
+        )
+        prepared = PreparedTextureLayer(
+            mips=mips,
+            model_matrix=final_model_matrix,
+            rotary_enabled=rotary_enabled,
+            rotary_diameter=rotary_diameter,
+            cylinder_vertices=cylinder_vertices,
+            laser_index=laser_index,
+        )
+        self._upload_prepared_instance(prepared)
+
+    def _upload_prepared_instance(
+        self, prepared: PreparedTextureLayer
+    ) -> None:
+        """Uploads one prepared texture layer's mips into a GL texture."""
         texture_id = GL.glGenTextures(1)
         GL.glBindTexture(GL.GL_TEXTURE_2D, texture_id)
+        # NEAREST_MIPMAP_NEAREST keeps the texture mipmap complete so
+        # texelFetch() can read the explicit LOD the shader computes
+        # from the texel footprint (fixes minification moire banding).
         GL.glTexParameteri(
-            GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MIN_FILTER, GL.GL_NEAREST
+            GL.GL_TEXTURE_2D,
+            GL.GL_TEXTURE_MIN_FILTER,
+            GL.GL_NEAREST_MIPMAP_NEAREST,
         )
         GL.glTexParameteri(
             GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST
@@ -200,54 +347,78 @@ class TextureArtifactRenderer(BaseRenderer):
             GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE
         )
 
-        height, width = texture_data.power_texture_data.shape
-
-        if width > self.max_texture_size or height > self.max_texture_size:
-            scale = min(
-                self.max_texture_size / width,
-                self.max_texture_size / height,
-            )
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            logger.warning(
-                f"Texture size {width}x{height} exceeds max "
-                f"{self.max_texture_size}, downsampling to "
-                f"{new_width}x{new_height}"
-            )
-            power_data = self._downsample_texture(
-                texture_data.power_texture_data, new_height, new_width
-            )
-            height, width = new_height, new_width
-        else:
-            power_data = texture_data.power_texture_data
-
         GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
-        GL.glTexImage2D(
-            GL.GL_TEXTURE_2D,
-            0,
-            GL.GL_R8,
-            width,
-            height,
-            0,
-            GL.GL_RED,
-            GL.GL_UNSIGNED_BYTE,
-            power_data,
-        )
+        for level, mip in enumerate(prepared.mips):
+            mh, mw = mip.shape
+            GL.glTexImage2D(
+                GL.GL_TEXTURE_2D,
+                level,
+                GL.GL_R8,
+                mw,
+                mh,
+                0,
+                GL.GL_RED,
+                GL.GL_UNSIGNED_BYTE,
+                mip,
+            )
         GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 4)
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
 
         instance_data = {
             "texture_id": texture_id,
-            "model_matrix": final_model_matrix,
-            "rotary_enabled": rotary_enabled,
-            "rotary_diameter": rotary_diameter,
-            "laser_index": laser_index,
+            "model_matrix": prepared.model_matrix,
+            "rotary_enabled": prepared.rotary_enabled,
+            "rotary_diameter": prepared.rotary_diameter,
+            "laser_index": prepared.laser_index,
+            "max_mip": len(prepared.mips) - 1,
         }
 
-        if rotary_enabled and cylinder_vertices is not None:
-            instance_data["cylinder_vertices"] = cylinder_vertices
+        if prepared.rotary_enabled and prepared.cylinder_vertices is not None:
+            instance_data["cylinder_vertices"] = prepared.cylinder_vertices
 
         self.instances.append(instance_data)
+
+    def upload_prepared(
+        self, prepared_layers: list[PreparedTextureLayer]
+    ) -> None:
+        """Uploads prepared texture layers, clearing existing instances."""
+        self.clear()
+        for prepared in prepared_layers:
+            self._upload_prepared_instance(prepared)
+
+    def add_instance_from_texture_layer(
+        self,
+        tl: TextureLayer,
+        laser_uid_order: list[str] | None = None,
+    ):
+        """Adds a texture instance from a compiled texture layer."""
+        laser_index = 0
+        if (
+            tl.laser_uid
+            and laser_uid_order
+            and tl.laser_uid in laser_uid_order
+        ):
+            laser_index = laser_uid_order.index(tl.laser_uid)
+        power_data = tl.power_texture.to_numpy()
+        tex_data = TextureData(
+            power_texture_data=power_data,
+            dimensions_mm=(0.0, 0.0),
+            position_mm=(0.0, 0.0),
+        )
+        self.add_instance(
+            tex_data,
+            tl.model_matrix,
+            rotary_enabled=tl.rotary_enabled,
+            rotary_diameter=tl.rotary_diameter,
+            cylinder_vertices=tl.cylinder_vertices,
+            laser_index=laser_index,
+        )
+
+    def update_from_artifact(self, artifact: CompiledSceneArtifact):
+        """Clears existing instances and uploads the artifact's layers."""
+        self.clear()
+        for tl in artifact.texture_layers:
+            self.add_instance_from_texture_layer(tl, artifact.laser_uid_order)
 
     def update_color_lut(self, lut_data: np.ndarray, num_lasers: int = 1):
         """
@@ -278,29 +449,45 @@ class TextureArtifactRenderer(BaseRenderer):
         )
         GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
 
-    def render(
-        self,
-        ctx: RenderContext,
-        view_proj_scene_matrix: np.ndarray,
-        shader: Shader,
-        reached_count: Optional[int] = None,
-        pending_alpha: float = 0.3,
-    ):
+    def update_color_lut_from(self, provider: ColorLutProvider):
+        """Updates the colour LUT from a shared ColorLutProvider."""
+        self.update_color_lut(provider.engrave_lut_2d(), provider.num_lasers)
+
+    def render(self, ctx: RenderContext, shaders: ShaderSet, **kwargs) -> None:
         """
-        Renders all flat (non-rotary) texture instances.
+        Renders all texture instances: flat quads first, then the
+        cylinder-mapped (rotary) ones.
 
         Args:
-            view_proj_scene_matrix: The combined Projection * View * SceneModel
-              matrix (P*V*M_scene), not transposed.
-            shader: The shader to use for rendering.
-            reached_count: If set, the first N texture instances are drawn
-              at full alpha; the rest are drawn dimmed. None means all at
-              full alpha.
-            pending_alpha: Alpha multiplier for unreached texture instances.
+            ctx: The current render context; carries the reached count.
+            shaders: The shader set; the ``texture`` program is used.
         """
         if not self.is_initialized or not self.instances:
             return
 
+        shader = shaders.texture
+        if shader is None:
+            return
+
+        pending_alpha = 0.3
+        self._draw_flat(shader, pending_alpha)
+        self._draw_cylinder(shader, pending_alpha)
+
+    def _draw_flat(
+        self,
+        shader,
+        pending_alpha: float = 0.3,
+    ):
+        """Draws all flat (non-rotary) texture instances."""
+        if self._flat_mvp is None:
+            return
+
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        # Fill depth across the whole raster quad (including the
+        # zero-power gaps) so occluders behind it cannot show through.
+        GL.glDepthMask(GL.GL_TRUE)
+        GL.glDepthFunc(GL.GL_LEQUAL)
         shader.use()
 
         GL.glActiveTexture(GL.GL_TEXTURE0)
@@ -314,15 +501,13 @@ class TextureArtifactRenderer(BaseRenderer):
             if instance["rotary_enabled"]:
                 continue
 
-            if reached_count is not None and i >= reached_count:
-                shader.set_float("uAlpha", pending_alpha)
-            else:
-                shader.set_float("uAlpha", 1.0)
+            shader.set_float("uAlpha", pending_alpha)
+            shader.set_float("uMaxMip", float(instance.get("max_mip", 0)))
 
             shader.set_int("uLaserIndex", instance.get("laser_index", 0))
 
-            final_mvp = view_proj_scene_matrix @ instance["model_matrix"]
-            shader.set_mat4("uMVP", final_mvp.T)
+            final_mvp = self._flat_mvp @ instance["model_matrix"]
+            shader.set_mat4("uMVP", final_mvp)
 
             GL.glActiveTexture(GL.GL_TEXTURE1)
             GL.glBindTexture(GL.GL_TEXTURE_2D, self.color_lut_texture)
@@ -331,37 +516,21 @@ class TextureArtifactRenderer(BaseRenderer):
 
             GL.glDrawArrays(GL.GL_TRIANGLE_FAN, 0, 4)
 
-        GL.glBindVertexArray(0)
-        GL.glActiveTexture(GL.GL_TEXTURE1)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-
-    def render_cylinder(
+    def _draw_cylinder(
         self,
-        ctx: RenderContext,
-        view_proj_scene_matrix: np.ndarray,
-        shader: Shader,
-        reached_count: Optional[int] = None,
+        shader,
         pending_alpha: float = 0.3,
     ):
-        """
-        Renders all texture instances mapped onto a cylinder.
-
-        Args:
-            view_proj_scene_matrix: The combined Projection * View * SceneModel
-              matrix (P*V*M_scene), not transposed.
-            shader: The shader to use for rendering.
-            reached_count: If set, the first N texture instances are drawn
-              at full alpha; the rest are drawn dimmed. None means all at
-              full alpha.
-            pending_alpha: Alpha multiplier for unreached texture instances.
-        """
-        if not self.is_initialized or not self.instances:
+        """Draws all texture instances mapped onto a cylinder."""
+        if self._cyl_mvp is None:
             return
 
         t_cyl_start = time.perf_counter()
 
+        GL.glEnable(GL.GL_BLEND)
+        GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
+        GL.glDepthMask(GL.GL_TRUE)
+        GL.glDepthFunc(GL.GL_LEQUAL)
         shader.use()
 
         GL.glActiveTexture(GL.GL_TEXTURE0)
@@ -377,10 +546,8 @@ class TextureArtifactRenderer(BaseRenderer):
                 continue
             num_rotary += 1
 
-            if reached_count is not None and i >= reached_count:
-                shader.set_float("uAlpha", pending_alpha)
-            else:
-                shader.set_float("uAlpha", 1.0)
+            shader.set_float("uAlpha", pending_alpha)
+            shader.set_float("uMaxMip", float(instance.get("max_mip", 0)))
 
             shader.set_int("uLaserIndex", instance.get("laser_index", 0))
 
@@ -411,7 +578,7 @@ class TextureArtifactRenderer(BaseRenderer):
 
             # Draw using the full Scene Matrix, so it correctly
             # inherits WCS and _model_matrix.
-            shader.set_mat4("uMVP", view_proj_scene_matrix.T)
+            shader.set_mat4("uMVP", self._cyl_mvp)
 
             GL.glActiveTexture(GL.GL_TEXTURE1)
             GL.glBindTexture(GL.GL_TEXTURE_2D, self.color_lut_texture)
@@ -420,12 +587,6 @@ class TextureArtifactRenderer(BaseRenderer):
 
             GL.glBindVertexArray(self.cylinder_vao)
             GL.glDrawArrays(GL.GL_TRIANGLES, 0, vertex_count)
-            GL.glBindVertexArray(0)
-
-        GL.glActiveTexture(GL.GL_TEXTURE1)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
-        GL.glActiveTexture(GL.GL_TEXTURE0)
-        GL.glBindTexture(GL.GL_TEXTURE_2D, 0)
 
         t_cyl_elapsed = (time.perf_counter() - t_cyl_start) * 1000
         if t_cyl_elapsed > 5:

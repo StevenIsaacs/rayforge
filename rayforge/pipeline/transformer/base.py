@@ -1,40 +1,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from blinker import Signal
-from raygeo.ops import Ops
 
 from ...core.workpiece import WorkPiece
-from ...shared.tasker.progress import ProgressContext
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
-
-
-class ExecutionPhase(Enum):
-    """
-    Defines the execution order for different types of OpsTransformers.
-
-    The pipeline runner does not execute transformers in their simple list
-    order; it groups them by phase and runs them sequentially. This ensures
-    a logical flow where path continuity is preserved for transformers that
-    need it.
-
-    The execution order is always:
-    1. GEOMETRY_REFINEMENT: For transformers that modify path geometry but
-       require it to be continuous (e.g., Smooth).
-    2. PATH_INTERRUPTION: For transformers that intentionally create gaps or
-       discontinuities in paths (e.g., TabOpsTransformer).
-    3. POST_PROCESSING: For transformers that operate on the final, potentially
-       segmented paths (e.g., Optimize, MultiPass).
-    """
-
-    GEOMETRY_REFINEMENT = auto()
-    PATH_INTERRUPTION = auto()
-    POST_PROCESSING = auto()
 
 
 class OpsTransformer(ABC):
@@ -48,10 +22,14 @@ class OpsTransformer(ABC):
 
     POSITION_SENSITIVE: bool = False
 
+    #: The raygeo transformer spec ``name()`` this transformer produces
+    #: (e.g. ``"overscan"``), used to label batch progress details.
+    SPEC_NAME: ClassVar[str] = ""
+
     def __init__(self, enabled: bool = True, **kwargs):
         self._enabled = enabled
         self.changed = Signal()
-        self.extra: Dict[str, Any] = {}
+        self.extra: dict[str, Any] = {}
 
     @property
     def enabled(self) -> bool:
@@ -69,45 +47,31 @@ class OpsTransformer(ABC):
         self.set_enabled(enabled)
 
     @property
-    def execution_phase(self) -> ExecutionPhase:
-        """Defines when this transformer should run."""
-        return ExecutionPhase.POST_PROCESSING
-
-    @property
     @abstractmethod
     def label(self) -> str:
         """A short label for the transformation, used in UI."""
-        pass
 
     @property
     @abstractmethod
     def description(self) -> str:
         """A brief one-line description of the transformation."""
-        pass
 
     @abstractmethod
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """
-        Runs the transformation.
+        workpiece: WorkPiece | None,
+        stock_geometries: list[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ) -> Any:
+        """Return the typed Rust spec for this transformer.
 
-        Args:
-            ops: The Ops object to transform in-place.
-            workpiece: The WorkPiece model being processed.
-            context: Optional progress context for reporting progress and
-                    checking cancellation.
-            stock_geometries: List of stock boundary geometries in world space.
-            settings: Optional dictionary of step settings.
+        The returned object is one of the ``*Spec`` pyclasses defined in
+        :mod:`raygeo.ops.transform`. Implementations must not return
+        ``None``: if the transformer cannot run, raise an exception
+        describing the misconfiguration instead.
         """
-        pass
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the transformer's configuration to a dictionary."""
         result = {
             "name": self.__class__.__name__,
@@ -117,7 +81,7 @@ class OpsTransformer(ABC):
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OpsTransformer":
+    def from_dict(cls, data: dict[str, Any]) -> OpsTransformer:
         """
         Acts as a factory to create a transformer instance from a dictionary.
         This method should be called on the base class, e.g.,

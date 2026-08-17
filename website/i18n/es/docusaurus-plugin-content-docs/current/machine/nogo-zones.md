@@ -5,7 +5,7 @@ no debería ingresar. Cuando están habilitadas, se verifican como parte de las
 [comprobaciones de sanity del trabajo](../features/sanity-checks.md) antes de ejecutar o
 exportar.
 
-![Zonas Prohibidas](/screenshots/machine-nogo-zones.png)
+![Zonas Prohibidas](/screenshots/machine-settings-nogo-zones.png)
 
 ## Añadir una Zona Prohibida
 
@@ -24,8 +24,9 @@ Cada zona tiene los siguientes ajustes:
 
 Las zonas prohibidas se muestran tanto en el lienzo 2D como en el 3D como
 superposiciones semi-transparentes. Usa el botón de alternar zonas prohibidas en la
-superposición del lienzo para mostrarlas u ocultarlas. El ajuste de visibilidad se
-recuerda entre sesiones.
+superposición del lienzo para mostrarlas u ocultarlas. El botón solo se
+muestra cuando hay al menos una zona prohibida configurada. El ajuste de
+visibilidad se recuerda entre sesiones.
 
 ---
 

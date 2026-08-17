@@ -1,11 +1,10 @@
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
-from raygeo.ops import Ops
+from raygeo.ops.transform.smooth import SmoothSpec
 
 from rayforge.core.workpiece import WorkPiece
-from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
-from rayforge.shared.tasker.progress import ProgressContext
+from rayforge.pipeline.transformer.base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
@@ -28,6 +27,8 @@ class Smooth(OpsTransformer):
         final, high-quality path.
     """
 
+    SPEC_NAME = "smooth"
+
     def __init__(
         self, enabled: bool = True, amount=20, corner_angle_threshold=45
     ):
@@ -45,11 +46,6 @@ class Smooth(OpsTransformer):
         self._corner_angle_threshold = corner_angle_threshold
         self._amount = -1
         self.amount = amount
-
-    @property
-    def execution_phase(self) -> ExecutionPhase:
-        """Smooth needs to run on continuous paths before they are broken."""
-        return ExecutionPhase.GEOMETRY_REFINEMENT
 
     @property
     def amount(self) -> int:
@@ -86,33 +82,18 @@ class Smooth(OpsTransformer):
     def description(self) -> str:
         return _("Smooths the path by applying a Gaussian filter.")
 
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ):
-        """
-        Executes the smoothing transformation on a set of operations.
+        workpiece: WorkPiece | None,
+        stock_geometries: list["Geometry"] | None,
+        settings: dict[str, Any] | None,
+    ) -> SmoothSpec:
+        return SmoothSpec(
+            amount=self.amount,
+            corner_angle_threshold=self.corner_angle_threshold,
+        )
 
-        Args:
-            ops: The operations object containing path data.
-            context: Optional progress context for reporting progress.
-        """
-        if self.amount == 0:
-            return
-
-        if context and context.is_cancelled():
-            return
-
-        ops.smooth(self.amount, self.corner_angle_threshold)
-
-        if context:
-            context.set_progress(1.0)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the transformer's configuration to a dictionary."""
         data = super().to_dict()
         data.update(
@@ -124,7 +105,7 @@ class Smooth(OpsTransformer):
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Smooth":
+    def from_dict(cls, data: dict[str, Any]) -> "Smooth":
         """Creates a Smooth instance from a dictionary."""
         if data.get("name") != cls.__name__:
             raise ValueError(

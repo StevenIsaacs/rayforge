@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, Optional, Set, Type
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .base import OpsTransformer
@@ -14,14 +14,14 @@ class TransformerRegistry:
     """
 
     def __init__(self):
-        self._transformers: Dict[str, Type["OpsTransformer"]] = {}
-        self._addon_items: Dict[str, Set[str]] = {}
+        self._transformers: dict[str, type[OpsTransformer]] = {}
+        self._addon_items: dict[str, set[str]] = {}
 
     def register(
         self,
-        transformer_class: Type["OpsTransformer"],
-        name: Optional[str] = None,
-        addon_name: Optional[str] = None,
+        transformer_class: type["OpsTransformer"],
+        name: str | None = None,
+        addon_name: str | None = None,
     ) -> None:
         """
         Register a transformer class.
@@ -40,23 +40,6 @@ class TransformerRegistry:
             if addon_name not in self._addon_items:
                 self._addon_items[addon_name] = set()
             self._addon_items[addon_name].add(key)
-
-    def unregister(self, name: str) -> bool:
-        """
-        Unregister a transformer class by name.
-
-        Args:
-            name: The name of the transformer to unregister.
-
-        Returns:
-            True if the transformer was unregistered, False if not found.
-        """
-        if name in self._transformers:
-            del self._transformers[name]
-            for addon_name, items in self._addon_items.items():
-                items.discard(name)
-            return True
-        return False
 
     def unregister_all_from_addon(self, addon_name: str) -> int:
         """
@@ -78,7 +61,7 @@ class TransformerRegistry:
                 count += 1
         return count
 
-    def get(self, name: str) -> Optional[Type["OpsTransformer"]]:
+    def get(self, name: str) -> type["OpsTransformer"] | None:
         """
         Look up a transformer class by name.
 
@@ -88,20 +71,27 @@ class TransformerRegistry:
         Returns:
             The transformer class, or None if not found.
         """
-        from rayforge.worker_init import ensure_addons_loaded
-
-        ensure_addons_loaded()
-
         return self._transformers.get(name)
 
-    def all_transformers(self) -> Dict[str, Type["OpsTransformer"]]:
+    def progress_label(self, spec_name: str) -> str | None:
         """
-        Return a copy of all registered transformers.
+        Look up the UI label for a raygeo transformer spec ``name()``.
+
+        The label comes from the registered transformer whose
+        ``SPEC_NAME`` matches, via its :attr:`label` property.
+
+        Args:
+            spec_name: A raygeo transformer spec ``name()`` (e.g.
+                ``"overscan"``).
 
         Returns:
-            Dictionary mapping transformer names to classes.
+            The UI label, or None when no registered transformer
+            declares that spec name.
         """
-        return self._transformers.copy()
+        for transformer_class in self._transformers.values():
+            if transformer_class.SPEC_NAME == spec_name:
+                return transformer_class().label
+        return None
 
 
 transformer_registry = TransformerRegistry()

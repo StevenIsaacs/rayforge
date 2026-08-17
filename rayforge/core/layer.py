@@ -7,26 +7,27 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Iterable
 from gettext import gettext as _
 from typing import (
+    TYPE_CHECKING,
     Any,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
     TypeVar,
 )
 
 from blinker import Signal
 from raygeo.geo import Matrix
 
+from ..context import get_context
 from .color import COLOR_PALETTE
 from .group import Group
 from .item import DocItem
 from .step import Step
 from .workflow import Workflow
 from .workpiece import WorkPiece
+
+if TYPE_CHECKING:
+    from .material import Material
 
 logger = logging.getLogger(__name__)
 
@@ -55,22 +56,23 @@ class Layer(DocItem):
         self.visible: bool = True
         self.rotary_enabled: bool = False
         self.rotary_diameter: float = 25.0
-        self.rotary_module_uid: Optional[str] = None
+        self.rotary_module_uid: str | None = None
+        self.stock_material_uid: str | None = None
         self.color: str = self.DEFAULT_COLOR
-        self.wcs: Optional[str] = None
+        self.wcs: str | None = None
 
         # Signals for notifying other parts of the application of changes.
         # This one is special and is bubbled manually.
         self.per_step_transformer_changed = Signal()
 
         # Forward compatibility: store unknown attributes
-        self.extra: Dict[str, Any] = {}
+        self.extra: dict[str, Any] = {}
 
         # A new layer gets a workflow automatically.
         workflow = Workflow(_("{name} Workflow").format(name=name))
         self.add_child(workflow)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serializes the layer and its children to a dictionary."""
         result = {
             "uid": self.uid,
@@ -81,6 +83,7 @@ class Layer(DocItem):
             "rotary_enabled": self.rotary_enabled,
             "rotary_diameter": self.rotary_diameter,
             "rotary_module_uid": self.rotary_module_uid,
+            "stock_material_uid": self.stock_material_uid,
             "color": self.color,
             "wcs": self.wcs,
             "children": [child.to_dict() for child in self.children],
@@ -89,7 +92,7 @@ class Layer(DocItem):
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Layer":
+    def from_dict(cls, data: dict[str, Any]) -> Layer:
         """Deserializes a dictionary into a Layer instance."""
         known_keys = {
             "uid",
@@ -100,6 +103,7 @@ class Layer(DocItem):
             "rotary_enabled",
             "rotary_diameter",
             "rotary_module_uid",
+            "stock_material_uid",
             "color",
             "wcs",
             "children",
@@ -113,6 +117,7 @@ class Layer(DocItem):
         layer.rotary_enabled = data.get("rotary_enabled", False)
         layer.rotary_diameter = data.get("rotary_diameter", 25.0)
         layer.rotary_module_uid = data.get("rotary_module_uid")
+        layer.stock_material_uid = data.get("stock_material_uid")
         layer.color = data.get("color", cls.DEFAULT_COLOR)
         layer.wcs = data.get("wcs")
         layer.extra = extra
@@ -131,7 +136,7 @@ class Layer(DocItem):
         return layer
 
     @property
-    def workpieces(self) -> List[WorkPiece]:
+    def workpieces(self) -> list[WorkPiece]:
         """
         Returns a list of all child items that are WorkPieces.
         Note: This only returns direct children.
@@ -141,7 +146,7 @@ class Layer(DocItem):
         ]
 
     @property
-    def all_workpieces(self) -> List["WorkPiece"]:
+    def all_workpieces(self) -> list[WorkPiece]:
         """
         Recursively finds and returns a flattened list of all WorkPiece
         objects contained within this layer, including those inside groups.
@@ -157,7 +162,7 @@ class Layer(DocItem):
                 return True
         return False
 
-    def get_content_items(self) -> List["DocItem"]:
+    def get_content_items(self) -> list[DocItem]:
         """
         Returns a list of user-facing items in this layer (e.g.,
         WorkPieces, Groups), excluding internal objects like Workflows.
@@ -167,12 +172,12 @@ class Layer(DocItem):
         ]
 
     @property
-    def content_items(self) -> List["DocItem"]:
+    def content_items(self) -> list[DocItem]:
         """Property alias for get_content_items()."""
         return self.get_content_items()
 
     @property
-    def workflow(self) -> Optional[Workflow]:
+    def workflow(self) -> Workflow | None:
         """Returns the layer's workflow. A layer must have one workflow."""
         for child in self.children:
             if isinstance(child, Workflow):
@@ -187,7 +192,7 @@ class Layer(DocItem):
         """
         self.per_step_transformer_changed.send(self)
 
-    def add_child(self, child: T, index: Optional[int] = None) -> T:
+    def add_child(self, child: T, index: int | None = None) -> T:
         if isinstance(child, Workflow):
             child.per_step_transformer_changed.connect(
                 self._on_workflow_post_transformer_changed
@@ -268,11 +273,27 @@ class Layer(DocItem):
         self.rotary_diameter = diameter
         self.updated.send(self)
 
-    def set_rotary_module_uid(self, uid: Optional[str]):
+    def set_rotary_module_uid(self, uid: str | None):
         if self.rotary_module_uid == uid:
             return
         self.rotary_module_uid = uid
         self.updated.send(self)
+
+    def set_stock_material_uid(self, uid: str | None):
+        """Set the stock material rendered for this rotary layer."""
+        if self.stock_material_uid == uid:
+            return
+        self.stock_material_uid = uid
+        self.updated.send(self)
+
+    @property
+    def stock_material(self) -> Material | None:
+        """The Material selected as this layer's rotary stock, if any."""
+        if not self.stock_material_uid:
+            return None
+        return get_context().material_mgr.get_material_or_none(
+            self.stock_material_uid
+        )
 
     def set_color(self, color: str):
         if self.color == color:
@@ -280,7 +301,7 @@ class Layer(DocItem):
         self.color = color
         self.updated.send(self)
 
-    def get_subtitle(self, rotary_module_name: Optional[str] = None) -> str:
+    def get_subtitle(self, rotary_module_name: str | None = None) -> str:
         """Returns a subtitle describing the layer type.
 
         Args:
@@ -298,7 +319,7 @@ class Layer(DocItem):
             return _("Rotary · {name}").format(name=rotary_module_name)
         return _("Rotary")
 
-    def set_wcs(self, wcs: Optional[str]):
+    def set_wcs(self, wcs: str | None):
         if self.wcs == wcs:
             return
         self.wcs = wcs
@@ -308,36 +329,36 @@ class Layer(DocItem):
         """Return this layer's WCS or the machine's active WCS."""
         return self.wcs if self.wcs else machine.active_wcs
 
-    def mu_to_degrees(self, mu: float) -> float:
-        """Convert machine units to degrees for rotary axis."""
+    def mm_to_degrees(self, mm: float) -> float:
+        """Convert surface mm to degrees for rotary axis."""
         if self.rotary_diameter <= 0:
             return 0.0
         circumference = self.rotary_diameter * math.pi
-        return (mu / circumference) * 360.0
+        return (mm / circumference) * 360.0
 
-    def add_workpiece(self, workpiece: "WorkPiece"):
+    def add_workpiece(self, workpiece: WorkPiece):
         """Adds a single workpiece to the layer."""
         self.add_child(workpiece)
 
-    def remove_workpiece(self, workpiece: "WorkPiece"):
+    def remove_workpiece(self, workpiece: WorkPiece):
         """Removes a single workpiece from the layer."""
         self.remove_child(workpiece)
 
-    def set_workpieces(self, workpieces: List["WorkPiece"]):
+    def set_workpieces(self, workpieces: list[WorkPiece]):
         """
         Sets the layer's workpieces to a new list, preserving the
         existing workflow and groups.
         """
         groups = [c for c in self.children if isinstance(c, Group)]
         current_workflow = self.workflow
-        new_children: List[DocItem] = []
+        new_children: list[DocItem] = []
         new_children.extend(workpieces)
         new_children.extend(groups)
         if current_workflow:
             new_children.append(current_workflow)
         self.set_children(new_children)
 
-    def reorder_workpieces(self, new_workpiece_order: List["WorkPiece"]):
+    def reorder_workpieces(self, new_workpiece_order: list[WorkPiece]):
         """
         Reorders workpieces while preserving the positions of groups
         and the workflow.
@@ -351,7 +372,7 @@ class Layer(DocItem):
                 new_children.append(child)
         self.set_children(new_children)
 
-    def reorder_content_items(self, new_content_order: List[DocItem]):
+    def reorder_content_items(self, new_content_order: list[DocItem]):
         """
         Reorders all content items (WorkPieces and Groups) while
         preserving the workflow's position.
@@ -365,7 +386,7 @@ class Layer(DocItem):
                 new_children.append(next(item_iter))
         self.set_children(new_children)
 
-    def get_renderable_items(self) -> List[Tuple[Step, WorkPiece]]:
+    def get_renderable_items(self) -> list[tuple[Step, WorkPiece]]:
         """
         Gets a list of all visible step/workpiece pairs for rendering.
 

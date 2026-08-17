@@ -1,19 +1,16 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    Optional,
-    Sequence,
 )
 
-from raygeo.ops import Ops
+from raygeo.ops.transform.merge_lines import MergeLinesSpec
 
 from rayforge.core.workpiece import WorkPiece
-from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
-from rayforge.shared.tasker.progress import ProgressContext
+from rayforge.pipeline.transformer.base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
@@ -31,6 +28,7 @@ class MergeLinesTransformer(OpsTransformer):
     The transformer should run before optimization and MultiPassTransformer.
     """
 
+    SPEC_NAME = "merge_lines"
     DEFAULT_TOLERANCE = 0.01
 
     def __init__(
@@ -49,10 +47,6 @@ class MergeLinesTransformer(OpsTransformer):
         self.changed.send(self)
 
     @property
-    def execution_phase(self) -> ExecutionPhase:
-        return ExecutionPhase.POST_PROCESSING
-
-    @property
     def label(self) -> str:
         return _("Merge Lines")
 
@@ -60,29 +54,21 @@ class MergeLinesTransformer(OpsTransformer):
     def description(self) -> str:
         return _("Merges overlapping lines to avoid double passing.")
 
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[Sequence["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        if not self.enabled:
-            return
+        workpiece: WorkPiece | None,
+        stock_geometries: Sequence[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ) -> MergeLinesSpec:
+        return MergeLinesSpec(tolerance=self._tolerance)
 
-        if ops.is_empty():
-            return
-
-        ops.merge_overlapping_lines(self._tolerance)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
         data["tolerance"] = self._tolerance
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "MergeLinesTransformer":
+    def from_dict(cls, data: dict[str, Any]) -> MergeLinesTransformer:
         if data.get("name") != cls.__name__:
             raise ValueError(
                 f"Mismatched transformer name: expected {cls.__name__},"

@@ -8,18 +8,13 @@ import sys
 import tempfile
 import urllib.request
 import zipfile
+from collections.abc import Callable
 from enum import Enum, auto
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Set,
-    Tuple,
     runtime_checkable,
 )
 from urllib.parse import quote, urlparse
@@ -51,7 +46,6 @@ from .addon import (
     AddonValidationError,
     VersionType,
 )
-from .manifest import AddonManifest
 
 if TYPE_CHECKING:
     from ..shared.tasker.manager import TaskManager
@@ -125,15 +119,14 @@ class AddonManager:
 
     def __init__(
         self,
-        addon_dirs: List[Path],
+        addon_dirs: list[Path],
         install_dir: Path,
         plugin_mgr: pluggy.PluginManager,
         task_mgr: "TaskManager",
-        addon_config: Optional[AddonConfig] = None,
-        is_job_active_callback: Optional[Callable[[], bool]] = None,
-        registries: Optional[Dict[str, "AddonRegistry"]] = None,
-        shared_state: Optional[Dict[str, Any]] = None,
-        license_validator: Optional[LicenseValidator] = None,
+        addon_config: AddonConfig | None = None,
+        is_job_active_callback: Callable[[], bool] | None = None,
+        registries: dict[str, "AddonRegistry"] | None = None,
+        license_validator: LicenseValidator | None = None,
     ):
         """
         Args:
@@ -152,8 +145,6 @@ class AddonManager:
                 hook parameter names to registry instances. Expected keys:
                 'step_registry', 'widget_registry',
                 'menu_registry', 'layout_registry'.
-            shared_state (Optional[Any]): Shared dict for worker state,
-                used to populate addon module paths for worker processes.
             license_validator (Optional[LicenseValidator]): License validator
                 for checking paid addon licenses.
         """
@@ -162,15 +153,14 @@ class AddonManager:
         self.plugin_mgr = plugin_mgr
         self.addon_config = addon_config
         self.is_job_active_callback = is_job_active_callback
-        self.registries: Dict[str, AddonRegistry] = registries or {}
-        self._window: Optional[Any] = None
-        self.loaded_addons: Dict[str, Addon] = {}
-        self.incompatible_addons: Dict[str, Addon] = {}
-        self.disabled_addons: Dict[str, Addon] = {}
-        self.license_required_addons: Dict[str, Addon] = {}
-        self._pending_unloads: Set[str] = set()
-        self._load_errors: Dict[str, str] = {}
-        self._shared_state = shared_state
+        self.registries: dict[str, AddonRegistry] = registries or {}
+        self._window: Any | None = None
+        self.loaded_addons: dict[str, Addon] = {}
+        self.incompatible_addons: dict[str, Addon] = {}
+        self.disabled_addons: dict[str, Addon] = {}
+        self.license_required_addons: dict[str, Addon] = {}
+        self._pending_unloads: set[str] = set()
+        self._load_errors: dict[str, str] = {}
         self._task_mgr = task_mgr
         self.license_validator = license_validator
 
@@ -183,7 +173,7 @@ class AddonManager:
         for addon_name in list(self.license_required_addons.keys()):
             self.recheck_license(addon_name)
 
-    def set_registries(self, registries: Dict[str, AddonRegistry]):
+    def set_registries(self, registries: dict[str, AddonRegistry]):
         """
         Set the registries dict for addon cleanup.
 
@@ -207,116 +197,9 @@ class AddonManager:
         """
         self._window = window
 
-    def set_shared_state(self, shared_state: Dict[str, Any]):
-        """
-        Set the shared state dict and immediately build the addon manifest.
-
-        Args:
-            shared_state: Shared dict for worker state.
-        """
-        self._shared_state = shared_state
-        self._build_and_update_manifest()
-
-    def _restart_workers(self):
-        """
-        Restarts the worker pool to ensure runtime modifications to addons
-        are securely reflected in background processes.
-        """
-        if self._task_mgr is not None:
-            logger.info("Restarting worker pool due to addon changes...")
-            self._task_mgr.restart_worker_pool()
-
-    def _build_and_update_manifest(self):
-        """
-        Scans all known addons to build a comprehensive manifest and
-        updates the shared state for worker processes.
-
-        The namespace structure for addons is:
-        rayforge_addons.<ADDON_NAME>.<MODULE_STRUCTURE>
-
-        Where <ADDON_NAME> is the name from the rayforge-addon.yaml.
-        This guarantees isolation between addons even if they have internal
-        modules with the same name.
-        """
-        manifest = AddonManifest()
-        all_addons = (
-            list(self.loaded_addons.values())
-            + list(self.disabled_addons.values())
-            + list(self.incompatible_addons.values())
-            + list(self.license_required_addons.values())
-        )
-
-        root_ns = "rayforge_addons"
-        manifest.namespaces.add(root_ns)
-
-        for addon in all_addons:
-            addon_id = addon.metadata.name
-
-            # Root namespace for this addon
-            addon_ns = f"rayforge_addons.{addon_id}"
-            manifest.namespaces.add(addon_ns)
-
-            # Scan all python files to register every potential module
-            for py_file in addon.root_path.rglob("*.py"):
-                # Ignore hidden files/directories
-                if any(p.startswith(".") for p in py_file.parts):
-                    continue
-
-                rel_path = py_file.relative_to(addon.root_path)
-                parts = rel_path.with_suffix("").parts
-
-                if py_file.name == "__init__.py":
-                    mod_parts = parts[:-1]
-                else:
-                    mod_parts = parts
-
-                if not mod_parts:
-                    continue
-
-                # Ensure it's a valid python identifier sequence
-                if not all(p.isidentifier() for p in mod_parts):
-                    continue
-
-                module_name = f"{addon_ns}.{'.'.join(mod_parts)}"
-                manifest.module_paths[module_name] = str(py_file)
-
-                # Add namespaces for parent packages
-                for i in range(1, len(mod_parts)):
-                    manifest.namespaces.add(
-                        f"{addon_ns}.{'.'.join(mod_parts[:i])}"
-                    )
-
-        # Populate enabled worker entry points using the namespaced structure
-        for addon in self.loaded_addons.values():
-            if addon.metadata.provides.worker:
-                worker_module = (
-                    f"rayforge_addons.{addon.metadata.name}."
-                    f"{addon.metadata.provides.worker}"
-                )
-                manifest.enabled_worker_modules.append(worker_module)
-
-        # Prefer the shared state from the active task manager, as it may have
-        # changed after a pool restart. Fall back to the stored shared state.
-        target_state = None
-        if self._task_mgr:
-            target_state = self._task_mgr.get_shared_state()
-
-        if target_state is None:
-            target_state = self._shared_state
-
-        if target_state is not None:
-            logger.debug(
-                f"Updating addon manifest in shared state. "
-                f"{len(manifest.module_paths)} modules, "
-                f"{len(manifest.enabled_worker_modules)} enabled workers."
-            )
-            target_state["addon_manifest"] = manifest
-        else:
-            logger.debug("No shared state available to update addon manifest.")
-
     def _parse_registry_dict(
-        self, registry_data: Dict[str, Any]
-    ) -> List[AddonMetadata]:
+        self, registry_data: dict[str, Any]
+    ) -> list[AddonMetadata]:
         """Helper to parse the standard dictionary-based registry format."""
         addons = registry_data.get("addons", {})
         if not isinstance(addons, dict):
@@ -334,7 +217,12 @@ class AddonManager:
                 meta = AddonMetadata.from_registry_entry(addon_id, addon_data)
                 self._pick_compatible_version(meta)
                 result.append(meta)
-            except Exception as e:
+            except (
+                AddonValidationError,
+                ValueError,
+                KeyError,
+                TypeError,
+            ) as e:
                 logger.warning(
                     f"Failed to parse registry entry '{addon_id}': {e}"
                 )
@@ -361,7 +249,7 @@ class AddonManager:
             meta.api_version = api_ver
             return
 
-    def fetch_registry(self) -> List[AddonMetadata]:
+    def fetch_registry(self) -> list[AddonMetadata]:
         """
         Fetches and parses the addon registry from the remote repository.
         Returns a list of AddonMetadata objects.
@@ -382,11 +270,11 @@ class AddonManager:
                     return []
                 data = response.read()
                 parsed = yaml.safe_load(data)
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError, yaml.YAMLError) as e:
             logger.error(f"Failed to fetch or parse registry: {e}")
             return []
 
-        result: List[AddonMetadata] = []
+        result: list[AddonMetadata] = []
         if isinstance(parsed, list):
             for addon_data in parsed:
                 addon_id = addon_data.get("name")
@@ -402,7 +290,12 @@ class AddonManager:
                     )
                     self._pick_compatible_version(meta)
                     result.append(meta)
-                except Exception as e:
+                except (
+                    AddonValidationError,
+                    ValueError,
+                    KeyError,
+                    TypeError,
+                ) as e:
                     logger.warning(
                         "Failed to parse list-based registry entry '%s': %s",
                         addon_id,
@@ -418,7 +311,7 @@ class AddonManager:
         )
         return []
 
-    def get_installed_addon(self, addon_id: str) -> Optional[Addon]:
+    def get_installed_addon(self, addon_id: str) -> Addon | None:
         """
         Finds an installed addon by its canonical ID.
 
@@ -434,7 +327,7 @@ class AddonManager:
 
     def check_update_status(
         self, remote_meta: AddonMetadata
-    ) -> Tuple[UpdateStatus, Optional[str]]:
+    ) -> tuple[UpdateStatus, str | None]:
         """
         Checks a remote addon against local installations.
 
@@ -449,7 +342,7 @@ class AddonManager:
         if local_version is UnknownVersion:
             return (UpdateStatus.UP_TO_DATE, None)
 
-        local_version_str: Optional[str] = str(local_version)
+        local_version_str: str | None = str(local_version)
         remote_version = remote_meta.version
         if remote_version is UnknownVersion:
             return (UpdateStatus.UP_TO_DATE, local_version_str)
@@ -460,7 +353,7 @@ class AddonManager:
             return (UpdateStatus.UPDATE_AVAILABLE, local_version_str)
         return (UpdateStatus.UP_TO_DATE, local_version_str)
 
-    def check_for_updates(self) -> List[Tuple[Addon, AddonMetadata]]:
+    def check_for_updates(self) -> list[tuple[Addon, AddonMetadata]]:
         """
         Compares all installed addons against the remote registry to find
         available updates.
@@ -477,12 +370,12 @@ class AddonManager:
                     "Could not fetch remote registry for update check."
                 )
                 return []
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError, yaml.YAMLError) as e:
             logger.error(f"Failed to fetch registry for update check: {e}")
             return []
 
         remote_addons = {addon.name: addon for addon in remote_addons_list}
-        updates_available: List[Tuple[Addon, AddonMetadata]] = []
+        updates_available: list[tuple[Addon, AddonMetadata]] = []
 
         all_installed = list(self.loaded_addons.values()) + list(
             self.disabled_addons.values()
@@ -520,7 +413,8 @@ class AddonManager:
 
         Args:
             addon_name: The canonical name of the addon to load.
-            worker_only: If True, only load worker entry points.
+            worker_only: If True, only load worker entry points
+                (skip frontend to avoid pulling in GTK dependencies).
 
         Returns:
             True if the addon was loaded successfully, False otherwise.
@@ -547,6 +441,11 @@ class AddonManager:
                         )
                         return addon_name in self.loaded_addons
                 except Exception:
+                    logger.debug(
+                        "Skipping addon directory %s during search",
+                        child,
+                        exc_info=True,
+                    )
                     continue
         logger.warning(f"Addon '{addon_name}' not found in addon directories")
         return False
@@ -555,11 +454,33 @@ class AddonManager:
         """
         Scans the addon directories and loads valid addons.
 
+        Addons are loaded in dependency order: each addon's manifest
+        ``requires`` are loaded before it. An addon whose ``requires``
+        references a name that is not installed is skipped (its
+        dependency is unsatisfied).
+
         Args:
-            worker_only: If True, only load worker entry points (skip
-                frontend/widgets to avoid pulling in GTK dependencies).
-                Used by worker processes.
+            worker_only: If True, only load worker entry points
+                (skip frontend to avoid pulling in GTK dependencies).
         """
+        discovered = self._discover_addons()
+        for _name, addon_path, _req in self._order_by_requires(discovered):
+            self.load_addon(addon_path, worker_only=worker_only)
+
+    def _discover_addons(
+        self,
+    ) -> list[tuple[str | None, Path, list[str]]]:
+        """
+        Scan addon directories, returning ``(name, path, requires)``
+        tuples in discovery order.
+
+        The first directory to provide a given canonical name wins;
+        later duplicates are skipped. Addons whose metadata cannot be
+        parsed are included with ``name=None`` so that
+        :meth:`load_addon` can still emit the detailed validation error.
+        """
+        discovered: list[tuple[str | None, Path, list[str]]] = []
+        seen_names: set[str] = set()
         for addon_dir in self.addon_dirs:
             if not addon_dir.exists():
                 if addon_dir == self.install_dir:
@@ -567,27 +488,100 @@ class AddonManager:
                 continue
 
             logger.info(f"Scanning for addons in {addon_dir}...")
-            for child in addon_dir.iterdir():
-                if child.is_dir():
-                    self.load_addon(child.resolve(), worker_only=worker_only)
+            for child in sorted(addon_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                try:
+                    addon = Addon.load_from_directory(
+                        child.resolve(), version=UnknownVersion
+                    )
+                    name = addon.metadata.name
+                    requires = list(addon.metadata.requires)
+                except (
+                    AddonValidationError,
+                    FileNotFoundError,
+                    RuntimeError,
+                ) as e:
+                    logger.debug(
+                        f"Could not pre-parse metadata for {child}: {e}"
+                    )
+                    discovered.append((None, child.resolve(), []))
+                    continue
+                if name in seen_names:
+                    logger.debug(f"Skipping duplicate addon '{name}'")
+                    continue
+                seen_names.add(name)
+                discovered.append((name, child.resolve(), requires))
+        return discovered
 
-        # Build manifest at the end of the batch load
-        self._build_and_update_manifest()
+    def _order_by_requires(
+        self,
+        discovered: list[tuple[str | None, Path, list[str]]],
+    ) -> list[tuple[str | None, Path, list[str]]]:
+        """
+        Topologically sort discovered addons by ``requires``.
+
+        Dependencies are emitted before dependents. Addons with an
+        unsatisfied ``requires`` (a name not present among discovered
+        addons) are dropped. Cycles are broken by falling back to
+        discovery order (with a warning). Entries with ``name=None``
+        (unparseable metadata) are appended at the end in discovery
+        order so :meth:`load_addon` logs their error.
+        """
+        by_name = {
+            name: (name, path, requires)
+            for (name, path, requires) in discovered
+            if name is not None
+        }
+        ordered: list[tuple[str | None, Path, list[str]]] = []
+        state: dict[str, str] = {}
+
+        def visit(name: str) -> bool:
+            if name not in by_name:
+                return False
+            st = state.get(name)
+            if st == "done":
+                return True
+            if st == "visiting":
+                logger.warning(
+                    f"Circular 'requires' dependency involving "
+                    f"'{name}'; breaking the cycle."
+                )
+                return True
+            state[name] = "visiting"
+            _, path, requires = by_name[name]
+            for dep in requires:
+                if not visit(dep):
+                    state.pop(name, None)
+                    logger.warning(
+                        f"Addon '{name}' requires '{dep}', which is not "
+                        "installed; skipping."
+                    )
+                    return False
+            state[name] = "done"
+            ordered.append((name, path, requires))
+            return True
+
+        for name, _p, _r in discovered:
+            if name is not None:
+                visit(name)
+
+        unnamed = [e for e in discovered if e[0] is None]
+        return ordered + unnamed
 
     def load_addon(
         self,
         addon_path: Path,
         worker_only: bool = False,
-        version: Optional[VersionType] = None,
+        version: VersionType | None = None,
     ):
         """
         Loads a single addon from a directory.
 
         Args:
             addon_path: Path to the addon directory.
-            worker_only: If True, only load worker entry points (skip
-                frontend/widgets to avoid pulling in GTK dependencies).
-                Used by worker processes.
+            worker_only: If True, only load worker entry points
+                (skip frontend to avoid pulling in GTK dependencies).
             version: If provided, skip version resolution and use
                 this version directly.
         """
@@ -645,7 +639,10 @@ class AddonManager:
                 return
 
             if self.addon_config:
-                state = self.addon_config.get_state(addon_name)
+                state = self.addon_config.get_state(
+                    addon_name,
+                    default=addon.metadata.default_state,
+                )
                 if state == ConfigAddonState.DISABLED:
                     logger.info(
                         f"Addon '{addon_name}' is disabled, skipping load"
@@ -697,11 +694,8 @@ class AddonManager:
 
         except (AddonValidationError, FileNotFoundError) as e:
             logger.warning(f"Skipping invalid addon at {addon_path}: {e}")
-        except Exception as e:
-            logger.error(
-                f"Failed to load addon at {addon_path}: {e}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception(f"Failed to load addon at {addon_path}")
 
     def _check_version_compatibility(self, addon: Addon):
         """
@@ -719,7 +713,7 @@ class AddonManager:
             return UpdateStatus.UP_TO_DATE
         return UpdateStatus.INCOMPATIBLE
 
-    def _check_license(self, addon: Addon) -> Tuple[bool, str, str]:
+    def _check_license(self, addon: Addon) -> tuple[bool, str, str]:
         """
         Check if addon requires and has valid license.
 
@@ -738,7 +732,7 @@ class AddonManager:
             addon.metadata.name, license_config.to_dict()
         )
 
-    def _import_and_register(self, addon: Addon, entry_point: Optional[str]):
+    def _import_and_register(self, addon: Addon, entry_point: str | None):
         """
         Imports the module specified by entry_point and registers it.
 
@@ -787,7 +781,7 @@ class AddonManager:
                 self.loaded_addons[name] = addon
                 if name in self._load_errors:
                     del self._load_errors[name]
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - addon import boundary
             error_msg = str(e)
             logger.error(f"Error importing addon {name}: {e}")
             self._load_errors[name] = error_msg
@@ -863,7 +857,7 @@ class AddonManager:
 
     def _resolve_entry_point_path(
         self, entry_point: str, root_path: Path
-    ) -> Optional[Path]:
+    ) -> Path | None:
         """
         Resolve a module path to a file path.
 
@@ -912,10 +906,13 @@ class AddonManager:
         compiled_count = 0
         for po_file in locales_dir.rglob("*.po"):
             mo_file = po_file.with_suffix(".mo")
-            if force or needs_compilation(po_file, mo_file):
-                if compile_po_to_mo(po_file, mo_file):
-                    compiled_count += 1
-                    logger.debug(f"Compiled {po_file} -> {mo_file}")
+            if (
+                force
+                or needs_compilation(po_file, mo_file)
+                and compile_po_to_mo(po_file, mo_file)
+            ):
+                compiled_count += 1
+                logger.debug(f"Compiled {po_file} -> {mo_file}")
 
         if compiled_count > 0:
             logger.info(f"Compiled {compiled_count} translation file(s)")
@@ -943,18 +940,19 @@ class AddonManager:
             return self._download_addon_zip(git_url, dest)
 
         from git import Repo
+        from git.exc import GitError
 
         logger.info(f"Cloning {git_url} to staging area...")
         try:
             Repo.clone_from(git_url, dest)
             logger.info(f"Successfully cloned {git_url}")
             return True
-        except Exception as e:
+        except GitError as e:
             logger.error(f"Git clone failed: {e}")
             return False
 
     def _resolve_addon_version(
-        self, staging_path: Path, git_url: Optional[str] = None
+        self, staging_path: Path, git_url: str | None = None
     ) -> VersionType:
         """
         Determine the version of an addon in a staging directory.
@@ -985,7 +983,6 @@ class AddonManager:
             return version
         except RuntimeError:
             logger.debug("No git tag version found")
-            pass
         version = self._version_from_manifest(staging_path) or UnknownVersion
         logger.info(f"Using manifest version: {version}")
         return version
@@ -994,7 +991,7 @@ class AddonManager:
         self,
         addon: Addon,
         git_url: str,
-        addon_id: Optional[str],
+        addon_id: str | None,
     ) -> Path:
         """
         Copy validated addon from staging to the install directory
@@ -1023,14 +1020,12 @@ class AddonManager:
         logger.info(f"Successfully installed addon to {final_path}")
         self.load_addon(final_path, version=version)
         call_registration_hooks(self.plugin_mgr, registries=self.registries)
-        self._build_and_update_manifest()
-        self._restart_workers()
         logger.info(f"Addon '{addon_name}' fully loaded and registered")
         return final_path
 
     def install_addon(
-        self, git_url: str, addon_id: Optional[str] = None
-    ) -> Optional[Path]:
+        self, git_url: str, addon_id: str | None = None
+    ) -> Path | None:
         """
         Install an addon from a remote Git repository.
 
@@ -1046,7 +1041,7 @@ class AddonManager:
         logger.info(
             f"install_addon called: git_url={git_url}, addon_id={addon_id}"
         )
-        result: Optional[Path] = None
+        result: Path | None = None
         with tempfile.TemporaryDirectory(
             ignore_cleanup_errors=True
         ) as temp_dir:
@@ -1068,8 +1063,8 @@ class AddonManager:
             except AddonValidationError as e:
                 logger.error(f"Addon validation failed: {e}")
                 return None
-            except Exception as e:
-                logger.error(f"Installation failed: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Installation failed")
                 return None
 
         logger.info(f"install_addon returning: {result}")
@@ -1100,7 +1095,12 @@ class AddonManager:
                         if temp_addon.metadata.name == addon_name:
                             self._cleanup_directory(child)
                             return True
-                    except Exception as e:
+                    except (
+                        AddonValidationError,
+                        FileNotFoundError,
+                        RuntimeError,
+                        OSError,
+                    ) as e:
                         logger.error(
                             f"Failed to uninstall addon {addon_name}: {e}"
                         )
@@ -1126,7 +1126,7 @@ class AddonManager:
                     mod_path = str(Path(module.__file__).resolve())
                     if mod_path.startswith(addon_path_str):
                         modules_to_unload.append(name)
-                except Exception:
+                except OSError:
                     logger.warning(
                         f"Could not resolve path for module {name}, "
                         "skipping unload."
@@ -1159,18 +1159,16 @@ class AddonManager:
             if self.addon_config:
                 self.addon_config.remove_state(addon_name)
 
-            self._build_and_update_manifest()
-            self._restart_workers()
             return True
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - best-effort uninstall
             logger.error(f"Failed to uninstall {addon_name}: {e}")
             return False
 
     @staticmethod
     def _parse_git_url(
         git_url: str,
-    ) -> Optional[Tuple[str, str, str]]:
+    ) -> tuple[str, str, str] | None:
         """
         Extract (host, owner, repo) from an HTTPS git URL.
 
@@ -1182,14 +1180,13 @@ class AddonManager:
         if not parsed.hostname:
             return None
         path = parsed.path.rstrip("/")
-        if path.endswith(".git"):
-            path = path[:-4]
+        path = path.removesuffix(".git")
         parts = path.strip("/").split("/")
         if len(parts) < 2:
             return None
         return parsed.hostname, parts[0], parts[1]
 
-    def _get_remote_tag_version(self, git_url: str) -> Optional[str]:
+    def _get_remote_tag_version(self, git_url: str) -> str | None:
         """
         Query the platform REST API for the latest tag.
 
@@ -1215,18 +1212,17 @@ class AddonManager:
                 if resp.status != 200:
                     return None
                 tags = json.loads(resp.read())
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError) as e:
             logger.debug(f"Remote tag lookup failed for {git_url}: {e}")
             return None
         if not tags or not isinstance(tags, list):
             return None
         name = tags[0].get("name", "")
-        if name.startswith("v"):
-            name = name[1:]
+        name = name.removeprefix("v")
         return name or None
 
     @staticmethod
-    def _git_url_to_zip(git_url: str) -> Optional[str]:
+    def _git_url_to_zip(git_url: str) -> str | None:
         """Convert a git repository URL to a downloadable zip URL."""
         parsed = AddonManager._parse_git_url(git_url)
         if parsed is None:
@@ -1239,7 +1235,7 @@ class AddonManager:
         return GITEA_ZIP_URL.format(host=host, owner=owner, repo=repo)
 
     @staticmethod
-    def _version_from_manifest(addon_path: Path) -> Optional[str]:
+    def _version_from_manifest(addon_path: Path) -> str | None:
         """Read the version field from rayforge-addon.yaml."""
         manifest = addon_path / "rayforge-addon.yaml"
         if manifest.exists():
@@ -1247,12 +1243,12 @@ class AddonManager:
                 data = yaml.safe_load(manifest.read_text())
                 v = data.get("version") if isinstance(data, dict) else None
                 return str(v) if v else None
-            except Exception:
+            except yaml.YAMLError:
                 pass
         return None
 
     @staticmethod
-    def _fetch_zip_data(zip_url: str) -> Optional[io.BytesIO]:
+    def _fetch_zip_data(zip_url: str) -> io.BytesIO | None:
         """Download a zip archive from a URL. Returns None on failure."""
         try:
             with urllib.request.urlopen(zip_url, timeout=30) as resp:
@@ -1260,7 +1256,7 @@ class AddonManager:
                     logger.error(f"Zip download failed: HTTP {resp.status}")
                     return None
                 return io.BytesIO(resp.read())
-        except Exception as e:
+        except (OSError, TimeoutError) as e:
             logger.error(f"Zip download failed: {e}")
             return None
 
@@ -1313,8 +1309,7 @@ class AddonManager:
         parsed = urlparse(git_url)
         path = parsed.path
         repo_name = path.rstrip("/").split("/")[-1]
-        if repo_name.endswith(".git"):
-            repo_name = repo_name[:-4]
+        repo_name = repo_name.removesuffix(".git")
         return repo_name
 
     def _cleanup_directory(self, addon_path: Path):
@@ -1325,7 +1320,7 @@ class AddonManager:
             if addon_path.exists():
                 shutil.rmtree(addon_path)
                 logger.debug(f"Cleaned up directory: {addon_path}")
-        except Exception as e:
+        except OSError as e:
             logger.error(f"Failed to clean up {addon_path}: {e}")
 
     def enable_addon(self, addon_name: str) -> bool:
@@ -1358,8 +1353,6 @@ class AddonManager:
             )
             logger.info(f"Addon '{addon_name}' enabled and loaded")
 
-        self._build_and_update_manifest()
-        self._restart_workers()
         self.addon_state_changed.send(self, addon_name=addon_name)
         return True
 
@@ -1388,8 +1381,6 @@ class AddonManager:
             return False
 
         self._do_unload_addon(addon_name, addon)
-        self._build_and_update_manifest()
-        self._restart_workers()
         self.addon_state_changed.send(self, addon_name=addon_name)
         return True
 
@@ -1409,7 +1400,7 @@ class AddonManager:
                 mod_path = str(Path(module.__file__).resolve())
                 if mod_path.startswith(addon_path_str):
                     modules_to_unload.append(name)
-            except Exception:
+            except OSError:
                 logger.warning(
                     f"Could not resolve path for module {name}, "
                     "skipping unload."
@@ -1445,7 +1436,7 @@ class AddonManager:
                     f"Unregistered {count} items from {name} for {addon_name}"
                 )
 
-    def complete_pending_unloads(self) -> List[str]:
+    def complete_pending_unloads(self) -> list[str]:
         """
         Complete any pending addon unloads.
 
@@ -1465,17 +1456,13 @@ class AddonManager:
                 self._do_unload_addon(addon_name, addon)
                 unloaded.append(addon_name)
 
-        if unloaded:
-            self._build_and_update_manifest()
-            self._restart_workers()
-
         return unloaded
 
     def has_pending_unloads(self) -> bool:
         """Check if there are addons waiting to be unloaded."""
         return len(self._pending_unloads) > 0
 
-    def get_pending_unloads(self) -> Set[str]:
+    def get_pending_unloads(self) -> set[str]:
         """Get the set of addon names pending unload."""
         return self._pending_unloads.copy()
 
@@ -1504,7 +1491,7 @@ class AddonManager:
             return AddonState.LICENSE_REQUIRED.value
         return AddonState.NOT_INSTALLED.value
 
-    def get_addon_error(self, addon_name: str) -> Optional[str]:
+    def get_addon_error(self, addon_name: str) -> str | None:
         """Get the error message for an addon that failed to load."""
         return self._load_errors.get(addon_name)
 
@@ -1546,15 +1533,13 @@ class AddonManager:
         call_registration_hooks(self.plugin_mgr, registries=self.registries)
         if addon_name in self.loaded_addons:
             logger.info(f"Addon '{addon_name}' reloaded successfully")
-            self._build_and_update_manifest()
-            self._restart_workers()
             self.addon_state_changed.send(self, addon_name=addon_name)
             return True
         else:
             logger.error(f"Failed to reload addon '{addon_name}'")
             return False
 
-    def _find_dependents(self, addon_name: str) -> List[str]:
+    def _find_dependents(self, addon_name: str) -> list[str]:
         """
         Find all enabled addons that depend on the given addon.
 
@@ -1570,7 +1555,7 @@ class AddonManager:
                     break
         return dependents
 
-    def can_disable(self, addon_name: str) -> Tuple[bool, str]:
+    def can_disable(self, addon_name: str) -> tuple[bool, str]:
         """
         Check if an addon can be disabled.
 
@@ -1585,7 +1570,7 @@ class AddonManager:
 
     def get_missing_dependencies(
         self, addon_name: str
-    ) -> List[Tuple[str, Optional[str]]]:
+    ) -> list[tuple[str, str | None]]:
         """
         Get missing or disabled dependencies for an addon.
 
@@ -1609,7 +1594,7 @@ class AddonManager:
 
     def enable_addon_with_deps(
         self, addon_name: str
-    ) -> Tuple[bool, List[str]]:
+    ) -> tuple[bool, list[str]]:
         """
         Enable an addon along with its missing dependencies.
 
@@ -1652,7 +1637,7 @@ class AddonManager:
         enabled.append(addon_name)
         return True, enabled
 
-    def get_license_required_addon(self, addon_name: str) -> Optional[Addon]:
+    def get_license_required_addon(self, addon_name: str) -> Addon | None:
         """
         Get an addon that requires a license.
 
@@ -1661,7 +1646,7 @@ class AddonManager:
         """
         return self.license_required_addons.get(addon_name)
 
-    def recheck_license(self, addon_name: str) -> Tuple[bool, str]:
+    def recheck_license(self, addon_name: str) -> tuple[bool, str]:
         """
         Recheck the license for an addon and attempt to load it if valid.
 
@@ -1685,13 +1670,11 @@ class AddonManager:
             call_registration_hooks(
                 self.plugin_mgr, registries=self.registries
             )
-            self._build_and_update_manifest()
-            self._restart_workers()
             return True, "License validated, addon loaded successfully"
 
         return False, "Failed to load addon after license validation"
 
-    def get_all_license_required_addons(self) -> Dict[str, Addon]:
+    def get_all_license_required_addons(self) -> dict[str, Addon]:
         """
         Get all addons that require a license.
 
@@ -1700,7 +1683,7 @@ class AddonManager:
         """
         return dict(self.license_required_addons)
 
-    def get_all_addons(self) -> Dict[str, Addon]:
+    def get_all_addons(self) -> dict[str, Addon]:
         """
         Get all addons from all categories.
 

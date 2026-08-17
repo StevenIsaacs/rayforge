@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from .base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
-    from raygeo.ops import Ops
 
     from ...core.workpiece import WorkPiece
-    from ...shared.tasker.progress import ProgressContext
 
 
 class PlaceholderTransformer(OpsTransformer):
@@ -48,17 +46,18 @@ class PlaceholderTransformer(OpsTransformer):
         """Returns the preserved original configuration."""
         return self._config.copy()
 
-    def run(
+    def to_spec(
         self,
-        ops: "Ops",
-        workpiece: Optional["WorkPiece"] = None,
-        context: Optional["ProgressContext"] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        pass
+        workpiece: WorkPiece | None,
+        stock_geometries: list[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ):
+        raise RuntimeError(
+            f"Transformer '{self._original_name}' is not available "
+            f"and cannot be run"
+        )
 
     @classmethod
-    def from_dict(cls, data: dict) -> "PlaceholderTransformer":
+    def from_dict(cls, data: dict) -> PlaceholderTransformer:
         original_name = data.get("name", "Unknown")
         return cls(original_name, data)

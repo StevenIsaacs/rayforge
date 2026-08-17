@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 from ..constraints import HorizontalConstraint, VerticalConstraint
 from ..entities import Line, Point
@@ -32,7 +32,7 @@ class GridCommand(SketchChangeCommand):
         self.cell_width = cell_width
         self.cell_height = cell_height
         self.construction = construction
-        self.add_cmd: Optional[AddItemsCommand] = None
+        self.add_cmd: AddItemsCommand | None = None
 
     @staticmethod
     def calculate_geometry(
@@ -42,7 +42,7 @@ class GridCommand(SketchChangeCommand):
         cell_width: float,
         cell_height: float,
         construction: bool = True,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Calculates points, entities, and constraints for a grid.
 
@@ -73,8 +73,8 @@ class GridCommand(SketchChangeCommand):
             temp_id_counter -= 1
             return temp_id_counter
 
-        points: List[Point] = []
-        point_ids: List[int] = []
+        points: list[Point] = []
+        point_ids: list[int] = []
 
         for row in range(rows):
             for col in range(cols):
@@ -87,8 +87,8 @@ class GridCommand(SketchChangeCommand):
         def get_point_id(row: int, col: int) -> int:
             return point_ids[row * cols + col]
 
-        entities: List[Line] = []
-        constraints: List[Any] = []
+        entities: list[Line] = []
+        constraints: list[Any] = []
 
         for row in range(rows):
             for col in range(cols - 1):

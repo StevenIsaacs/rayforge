@@ -1,17 +1,16 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gdk, GLib, Gtk
 
-from ...context import get_context
 from ...core.stock import StockItem
+from ..icons import get_icon
 from ..shared.patched_dialog_window import PatchedDialogWindow
-from ..shared.unit_spin_row import UnitSelectorSpinRow
-from .material_selector import MaterialSelectorDialog
+from ..shared.pref_rows.length_spin_row import LengthSpinRow
+from .material_selector import MaterialRow
 
 if TYPE_CHECKING:
-    from ...core.material import Material
     from ...doceditor.editor import DocEditor
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,7 @@ class StockPropertiesDialog(PatchedDialogWindow):
         # Used to delay updates from continuous-change widgets
         self._debounce_timer = 0
         self._debounced_callback = None
-        self._debounced_args: Tuple = ()
+        self._debounced_args: tuple = ()
 
         # Connect to stock item updates to refresh UI
         self.stock_item.updated.connect(self.on_stock_item_updated)
@@ -72,34 +71,52 @@ class StockPropertiesDialog(PatchedDialogWindow):
         self.name_row.connect("changed", self.on_name_changed)
         properties_group.add(self.name_row)
 
-        # Thickness field using UnitSelectorSpinRow
-        self.thickness_selector = UnitSelectorSpinRow(
-            quantity="length",
-            title=_("Thickness"),
-            subtitle=_("Material thickness"),
-            max_value_in_base=999,
+        # Thickness field
+        self.thickness_row = LengthSpinRow(
+            _("Thickness"),
+            _("Material thickness"),
+            upper=999,
         )
         if self.stock_item.thickness is not None:
-            self.thickness_selector.set_value_in_base_units(
+            self.thickness_row.set_value_in_base_units(
                 self.stock_item.thickness
             )
-        self.thickness_selector.changed.connect(self.on_thickness_changed)
-        properties_group.add(self.thickness_selector.row)
+        self.thickness_row.value_changed.connect(self.on_thickness_changed)
+        properties_group.add(self.thickness_row)
 
         # Material display row
-        self.material_row = Adw.ActionRow()
-        self.material_row.set_title(_("Material"))
-
-        # Add a button to open the material selector
-        self.material_button = Gtk.Button(label=_("Select"))
-        self.material_button.set_valign(Gtk.Align.CENTER)
-        self.material_button.connect("clicked", self.on_select_material)
-        self.material_row.add_suffix(self.material_button)
-
+        self.material_row = MaterialRow(
+            _("Material"),
+            on_select=self._on_material_selected,
+        )
         properties_group.add(self.material_row)
 
+        # Per-instance color row (only usable for tintable materials; for
+        # other materials the color comes from the material definition).
+        self.color_row = Adw.ActionRow(title=_("Color"))
+        color_dialog = Gtk.ColorDialog()
+        color_dialog.set_with_alpha(False)
+        self.color_button = Gtk.ColorDialogButton(dialog=color_dialog)
+        self.color_button.set_size_request(45, 45)
+        self.color_button.set_valign(Gtk.Align.CENTER)
+        self.color_button.connect("notify::rgba", self._on_color_set)
+        # Clear button reverts to the material's default color (inherit).
+        self._clear_color_button = Gtk.Button(child=get_icon("clear-symbolic"))
+        self._clear_color_button.add_css_class("flat")
+        self._clear_color_button.set_valign(Gtk.Align.CENTER)
+        self._clear_color_button.set_tooltip_text(
+            _("Use the material's default color")
+        )
+        self._clear_color_button.connect("clicked", self._on_clear_color)
+        self._clear_color_button.set_visible(False)
+        self.color_row.add_suffix(self.color_button)
+        self.color_row.add_suffix(self._clear_color_button)
+        properties_group.add(self.color_row)
+        self._updating_color = False
+
         # Initialize material display
-        self._update_material_display()
+        self.material_row.set_material(self.stock_item.material)
+        self._update_color_display()
 
         content_box.append(properties_group)
 
@@ -141,20 +158,13 @@ class StockPropertiesDialog(PatchedDialogWindow):
         if new_name and new_name != self.stock_item.name:
             self._debounce(self._apply_name_change, new_name)
 
-    def on_thickness_changed(self, selector: UnitSelectorSpinRow):
-        """Handle thickness selector changes with instant apply."""
-        new_thickness = selector.get_value_in_base_units()
+    def on_thickness_changed(self, row: LengthSpinRow):
+        """Handle thickness changes with instant apply."""
+        new_thickness = row.get_value_in_base_units()
         if new_thickness != self.stock_item.thickness:
             self._debounce(self._apply_thickness_change, new_thickness)
 
-    def on_select_material(self, button: Gtk.Button):
-        """Shows the material selector dialog."""
-        dialog = MaterialSelectorDialog(
-            parent=self, on_select_callback=self._on_material_selected
-        )
-        dialog.present()
-
-    def _on_material_selected(self, material_uid: Optional[str]):
+    def _on_material_selected(self, material_uid: str | None):
         """Callback for when a material is selected from the dialog."""
         if material_uid is not None:
             self.editor.stock.set_stock_material(self.stock_item, material_uid)
@@ -173,12 +183,13 @@ class StockPropertiesDialog(PatchedDialogWindow):
 
         # Update the thickness field if it has changed
         if self.stock_item.thickness is not None:
-            self.thickness_selector.set_value_in_base_units(
+            self.thickness_row.set_value_in_base_units(
                 self.stock_item.thickness
             )
 
         # Update the material display if it has changed
-        self._update_material_display()
+        self.material_row.set_material(self.stock_item.material)
+        self._update_color_display()
 
     def _apply_thickness_change(self, new_thickness):
         """Apply the thickness change."""
@@ -187,34 +198,53 @@ class StockPropertiesDialog(PatchedDialogWindow):
                 self.stock_item, new_thickness
             )
 
-    def _update_material_display(self):
-        """Update the material display label."""
-        if not self.stock_item.material_uid:
-            self.material_row.set_subtitle(_("None"))
+    def _on_color_set(self, button: Gtk.ColorDialogButton, pspec=None):
+        """Apply a per-instance color chosen in the color picker."""
+        if self._updating_color:
             return
+        rgba = button.get_rgba()
+        color = (
+            f"#{int(rgba.red * 255):02x}"
+            f"{int(rgba.green * 255):02x}"
+            f"{int(rgba.blue * 255):02x}"
+        )
+        self.editor.stock.set_stock_color(self.stock_item, color)
 
+    def _on_clear_color(self, button: Gtk.Button):
+        """Clear the per-instance color (revert to the material default)."""
+        self.editor.stock.set_stock_color(self.stock_item, None)
+
+    def _update_color_display(self):
+        """Refresh the per-instance color row to match the stock item."""
         material = self.stock_item.material
-        if material:
-            library_name = self._get_material_library_name(material)
-            if library_name:
-                self.material_row.set_subtitle(
-                    f"{library_name}: {material.name}"
-                )
-            else:
-                self.material_row.set_subtitle(material.name)
-        else:
-            self.material_row.set_subtitle(
-                f"❓ {self.stock_item.material_uid}"
+        tintable = material is not None and material.appearance.tintable
+        self.color_row.set_sensitive(tintable)
+
+        # Only show the clear button while a per-instance override exists.
+        self._clear_color_button.set_visible(
+            tintable and self.stock_item.color is not None
+        )
+
+        effective = self.stock_item.get_effective_color()
+        if not tintable:
+            self.color_row.set_subtitle(_("Set by the material definition"))
+        elif self.stock_item.color == StockItem.COLOR_NONE:
+            self.color_row.set_subtitle(_("No color"))
+        elif self.stock_item.color:
+            self.color_row.set_subtitle(
+                _("{color} (custom)").format(color=self.stock_item.color)
             )
+        elif effective:
+            self.color_row.set_subtitle(
+                _("{color} (material default)").format(color=effective)
+            )
+        else:
+            self.color_row.set_subtitle(_("Material default (no color)"))
 
-    def _get_material_library_name(
-        self, material: "Material"
-    ) -> Optional[str]:
-        """Get the display name of the library that contains this material."""
-        material_mgr = get_context().material_mgr
-        # Search through all libraries to find which one contains this material
-        for library in material_mgr.get_libraries():
-            if library.get_material(material.uid):
-                return library.display_name
-
-        return None
+        # Show the effective color in the picker without triggering apply.
+        self._updating_color = True
+        if effective:
+            rgba = Gdk.RGBA()
+            if rgba.parse(effective):
+                self.color_button.set_rgba(rgba)
+        self._updating_color = False

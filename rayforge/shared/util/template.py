@@ -1,10 +1,10 @@
 import re
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...machine.models.machine import Machine
     from ...machine.models.macro import Macro
-    from ...pipeline.encoder.gcode import GcodeContext
+    from ...pipeline.encoder.context import GcodeContext
 
 
 class TemplateFormatter:
@@ -53,7 +53,7 @@ class TemplateFormatter:
             template_string,
         )
 
-    def expand_macro(self, macro: "Macro") -> List[str]:
+    def expand_macro(self, macro: "Macro") -> list[str]:
         """
         Public entry point to fully expand a macro.
 
@@ -68,12 +68,12 @@ class TemplateFormatter:
 
     def _recursive_expand(
         self, macro: "Macro", call_stack: set[str]
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Recursively expands a macro, processing includes and formatting
         variables.
         """
-        output_lines: List[str] = []
+        output_lines: list[str] = []
 
         if macro.name in call_stack:
             error_msg = (

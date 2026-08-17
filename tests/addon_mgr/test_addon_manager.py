@@ -1,9 +1,9 @@
 import io
 import sys
 import tempfile
+import urllib.error
 import zipfile
 from pathlib import Path
-from typing import List, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
@@ -34,7 +34,7 @@ def create_addon_files(
     version: str = "1.0.0",
     author_name: str = "Test Author",
     author_email: str = "test@example.com",
-    worker: Optional[str] = "test_plugin.worker",
+    worker: str | None = "test_plugin.worker",
     api_version: int = 16,
 ) -> Path:
     """Create a minimal valid addon directory on disk."""
@@ -89,9 +89,9 @@ def manager():
 def create_mock_addon(
     name: str = "test_plugin",
     version: str = "1.0.0",
-    worker: Optional[str] = "plugin",
-    depends: Optional[List] = None,
-    requires: Optional[List] = None,
+    worker: str | None = "plugin",
+    depends: list | None = None,
+    requires: list | None = None,
 ) -> MagicMock:
     """Creates a MagicMock that accurately mimics a Addon object."""
     if depends is None:
@@ -395,7 +395,6 @@ class TestAddonManagerInstallation:
 
         with (
             patch.object(manager, "_fetch_addon_source") as mock_fetch,
-            patch.object(manager, "_restart_workers"),
         ):
             mock_fetch.side_effect = lambda url, dest: (
                 manager._download_addon_zip(url, dest)
@@ -428,7 +427,6 @@ class TestAddonManagerInstallation:
 
         with (
             patch.object(manager, "_fetch_addon_source") as mock_fetch,
-            patch.object(manager, "_restart_workers"),
         ):
             mock_fetch.side_effect = lambda url, dest: (
                 manager._download_addon_zip(url, dest)
@@ -515,7 +513,6 @@ class TestAddonManagerInstallation:
 
         with (
             patch.object(manager, "_fetch_addon_source") as mock_fetch,
-            patch.object(manager, "_restart_workers"),
         ):
             mock_fetch.side_effect = lambda url, dest: (
                 manager._download_addon_zip(url, dest)
@@ -532,7 +529,6 @@ class TestAddonManagerInstallation:
 
         with (
             patch.object(manager, "_fetch_addon_source") as mock_fetch,
-            patch.object(manager, "_restart_workers"),
         ):
             mock_fetch.side_effect = lambda url, dest: (
                 manager._download_addon_zip(url, dest)
@@ -690,7 +686,9 @@ class TestAddonManagerUpdates:
             name="pkg1", version="1.0.0"
         )
         with patch.object(
-            manager, "fetch_registry", side_effect=Exception("Network error")
+            manager,
+            "fetch_registry",
+            side_effect=urllib.error.URLError("Network error"),
         ):
             updates = manager.check_for_updates()
         assert len(updates) == 0
@@ -832,7 +830,7 @@ class TestAddonManagerHelpers:
         """Test that _download_addon_zip returns False on network error."""
         with patch(
             "urllib.request.urlopen",
-            side_effect=Exception("Connection refused"),
+            side_effect=urllib.error.URLError("Connection refused"),
         ):
             dest = tmp_path / "output"
             dest.mkdir()

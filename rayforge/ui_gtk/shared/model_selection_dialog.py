@@ -3,7 +3,6 @@
 import logging
 from gettext import gettext as _
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from gi.repository import Adw, Gtk
 
@@ -24,13 +23,13 @@ class ModelSelectionDialog(Adw.MessageDialog):
 
     def __init__(
         self,
-        current_model_path: Optional[str] = None,
+        current_model_path: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self._current_model_path = current_model_path
-        self._selected_model_path: Optional[str] = None
-        self._row_paths: Dict[Adw.ActionRow, str] = {}
+        self._selected_model_path: str | None = None
+        self._row_paths: dict[Adw.ActionRow, str] = {}
         self._setup_ui()
 
     def _setup_ui(self):
@@ -44,7 +43,7 @@ class ModelSelectionDialog(Adw.MessageDialog):
         self._preview_box.set_size_request(512, 288)
 
         model_mgr = get_context().model_mgr
-        models: List[Model] = model_mgr.get_all_models()
+        models: list[Model] = model_mgr.get_all_models()
 
         scrolled = Gtk.ScrolledWindow(
             min_content_height=200,
@@ -122,5 +121,5 @@ class ModelSelectionDialog(Adw.MessageDialog):
         preview.set_hexpand(True)
         self._preview_box.append(preview)
 
-    def get_selected_model_path(self) -> Optional[str]:
+    def get_selected_model_path(self) -> str | None:
         return self._selected_model_path

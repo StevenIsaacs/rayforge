@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
+from ..core.color_preset import get_color_preset_mgr
 from ..core.step_registry import step_registry
 from ..core.undo import ChangePropertyCommand, DictItemCommand
+from ..core.vectorization_spec import LayerSource, PassthroughSpec
 
 if TYPE_CHECKING:
+    from ..core.recipe import Recipe
     from ..core.step import Step
     from .editor import DocEditor
 
@@ -18,14 +21,14 @@ logger = logging.getLogger(__name__)
 class StepCmd:
     """Handles commands related to step settings."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
         self._doc = editor.doc
         self._context = editor.context
 
     def set_step_param(
         self,
-        target_dict: Dict[str, Any],
+        target_dict: dict[str, Any],
         key: str,
         new_value: Any,
         name: str,
@@ -46,9 +49,11 @@ class StepCmd:
             old_value = target_dict.get(key)
             if old_value is None:
                 pass
-            elif isinstance(old_value, (int, float)):
-                if abs(new_value - old_value) < 1e-6:
-                    return
+            elif (
+                isinstance(old_value, (int, float))
+                and abs(new_value - old_value) < 1e-6
+            ):
+                return
         elif new_value == target_dict.get(key):
             return
 
@@ -61,7 +66,7 @@ class StepCmd:
         )
         self._editor.history_manager.execute(command)
 
-    def apply_best_recipe_to_step(self, step: "Step"):
+    def apply_best_recipe_to_step(self, step: Step):
         """
         Finds the best matching recipe for a given step and applies its
         settings. This modifies the step object directly and is not undoable
@@ -72,15 +77,14 @@ class StepCmd:
         stock_items = self._doc.stock_items
         machine = self._context.machine
 
-        # Query the RecipeManager for the best match for ANY supported
-        # capability
-        matching_recipes = []
-        if step.capabilities:
-            recipe_mgr = self._context.recipe_mgr
+        # Query the RecipeManager for the best match for this step type.
+        matching_recipes: list = []
+        recipe_mgr = self._context.recipe_mgr
+        if recipe_mgr is not None:
             matching_recipes = recipe_mgr.find_recipes(
                 stock_items=stock_items,
-                capabilities=step.capabilities,
                 machine=machine,
+                step_type=type(step).__name__,
             )
 
         # If matching_recipes is not empty, apply the best one
@@ -89,15 +93,56 @@ class StepCmd:
             logger.info(
                 f"Applying best recipe '{best_recipe.name}' to new step."
             )
-            # Apply the settings to the step object
-            for key, value in best_recipe.settings.items():
-                if hasattr(step, key):
-                    setattr(step, key, value)
+            # Apply the settings to the step object. Names are gated
+            # through the step type's recipe_keys allowlist; the step
+            # itself decides how to apply each value (setter when
+            # available, plain assignment otherwise).
+            for key, value in best_recipe.get_settings_for_step(step).items():
+                step.set_recipe_value(key, value)
+
+            # Apply transformer settings directly to the freshly-created
+            # step. Per-workpiece and per-step dicts are mutated in place.
+            self._apply_recipe_transformers_to_step(step, best_recipe)
 
             # Store a reference to the applied recipe
             step.applied_recipe_uid = best_recipe.uid
 
-    def rename_step(self, step: "Step", new_name: str):
+    @staticmethod
+    def _apply_recipe_transformers_to_step(step: Step, recipe: Recipe) -> None:
+        """Apply a recipe's transformer settings to a fresh step.
+
+        Direct mutation of the step's per-workpiece and per-step
+        transformer dicts, used by the auto-apply path. For each recipe
+        transformer dict with ``recipe_apply=True``, update the step's
+        matching dict (by name) with ``enabled`` and the transformer's
+        params. Only param keys the step's dict already declares are
+        written (recipe files are user-provided).
+        """
+        step_dicts_by_name: dict[str, dict] = {}
+        for d in list(step.per_workpiece_transformers_dicts) + list(
+            step.per_step_transformers_dicts
+        ):
+            name = d.get("name")
+            if name and name not in step_dicts_by_name:
+                step_dicts_by_name[name] = d
+
+        for recipe_dict in recipe.transformer_dicts or []:
+            if not recipe_dict.get("recipe_apply", True):
+                continue
+            name = recipe_dict.get("name")
+            if not name:
+                continue
+            step_dict = step_dicts_by_name.get(name)
+            if step_dict is None:
+                continue
+            for key, value in recipe_dict.items():
+                if key in ("name", "recipe_apply"):
+                    continue
+                if key not in step_dict:
+                    continue
+                step_dict[key] = value
+
+    def rename_step(self, step: Step, new_name: str):
         """Renames a step with an undoable command."""
         if new_name == step.name:
             return
@@ -142,6 +187,11 @@ class StepCmd:
         Adds default steps to newly imported layers.
 
         For each layer:
+        - If it was imported from a color source whose color matches a
+          color rule, a step of the rule's step type is created. If that
+          step type is not registered (e.g. its addon was uninstalled),
+          it falls back to the default behavior below and logs a
+          warning.
         - If workpieces have fills: add Contour + Engrave steps
         - If workpieces have only unfilled vectors: add Contour only
         """
@@ -151,6 +201,17 @@ class StepCmd:
         for layer in layers:
             workflow = layer.workflow
             if not workflow or workflow.has_steps():
+                continue
+
+            rule_cls = self._step_class_from_color_rule(layer)
+            if rule_cls is not None:
+                step = rule_cls.create(self._context)
+                self.apply_best_recipe_to_step(step)
+                workflow.add_step(step)
+                logger.info(
+                    f"Added default '{step.typelabel}' step to "
+                    f"layer '{layer.name}' (color rule)."
+                )
                 continue
 
             if contour_cls:
@@ -170,3 +231,47 @@ class StepCmd:
                     f"Added default '{step.typelabel}' step to "
                     f"layer '{layer.name}' (has fills)."
                 )
+
+    def _step_class_from_color_rule(self, layer) -> type[Step] | None:
+        """
+        Resolve the step class a color rule maps to for a layer.
+
+        Inspects each workpiece's source segment: for color-source
+        imports the segment's ``layer_id`` is the resolved SVG color, so
+        the rule applies regardless of whether the workpiece was placed
+        on a fresh layer (which carries the color) or an existing one
+        (which does not). Returns the step class of the first matching
+        rule, or ``None`` when no rule applies. If a rule matches but
+        its step type is no longer registered, a warning is logged and
+        ``None`` is returned so the caller falls back to the default
+        behavior.
+        """
+        for workpiece in layer.all_workpieces:
+            segment = workpiece.source_segment
+            if segment is None:
+                continue
+            spec = segment.vectorization_spec
+            if not (
+                isinstance(spec, PassthroughSpec)
+                and spec.layer_source == LayerSource.COLORS
+            ):
+                continue
+            color = segment.layer_id
+            if not color:
+                continue
+            preset = get_color_preset_mgr().get_preset(color)
+            if preset is None:
+                logger.debug(
+                    f"No color rule for layer '{layer.name}' (color {color})."
+                )
+                continue
+            cls = step_registry.get(preset.step_type)
+            if cls is None:
+                logger.warning(
+                    f"Step type '{preset.step_type}' from a color rule "
+                    f"is not registered; falling back to default steps "
+                    f"for layer '{layer.name}'."
+                )
+                return None
+            return cls
+        return None

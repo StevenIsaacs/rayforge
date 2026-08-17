@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -8,7 +8,10 @@ from ...core.color import (
     ColorSet,
     hex_to_rgba,
 )
-from ...image.util.srgb import create_lut_from_color
+from ...image.util.srgb import (
+    create_alpha_lut_from_color,
+    create_lut_from_color,
+)
 
 if TYPE_CHECKING:
     from .laser import Laser
@@ -49,7 +52,7 @@ class OpsColorSet:
         raster_rgba = hex_to_rgba(laser.raster_color)
 
         cut_lut = create_lut_from_color(cut_rgba)
-        engrave_lut = create_lut_from_color(raster_rgba)
+        engrave_lut = create_alpha_lut_from_color(raster_rgba)
 
         travel_rgba = theme_colors.get_rgba("travel")
         zero_power_rgba = theme_colors.get_rgba("zero_power")
@@ -69,7 +72,7 @@ class OpsColorSet:
         Returns:
             A ColorSet with cut, engrave, travel, and zero_power entries
         """
-        data: Dict[str, Any] = {
+        data: dict[str, Any] = {
             "cut": self.cut_lut,
             "engrave": self.engrave_lut,
             "travel": self.travel_rgba,
@@ -77,7 +80,7 @@ class OpsColorSet:
         }
         return ColorSet(_data=data)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize the OpsColorSet to a dictionary."""
         return {
             "laser_uid": self.laser_uid,
@@ -102,7 +105,7 @@ class OpsColorSet:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OpsColorSet":
+    def from_dict(cls, data: dict[str, Any]) -> "OpsColorSet":
         """Deserialize an OpsColorSet from a dictionary."""
         return cls(
             laser_uid=data["laser_uid"],

@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Coroutine
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Callable, Coroutine, Dict, Optional
+from typing import TYPE_CHECKING
 
+import numpy as np
 from blinker import Signal
 from raygeo.ops import Ops
 
 from ..context import get_context
-from ..pipeline.artifact import JobArtifact, JobArtifactHandle
+from ..pipeline.artifact import JobArtifact
+from ..pipeline.artifact.handle import BaseArtifactHandle
 from ..pipeline.encoder.base import EncodedOutput
 from ..pipeline.encoder.context import GcodeContext, JobInfo
 from ..shared.util.template import TemplateFormatter
+from .driver import get_driver_cls
+from .driver.dummy import NoDeviceDriver
 from .job_monitor import JobMonitor
+from .models.coordspace import MachineSpace
 
 if TYPE_CHECKING:
     from raygeo.ops.axis import Axis
@@ -28,19 +34,19 @@ logger = logging.getLogger(__name__)
 class MachineCmd:
     """Handles commands sent to the machine driver."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
         self._scheduler = editor.task_manager.schedule_on_main_thread
         self.job_started = Signal()
-        self._current_monitor: Optional[JobMonitor] = None
-        self._on_progress_callback: Optional[Callable[[dict], None]] = None
+        self._current_monitor: JobMonitor | None = None
+        self._on_progress_callback: Callable[[dict], None] | None = None
 
     @property
     def is_job_running(self) -> bool:
         """Returns True if a monitored job is currently running."""
         return self._current_monitor is not None
 
-    def select_tool(self, machine: "Machine", head_index: int):
+    def select_tool(self, machine: Machine, head_index: int):
         """Adds a 'select_head' task to the task manager."""
         if not (0 <= head_index < len(machine.heads)):
             logger.error(f"Invalid head index {head_index} for tool selection")
@@ -61,10 +67,10 @@ class MachineCmd:
 
     async def _execute_monitored_job(
         self,
-        ops: "Ops",
-        machine: "Machine",
-        on_progress: Optional[Callable[[dict], None]] = None,
-        encoded: Optional[EncodedOutput] = None,
+        ops: Ops,
+        machine: Machine,
+        on_progress: Callable[[dict], None] | None = None,
+        encoded: EncodedOutput | None = None,
     ):
         """
         Internal helper to execute a job on a driver while managing
@@ -110,9 +116,9 @@ class MachineCmd:
             # Signal that the job has started.
             self._scheduler(self.job_started.send, self)
 
-            # If machine code or op map are missing, generate them now
+            # Pipeline must have produced encoded output.
             if encoded is None:
-                encoded = machine.encode_ops(ops, self._editor.doc)
+                raise RuntimeError("Pipeline did not produce encoded output.")
 
             if machine.reports_granular_progress:
                 await machine.driver.run(
@@ -148,15 +154,17 @@ class MachineCmd:
     async def _run_frame_action(
         self,
         artifact: JobArtifact,
-        machine: "Machine",
-        on_progress: Optional[Callable[[dict], None]],
+        machine: Machine,
+        on_progress: Callable[[dict], None] | None,
     ):
         """The specific machine action for a framing job."""
         if not isinstance(artifact, JobArtifact):
-            raise ValueError("_run_frame_action received a non-JobArtifact")
+            raise TypeError("_run_frame_action received a non-JobArtifact")
         ops = artifact.ops
 
-        head = machine.get_default_head()
+        head = machine.get_default_laser_head()
+        if head is None:
+            raise ValueError("Machine has no laser heads configured.")
         if not head.frame_power_percent:
             logger.warning("Framing cancelled: Frame power is zero.")
             return
@@ -192,7 +200,18 @@ class MachineCmd:
         frame_with_laser = frame_ops * head.frame_repeat_count
         frame_with_laser.job_end()
 
-        encoded = machine.encode_ops(frame_with_laser, self._editor.doc)
+        # Transform world-space frame ops to machine space.
+        space = MachineSpace.from_machine(machine)
+        combined = space.get_world_to_machine_matrix()
+        if machine.reverse_z_axis:
+            z_flip = np.eye(4)
+            z_flip[2, 2] = -1.0
+            combined = z_flip @ combined
+        frame_with_laser.transform(combined)
+
+        # Encode via the driver encoder (no pre-processing needed).
+        encoder = _create_driver_encoder(machine)
+        encoded = encoder.encode(frame_with_laser, machine, self._editor.doc)
 
         await self._execute_monitored_job(
             frame_with_laser,
@@ -204,12 +223,12 @@ class MachineCmd:
     async def _run_send_action(
         self,
         artifact: JobArtifact,
-        machine: "Machine",
-        on_progress: Optional[Callable[[dict], None]],
+        machine: Machine,
+        on_progress: Callable[[dict], None] | None,
     ):
         """The specific machine action for a send job."""
         if not isinstance(artifact, JobArtifact):
-            raise ValueError("_run_send_action received a non-JobArtifact")
+            raise TypeError("_run_send_action received a non-JobArtifact")
 
         await self._execute_monitored_job(
             artifact.ops,
@@ -220,17 +239,17 @@ class MachineCmd:
 
     async def _start_job(
         self,
-        machine: "Machine",
+        machine: Machine,
         job_name: str,
         final_job_action: Callable[..., Coroutine],
-        on_progress: Optional[Callable[[dict], None]] = None,
+        on_progress: Callable[[dict], None] | None = None,
     ):
         """
         Generic, awaitable job starter that orchestrates assembly and
         execution.
         """
-        handle: Optional[JobArtifactHandle] = None
-        artifact_manager = self._editor.pipeline.artifact_manager
+        handle: BaseArtifactHandle | None = None
+        artifact_store = self._editor.pipeline.artifact_store
 
         try:
             # 1. Await the job artifact generation from the pipeline
@@ -244,7 +263,7 @@ class MachineCmd:
 
             # 2. Use the safe context manager to acquire and release the
             # artifact
-            with artifact_manager.checkout_handle(handle) as artifact:
+            with artifact_store.checkout_handle(handle) as artifact:
                 if not artifact:
                     raise ValueError(
                         "Failed to retrieve artifact from handle."
@@ -253,9 +272,7 @@ class MachineCmd:
                 await final_job_action(artifact, machine, on_progress)
 
         except Exception as e:
-            logger.error(
-                f"Failed to assemble or execute {job_name} job", exc_info=True
-            )
+            logger.exception(f"Failed to assemble or execute {job_name} job")
             self._editor.notification_requested.send(
                 self,
                 message=_("{job_name} failed: {error}").format(
@@ -264,13 +281,13 @@ class MachineCmd:
             )
             # Manually release handle on error if checkout was not entered
             if handle and "artifact" not in locals():
-                artifact_manager.release_handle(handle)
+                artifact_store.release(handle)
             raise
 
     async def frame_job(
         self,
-        machine: "Machine",
-        on_progress: Optional[Callable[[dict], None]] = None,
+        machine: Machine,
+        on_progress: Callable[[dict], None] | None = None,
     ):
         """
         Asynchronously generates ops and runs a framing job.
@@ -285,8 +302,8 @@ class MachineCmd:
 
     async def send_job(
         self,
-        machine: "Machine",
-        on_progress: Optional[Callable[[dict], None]] = None,
+        machine: Machine,
+        on_progress: Callable[[dict], None] | None = None,
     ):
         """
         Asynchronously generates ops and sends the job to the machine.
@@ -299,7 +316,7 @@ class MachineCmd:
             on_progress=on_progress,
         )
 
-    def run_send_job(self, machine: "Machine"):
+    def run_send_job(self, machine: Machine):
         """
         Schedules the send_job coroutine to run via the task manager.
         """
@@ -313,7 +330,7 @@ class MachineCmd:
             key="send-job",
         )
 
-    def set_hold(self, machine: "Machine", is_requesting_hold: bool):
+    def set_hold(self, machine: Machine, is_requesting_hold: bool):
         """
         Adds a task to set the machine's hold state (pause/resume).
         """
@@ -322,21 +339,21 @@ class MachineCmd:
             lambda ctx: driver.set_hold(is_requesting_hold), key="set-hold"
         )
 
-    def cancel_job(self, machine: "Machine"):
+    def cancel_job(self, machine: Machine):
         """Adds a task to cancel the currently running job on the machine."""
         driver = machine.driver
         self._editor.task_manager.add_coroutine(
             lambda ctx: driver.cancel(), key="cancel-job"
         )
 
-    def clear_alarm(self, machine: "Machine"):
+    def clear_alarm(self, machine: Machine):
         """Adds a task to clear any active alarm on the machine."""
         driver = machine.driver
         self._editor.task_manager.add_coroutine(
             lambda ctx: driver.clear_alarm(), key="clear-alarm"
         )
 
-    def jog(self, machine: "Machine", deltas: Dict[Axis, float], speed: int):
+    def jog(self, machine: Machine, deltas: dict[Axis, float], speed: int):
         """
         Adds a task to jog the machine along specific axes.
         """
@@ -344,7 +361,7 @@ class MachineCmd:
             lambda ctx: machine.jog(deltas, speed)
         )
 
-    def execute_macro_by_uid(self, machine: "Machine", macro_uid: str):
+    def execute_macro_by_uid(self, machine: Machine, macro_uid: str):
         """Finds a macro by UID, expands it, and runs it on the machine."""
         macro = machine.macros.get(macro_uid)
         if not macro or not macro.enabled:
@@ -373,9 +390,9 @@ class MachineCmd:
 
     def set_power(
         self,
-        head: "Laser",
+        head: Laser,
         percent: float,
-        machine: Optional["Machine"] = None,
+        machine: Machine | None = None,
     ):
         """
         Adds a task to set the laser power to a specific percentage.
@@ -394,9 +411,9 @@ class MachineCmd:
 
     def set_focus_power(
         self,
-        head: "Laser",
+        head: Laser,
         percent: float,
-        machine: Optional["Machine"] = None,
+        machine: Machine | None = None,
     ):
         """
         Adds a task to set the laser power for focus mode.
@@ -413,14 +430,26 @@ class MachineCmd:
                 lambda ctx: machine.set_focus_power(head, percent)
             )
 
-    def home(self, machine: "Machine", axis: Optional[Axis] = None):
+    def home(self, machine: Machine, axis: Axis | None = None):
         """Adds a task to home a specific axis."""
         self._editor.task_manager.add_coroutine(lambda ctx: machine.home(axis))
 
-    def move_to(self, machine: "Machine", x: float, y: float):
+    def move_to(self, machine: Machine, x: float, y: float):
         """Adds a task to move to an absolute position."""
         driver = machine.driver
         if driver:
             self._editor.task_manager.add_coroutine(
                 lambda ctx: driver.move_to(x, y), key="move-to"
             )
+
+
+def _create_driver_encoder(machine: Machine):
+    """Instantiate the machine's driver encoder."""
+    if machine.driver_name:
+        try:
+            driver_cls = get_driver_cls(machine.driver_name)
+        except (ValueError, ImportError):
+            driver_cls = NoDeviceDriver
+    else:
+        driver_cls = NoDeviceDriver
+    return driver_cls.create_encoder(machine)

@@ -1,5 +1,3 @@
-from typing import Optional
-
 from blinker import Signal
 from gi.repository import Adw, Gtk
 
@@ -47,6 +45,13 @@ class OptionalSpinRowController:
             "value-changed", lambda btn: self.changed.send(self)
         )
 
+        self._config_handler_id = get_context().config.changed.connect(
+            self._on_config_changed
+        )
+        self._destroy_handler_id = self.row.connect(
+            "destroy", self._on_destroy
+        )
+
         self._on_toggled(self.switch, None)
 
     def _on_toggled(self, switch, _pspec):
@@ -54,13 +59,37 @@ class OptionalSpinRowController:
         self.spin_button.set_sensitive(is_active)
         self.changed.send(self)
 
-    def get_value(self) -> Optional[float]:
+    def _on_config_changed(self, _sender, **_kwargs):
+        # Live-update when the display unit changes: preserve the semantic
+        # value while converting the shown value and digits.
+        if not self.unit:
+            return
+        base_value = self.unit.to_base(self.spin_button.get_value())
+        unit_name = get_context().config.unit_preferences.get(self.quantity)
+        new_unit = get_unit(unit_name) if unit_name else None
+        if not new_unit:
+            return
+        self.unit = new_unit
+        self.spin_button.handler_block(self._value_changed_handler_id)
+        try:
+            self.spin_button.set_digits(new_unit.precision)
+            self.spin_button.set_value(new_unit.from_base(base_value))
+        finally:
+            self.spin_button.handler_unblock(self._value_changed_handler_id)
+
+    def _on_destroy(self, _widget):
+        if self._config_handler_id:
+            get_context().config.changed.disconnect(self._config_handler_id)
+        self._config_handler_id = None
+        self._destroy_handler_id = None
+
+    def get_value(self) -> float | None:
         """Gets the value in base units, or None if disabled."""
         if not self.switch.get_active():
             return None
         return self.get_spin_value_in_base()
 
-    def set_value(self, value_in_base: Optional[float]):
+    def set_value(self, value_in_base: float | None):
         """Sets the value from base units, or disables if None."""
         if value_in_base is None:
             self.switch.set_active(False)

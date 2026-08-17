@@ -4,8 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from laser_essentials.steps import MaterialTestStep
 
-from rayforge.core.capability import MATERIAL_TEST
-from rayforge.pipeline.stage.assembler_helpers import MachineDefaults
+from rayforge.core.workpiece import WorkPiece
 
 if TYPE_CHECKING:
 
@@ -26,31 +25,15 @@ def mock_context():
     default_head = MagicMock()
     default_head.uid = "test-laser-uid"
     default_head.spot_size_mm = (0.1, 0.1)
-    machine.get_default_head.return_value = default_head
+    machine.get_default_laser_head.return_value = default_head
     context.machine = machine
     return context
-
-
-@pytest.fixture
-def machine_defaults():
-    return MachineDefaults(
-        kerf_mm=0.1,
-        arc_tolerance=0.03,
-        allow_arcs=True,
-        supports_curves=False,
-        line_interval_mm=0.1,
-        step_power=1.0,
-        tool_radius=0.05,
-        step_over=0.1,
-        cut_speed=500,
-    )
 
 
 class TestMaterialTestStep:
     def test_instantiation(self):
         step = MaterialTestStep(name="Test")
         assert step.typelabel == "Material Test Grid"
-        assert step.capabilities == (MATERIAL_TEST,)
 
     def test_create(self, mock_context):
         step = MaterialTestStep.create(mock_context)
@@ -61,11 +44,11 @@ class TestMaterialTestStep:
         data = step.to_dict()
         assert data["step_type"] == "MaterialTestStep"
 
-    def test_get_assembler_kwargs(self, machine_defaults):
+    def test_get_assembler_kwargs(self, machine):
         step = MaterialTestStep(name="Test")
         workpiece = MagicMock(spec=["size"])
         workpiece.size = (100, 100)
-        kwargs = step.get_assembler_kwargs(machine_defaults, workpiece)
+        kwargs = step.get_assembler_kwargs(machine, workpiece)
         assert isinstance(kwargs, dict)
         expected_keys = {
             "size_mm",
@@ -100,6 +83,65 @@ class TestMaterialTestStep:
         data = step.to_dict()
         restored = MaterialTestStep.from_dict(data)
         assert data == restored.to_dict()
+
+    def test_from_dict_migrates_legacy_opsproducer_params(self):
+        """True legacy files store material-test params in
+        ``opsproducer_dict.params``; loading must restore them."""
+        data = MaterialTestStep(name="Test").to_dict()
+        for key in (
+            "test_type",
+            "grid_mode",
+            "speed_range",
+            "power_range",
+            "passes_range",
+            "offset_range",
+            "fixed_speed",
+            "fixed_power",
+            "grid_dimensions",
+            "shape_size",
+            "spacing",
+            "include_labels",
+            "label_power_percent",
+            "label_speed",
+            "line_interval_mm",
+        ):
+            data.pop(key, None)
+        data["opsproducer_dict"] = {
+            "type": "MaterialTestGridProducer",
+            "params": {
+                "test_type": "Engrave",
+                "grid_mode": "Power vs Passes",
+                "speed_range": [200.0, 800.0],
+                "power_range": [20.0, 90.0],
+                "passes_range": [2, 4],
+                "fixed_speed": 1500.0,
+                "fixed_power": 60.0,
+                "grid_dimensions": [3, 4],
+                "shape_size": 5.0,
+                "spacing": 1.5,
+                "include_labels": False,
+                "label_power_percent": 15.0,
+                "label_speed": 1200.0,
+                "line_interval_mm": 0.3,
+            },
+        }
+
+        restored = MaterialTestStep.from_dict(data)
+
+        assert restored.test_type == "Engrave"
+        assert restored.grid_mode == "Power vs Passes"
+        assert restored.speed_range == (200.0, 800.0)
+        assert restored.power_range == (20.0, 90.0)
+        assert restored.passes_range == (2, 4)
+        assert restored.fixed_speed == 1500.0
+        assert restored.fixed_power == 60.0
+        assert restored.grid_dimensions == (3, 4)
+        assert restored.shape_size == 5.0
+        assert restored.spacing == 1.5
+        assert restored.include_labels is False
+        assert restored.label_power_percent == 15.0
+        assert restored.label_speed == 1200.0
+        assert restored.line_interval_mm == 0.3
 
     def test_optimize_present_but_disabled_by_default(self, mock_context):
         """Optimize must be off by default: its nearest-neighbor travel
@@ -148,3 +190,35 @@ class TestMaterialTestStep:
             t.get("name") for t in step.per_workpiece_transformers_dicts
         }
         assert "BidirScanOffsetTransformer" in per_wp_names
+
+
+class TestMaterialTestComputePayload:
+    def test_build_compute_payload_returns_material_test_spec(self, machine):
+        from raygeo.cnc.execution.specs import ComputePayload
+        from raygeo.ops.assembly import Assembler
+        from raygeo.ops.assembly.material_test_grid import (
+            MaterialTestGridSpec,
+        )
+        from raygeo.ops.part import Part
+
+        step = MaterialTestStep(name="mtg")
+        step.test_type = "Cut"
+        wp = WorkPiece(name="wp")
+        wp.set_size(100.0, 100.0)
+
+        part, payload = step.build_compute_payload(machine, wp)
+        assert isinstance(part, Part)
+        assert isinstance(payload, ComputePayload)
+        assert isinstance(payload.assembler, Assembler)
+        spec = payload.assembler.spec
+        assert isinstance(spec, MaterialTestGridSpec)
+        assert spec.mode == "cut"
+        assert spec.size_mm == (100.0, 100.0)
+
+    def test_assembler_token_params_mirrors_kwargs(self, machine):
+        step = MaterialTestStep(name="mtg")
+        wp = WorkPiece(name="wp")
+        wp.set_size(100.0, 100.0)
+        token = step.assembler_token_params(machine, wp)
+        kwargs = step.get_assembler_kwargs(machine, wp)
+        assert token == kwargs

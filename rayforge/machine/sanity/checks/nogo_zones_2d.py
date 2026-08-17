@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, List, Set
+from typing import TYPE_CHECKING
 
 from raygeo.ops.types import CommandCategory, CommandType
 
@@ -14,12 +14,12 @@ class NoGoZoneCheck2D(BaseCheck):
     def category(self) -> IssueCategory:
         return IssueCategory.NOGO_ZONE
 
-    def run(self, context: "SanityContext") -> List[SanityIssue]:
+    def run(self, context: "SanityContext") -> list[SanityIssue]:
         if not context.enabled_zones:
             return []
 
-        hit_zones: Set[str] = set()
-        issues: List[SanityIssue] = []
+        hit_zones: set[str] = set()
+        issues: list[SanityIssue] = []
         pos = None
         ops = context.ops
         for i in range(ops.len()):
@@ -38,9 +38,7 @@ class NoGoZoneCheck2D(BaseCheck):
                             SanityIssue(
                                 category=IssueCategory.NOGO_ZONE,
                                 severity=IssueSeverity.ERROR,
-                                message='No-Go Zone "{}" entered'.format(
-                                    zone.name
-                                ),
+                                message=f'No-Go Zone "{zone.name}" entered',
                                 zone_uid=uid,
                                 zone_name=zone.name,
                             )

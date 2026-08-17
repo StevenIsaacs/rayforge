@@ -3,8 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 from laser_essentials.steps import ShrinkWrapStep
 
-from rayforge.core.capability import CUT, SCORE, WITH_KERF
-from rayforge.pipeline.stage.assembler_helpers import MachineDefaults
+from rayforge.core.workpiece import WorkPiece
 
 
 @pytest.fixture
@@ -17,31 +16,15 @@ def mock_context():
     default_head = MagicMock()
     default_head.uid = "test-laser-uid"
     default_head.spot_size_mm = (0.1, 0.1)
-    machine.get_default_head.return_value = default_head
+    machine.get_default_laser_head.return_value = default_head
     context.machine = machine
     return context
-
-
-@pytest.fixture
-def machine_defaults():
-    return MachineDefaults(
-        kerf_mm=0.1,
-        arc_tolerance=0.03,
-        allow_arcs=True,
-        supports_curves=False,
-        line_interval_mm=0.1,
-        step_power=1.0,
-        tool_radius=0.05,
-        step_over=0.1,
-        cut_speed=500,
-    )
 
 
 class TestShrinkWrapStep:
     def test_instantiation(self):
         step = ShrinkWrapStep(name="Test")
         assert step.typelabel == "Shrink Wrap"
-        assert step.capabilities == (CUT, SCORE, WITH_KERF)
 
     def test_create(self, mock_context):
         step = ShrinkWrapStep.create(mock_context)
@@ -52,17 +35,16 @@ class TestShrinkWrapStep:
         data = step.to_dict()
         assert data["step_type"] == "ShrinkWrapStep"
 
-    def test_get_assembler_kwargs(self, machine_defaults):
+    def test_get_assembler_kwargs(self, machine):
         step = ShrinkWrapStep(name="Test")
         workpiece = MagicMock(spec=["size"])
         workpiece.size = (100, 100)
-        kwargs = step.get_assembler_kwargs(machine_defaults, workpiece)
+        kwargs = step.get_assembler_kwargs(machine, workpiece)
         assert isinstance(kwargs, dict)
         expected_keys = {
             "cut_side",
             "gravity",
-            "path_offset_mm",
-            "kerf_mm",
+            "offset_mm",
             "arc_tolerance",
             "allow_arcs",
             "supports_curves",
@@ -72,8 +54,61 @@ class TestShrinkWrapStep:
     def test_roundtrip_serialization(self):
         step = ShrinkWrapStep(name="Test")
         step.cut_side = "OUTSIDE"
-        step.path_offset_mm = 0.5
+        step.offset_mm = 0.5
         step.gravity = 0.5
         data = step.to_dict()
         restored = ShrinkWrapStep.from_dict(data)
         assert data == restored.to_dict()
+
+    def test_from_dict_migrates_legacy_opsproducer_params(self):
+        """True legacy files store shrink-wrap params in
+        ``opsproducer_dict.params``; loading must restore them."""
+        data = ShrinkWrapStep(name="Test").to_dict()
+        for key in ("cut_side", "offset_mm", "gravity"):
+            data.pop(key, None)
+        data["opsproducer_dict"] = {
+            "type": "ShrinkWrapProducer",
+            "params": {
+                "gravity": 0.75,
+                "path_offset_mm": 0.2,
+                "cut_side": "INSIDE",
+            },
+        }
+
+        restored = ShrinkWrapStep.from_dict(data)
+
+        assert restored.cut_side == "INSIDE"
+        assert restored.gravity == 0.75
+        assert restored.offset_mm == pytest.approx(0.2)
+
+
+class TestShrinkWrapComputePayload:
+    def test_build_compute_payload_returns_shrinkwrap_spec(self, machine):
+        from raygeo.cnc.execution.specs import ComputePayload
+        from raygeo.ops.assembly import Assembler
+        from raygeo.ops.assembly.shrinkwrap import ShrinkwrapSpec
+        from raygeo.ops.part import Part
+
+        step = ShrinkWrapStep(name="sw")
+        step.cut_side = "outside"
+        step.gravity = 0.3
+        wp = WorkPiece(name="wp")
+        wp.set_size(10.0, 10.0)
+
+        part, payload = step.build_compute_payload(machine, wp)
+        assert isinstance(part, Part)
+        assert isinstance(payload, ComputePayload)
+        assert isinstance(payload.assembler, Assembler)
+        spec = payload.assembler.spec
+        assert isinstance(spec, ShrinkwrapSpec)
+        assert spec.cut_side == "outside"
+        assert spec.gravity == 0.3
+        assert spec.offset_mm == step.offset_mm
+
+    def test_assembler_token_params_mirrors_kwargs(self, machine):
+        step = ShrinkWrapStep(name="sw")
+        wp = WorkPiece(name="wp")
+        wp.set_size(10.0, 10.0)
+        token = step.assembler_token_params(machine, wp)
+        kwargs = step.get_assembler_kwargs(machine, wp)
+        assert token == kwargs

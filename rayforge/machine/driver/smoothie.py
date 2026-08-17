@@ -1,16 +1,11 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -64,11 +59,11 @@ class SmoothieDriver(Driver):
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
-        self.telnet: Optional[TelnetTransport] = None
-        self.host: Optional[str] = None
-        self.port: Optional[int] = None
+        self.telnet: TelnetTransport | None = None
+        self.host: str | None = None
+        self.port: int | None = None
         self.keep_running = False
-        self._connection_task: Optional[asyncio.Task] = None
+        self._connection_task: asyncio.Task | None = None
         self._ok_event = asyncio.Event()
 
     @property
@@ -80,7 +75,7 @@ class SmoothieDriver(Driver):
         return _("Machine Coordinates (G53)")
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         if self.host:
             return f"tcp://{self.host}:{self.port}"
         return None
@@ -118,7 +113,7 @@ class SmoothieDriver(Driver):
         assert machine.dialect is not None
         return GcodeEncoder(machine.dialect)
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return [VarSet()]
 
     def _setup_implementation(self, **kwargs: Any) -> None:
@@ -173,7 +168,7 @@ class SmoothieDriver(Driver):
 
             except asyncio.CancelledError:
                 break  # cleanup is called
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - connection loop boundary
                 self.on_telnet_status_changed(
                     self, TransportStatus.ERROR, str(e)
                 )
@@ -216,26 +211,22 @@ class SmoothieDriver(Driver):
         encoded: EncodedOutput,
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         gcode_lines = encoded.text.splitlines()
         op_map = encoded.op_map
 
         # We assume ops are indexed 0..N-1.
-        num_ops = 0
-        if op_map and op_map.op_to_machine_code:
-            num_ops = max(op_map.op_to_machine_code.keys()) + 1
+        num_ops = op_map.op_count if op_map else 0
 
         try:
             for op_index in range(num_ops):
                 # Find all g-code lines for this specific op_index
-                line_indices = []
-                if op_map:
-                    line_indices = op_map.op_to_machine_code.get(op_index, [])
+                line_start, line_count = 0, 0
+                if op_map and op_index < op_map.op_count:
+                    line_start, line_count = op_map.span_for_op(op_index)
 
-                if not line_indices:
+                if not line_count:
                     # If an op generates no g-code, still report it as done.
                     if on_command_done:
                         result = on_command_done(op_index)
@@ -243,7 +234,7 @@ class SmoothieDriver(Driver):
                             await result
                     continue
 
-                for line_idx in sorted(line_indices):
+                for line_idx in range(line_start, line_start + line_count):
                     line = gcode_lines[line_idx].strip()
                     if line:
                         await self._send_and_wait(line.encode())
@@ -290,11 +281,11 @@ class SmoothieDriver(Driver):
         # Send Ctrl+C
         await self._send_and_wait(b"\x03")
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         """Smoothie supports homing for all axes."""
         return True
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         """
         Homes the specified axes or all axes if none specified.
 
@@ -315,10 +306,13 @@ class SmoothieDriver(Driver):
 
     async def move_to(self, pos_x, pos_y) -> None:
         dialect = self.dialect
-        cmd = dialect.move_to.format(x=float(pos_x), y=float(pos_y))
+        cmd = dialect.move_to.format(
+            x=self._to_machine_length(float(pos_x)),
+            y=self._to_machine_length(float(pos_y)),
+        )
         await self._send_and_wait(cmd.encode())
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         """Smoothie supports jogging for all axes."""
         return True
 
@@ -331,10 +325,12 @@ class SmoothieDriver(Driver):
             **deltas: Axis names and distances (e.g. x=10.0, y=5.0)
         """
         dialect = self.dialect
-        parts = [dialect.jog.format(speed=speed)]
+        parts = [dialect.jog.format(speed=self._to_machine_speed(speed))]
 
         for axis_name, distance in deltas.items():
-            parts.append(f"{axis_name.upper()}{distance}")
+            parts.append(
+                f"{axis_name.upper()}{self._to_machine_length(distance)}"
+            )
 
         if len(parts) == 1:
             return
@@ -423,7 +419,7 @@ class SmoothieDriver(Driver):
                 self.state_changed.send(self, state=self.state)
 
     def on_telnet_status_changed(
-        self, sender, status: TransportStatus, message: Optional[str] = None
+        self, sender, status: TransportStatus, message: str | None = None
     ):
         log_data = f"Connection status: {status.name}"
         if message:
@@ -432,14 +428,20 @@ class SmoothieDriver(Driver):
         self.connection_status_changed.send(
             self, status=status, message=message
         )
-        if status in [TransportStatus.DISCONNECTED, TransportStatus.ERROR]:
-            if self.state.status != DeviceStatus.UNKNOWN:
-                self.state.status = DeviceStatus.UNKNOWN
-                logger.info(
-                    f"Device state changed: {self.state.status.name}",
-                    extra=self._log_extra("STATE_CHANGE"),
-                )
-                self.state_changed.send(self, state=self.state)
+        if (
+            status
+            in [
+                TransportStatus.DISCONNECTED,
+                TransportStatus.ERROR,
+            ]
+            and self.state.status != DeviceStatus.UNKNOWN
+        ):
+            self.state.status = DeviceStatus.UNKNOWN
+            logger.info(
+                f"Device state changed: {self.state.status.name}",
+                extra=self._log_extra("STATE_CHANGE"),
+            )
+            self.state_changed.send(self, state=self.state)
 
     async def read_settings(self) -> None:
         raise NotImplementedError(
@@ -452,18 +454,22 @@ class SmoothieDriver(Driver):
         )
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         """Sets a WCS offset using Smoothie's G10 L20 command."""
         if wcs_slot not in _wcs_to_p_map:
             raise ValueError(f"Invalid WCS slot: {wcs_slot}")
 
         p_num = _wcs_to_p_map[wcs_slot]
-        dialect = self.dialect
-        cmd = dialect.set_wcs_offset.format(p_num=p_num, x=x, y=y, z=z)
+        cmd = self.dialect.format_wcs_offset(
+            p_num,
+            self._to_machine_length(x),
+            self._to_machine_length(y),
+            self._to_machine_length(z) if z is not None else None,
+        )
         await self._send_and_wait(cmd.encode("utf-8"))
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         """Reading all WCS offsets is not supported by Smoothie."""
         raise NotImplementedError(
             "Reading all WCS offsets is not reliably supported "
@@ -472,7 +478,7 @@ class SmoothieDriver(Driver):
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         """
         Probing is not implemented due to difficulty in reliably capturing
         real-time probe position feedback over the standard Telnet protocol.

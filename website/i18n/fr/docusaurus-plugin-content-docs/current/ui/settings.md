@@ -1,6 +1,6 @@
 # Paramètres
 
-![Paramètres généraux](/screenshots/application-general.png)
+![Paramètres généraux](/screenshots/app-settings-general.png)
 
 Personnalise Rayforge pour correspondre à ton flux de travail et tes
 préférences. Ouvre les paramètres via **Édition → Paramètres** ou appuie sur
@@ -60,6 +60,8 @@ d'autres parties de l'application. Chacune possède sa propre documentation :
   de matériaux
 - [Recettes](../application-settings/recipes.md) — gérer les recettes
   d'opérations enregistrées
+- [Règles de couleur](../application-settings/color-rules.md) — faire
+  correspondre les couleurs SVG aux types d'étape
 - [Fournisseurs IA](../application-settings/ai-provider.md) — configurer les
   fournisseurs IA pour les addons
 - [Addons](../application-settings/addons.md) — installer, mettre à jour et

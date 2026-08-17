@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Optional
 
 import pytest
 from raygeo.geo import Geometry
@@ -102,8 +102,8 @@ class StressTestController:
     contour_step_class: type
     engrave_step_class: type
 
-    _snapshots: List[MetricsSnapshot] = field(default_factory=list)
-    _workpieces: List[WorkPiece] = field(default_factory=list)
+    _snapshots: list[MetricsSnapshot] = field(default_factory=list)
+    _workpieces: list[WorkPiece] = field(default_factory=list)
     _workpiece_counter: int = 0
     _view_manager: Optional["ViewManager"] = None
     _svg_data: bytes = field(
@@ -117,9 +117,6 @@ class StressTestController:
 
     def capture_metrics(self) -> MetricsSnapshot:
         """Capture current pipeline state."""
-        scheduler = self.pipeline._scheduler
-        graph = scheduler.graph
-
         workpiece_count = sum(
             1 for wp in self.doc.all_workpieces if wp.layer is not None
         )
@@ -135,10 +132,10 @@ class StressTestController:
             total_refcount=sum(
                 h.refcount for h in self.artifact_store._handles.values()
             ),
-            dag_node_count=len(graph.get_all_nodes()),
+            dag_node_count=0,
             is_busy=self.pipeline.is_busy,
-            active_task_count=len(self.task_mgr),
-            generation_id=self.pipeline._data_generation_id,
+            active_task_count=0,
+            generation_id=self.pipeline.data_generation_id,
             workpiece_count=workpiece_count,
             step_count=step_count,
         )
@@ -158,32 +155,18 @@ class StressTestController:
         """
         start = time.monotonic()
         timeout = self.config.max_settle_wait_sec
-        # Log diagnostic details every 2 s so that a stuck settle
-        # produces a useful trail (busy reason, node states, active
-        # context tasks) instead of silently timing out.
         last_log = start
         while time.monotonic() - start < timeout:
             if not self.pipeline.is_busy:
                 return True
             now = time.monotonic()
             if now - last_log >= 2.0:
-                reason = self.pipeline._busy_reason()
-                scheduler = self.pipeline._scheduler
-                graph = scheduler.graph
-                nodes = graph.get_all_nodes()
-                # Bucket nodes by state to keep the log line compact.
-                states = {}
-                for n in nodes:
-                    states.setdefault(n.state.value, []).append(n.key.id[:8])
-                active_ctx = self.pipeline._active_context
-                ctx_tasks = active_ctx.active_tasks if active_ctx else set()
-                logger.error(
-                    f"Settle stuck at +{now - start:.1f}s: "
-                    f"busy_reason={reason}, "
-                    f"has_tasks={self.task_mgr.has_tasks()}, "
-                    f"gen_id={self.pipeline._data_generation_id}, "
-                    f"nodes={states}, "
-                    f"ctx_tasks={len(ctx_tasks)}"
+                rebuild_pending = self.pipeline._intent_ctl.is_rebuild_pending
+                logger.debug(
+                    f"Waiting for settle: busy=True, "
+                    f"rebuild_pending={rebuild_pending}, "
+                    f"gen_id={self.pipeline.data_generation_id}, "
+                    f"elapsed={now - start:.1f}s"
                 )
                 last_log = now
             await asyncio.sleep(0.1)
@@ -216,7 +199,7 @@ class StressTestController:
 
         return workpiece
 
-    def _get_available_steps(self) -> List:
+    def _get_available_steps(self) -> list:
         """Get all available steps in the document."""
         steps = []
         for layer in self.doc.layers:
@@ -347,7 +330,7 @@ class StressTestController:
             f"Chaos phase complete: {invalidation_count} invalidations"
         )
 
-    async def run_settle_phase(self) -> Optional[MetricsSnapshot]:
+    async def run_settle_phase(self) -> MetricsSnapshot | None:
         """
         Wait for pipeline to settle and capture metrics.
 
@@ -368,107 +351,43 @@ class StressTestController:
         )
         return snapshot
 
-    def _get_artifact_breakdown(self) -> Dict[str, int]:
+    def _get_artifact_breakdown(self) -> dict[str, int]:
         """
         Get a breakdown of SHM blocks by artifact type.
         Calculates exact unique SHM names across all tracking registries
         to confidently identify untracked (leaked) blocks.
         """
-        breakdown: Dict[str, int] = {}
+        breakdown: dict[str, int] = {}
         tracked_shms = set()
 
-        # Tracked by ledger
-        ledger = self.pipeline._artifact_manager._ledger
-        for key, entry in ledger.items():
-            if entry.handle is not None:
-                tracked_shms.add(entry.handle.shm_name)
-
-        # Tracked by step stage retained handles
-        # Handles are now tracked by task ID in _retained_handles_by_task
-        for (
-            handles
-        ) in self.pipeline._step_stage._retained_handles_by_task.values():
-            for handle in handles:
-                tracked_shms.add(handle.shm_name)
+        # Tracked by pipeline handle dicts
+        for handle in self.pipeline._wp_handles.values():
+            tracked_shms.add(id(handle))
+        if self.pipeline._last_job_handle is not None:
+            tracked_shms.add(id(self.pipeline._last_job_handle))
 
         # Tracked by ViewManager
         if self._view_manager is not None:
             vm = self._view_manager
             for entry in vm._view_entries.values():
                 if entry.handle:
-                    tracked_shms.add(entry.handle.shm_name)
+                    tracked_shms.add(id(entry.handle))
                 if entry.source_handle:
-                    tracked_shms.add(entry.source_handle.shm_name)
+                    tracked_shms.add(id(entry.source_handle))
             for handle in vm._source_artifact_handles.values():
-                tracked_shms.add(handle.shm_name)
-            for handle in vm._inflight_chunk_handles:
-                tracked_shms.add(handle.shm_name)
+                tracked_shms.add(id(handle))
 
-        all_shms = set(self.artifact_store._handles.keys())
-        untracked_shms = all_shms - tracked_shms
+        all_handles = {id(h) for h in self.artifact_store._handles.values()}
+        untracked = all_handles - tracked_shms
 
-        breakdown["total_shm"] = len(all_shms)
+        breakdown["total_shm"] = len(all_handles)
         breakdown["tracked_unique"] = len(tracked_shms)
-        breakdown["untracked"] = len(untracked_shms)
+        breakdown["untracked"] = len(untracked)
 
-        if untracked_shms:
+        if untracked:
             logger.warning(
-                f"Untracked SHM blocks ({len(untracked_shms)}): "
-                f"{list(untracked_shms)[:20]}"
+                f"Untracked handles ({len(untracked)}): {list(untracked)[:20]}"
             )
-
-            # Log holders for untracked blocks
-            for name in list(untracked_shms)[:5]:
-                handle = self.artifact_store._handles.get(name)
-                if handle:
-                    holders = handle.holders if handle.holders else []
-                    logger.warning(
-                        f"Handle {name}: refcount={handle.refcount}, "
-                        f"all_holders={holders}"
-                    )
-                else:
-                    logger.warning(f"Handle {name}: not in _handles dict")
-
-            # Log ledger contents for debugging
-            ledger_shm_names = set()
-            for k, e in ledger.items():
-                if e.handle is not None:
-                    ledger_shm_names.add(e.handle.shm_name)
-            logger.warning(f"Ledger SHM names: {sorted(ledger_shm_names)}")
-
-            # Log which handles in ledger have matching refcounts
-            for k, e in ledger.items():
-                if e.handle is not None:
-                    canonical = self.artifact_store._handles.get(
-                        e.handle.shm_name
-                    )
-                    if canonical and canonical.refcount != e.handle.refcount:
-                        logger.warning(
-                            f"Refcount mismatch for {e.handle.shm_name}: "
-                            f"ledger handle={e.handle.refcount}, "
-                            f"canonical={canonical.refcount}"
-                        )
-
-            # Log all ViewManager tracking for debugging
-            if self._view_manager is not None:
-                vm = self._view_manager
-                vm_view_handles = set()
-                vm_source_handles = set()
-                vm_chunk_handles = set()
-                for entry in vm._view_entries.values():
-                    if entry.handle:
-                        vm_view_handles.add(entry.handle.shm_name)
-                    if entry.source_handle:
-                        vm_source_handles.add(entry.source_handle.shm_name)
-                for h in vm._source_artifact_handles.values():
-                    vm_source_handles.add(h.shm_name)
-                for h in vm._inflight_chunk_handles:
-                    vm_chunk_handles.add(h.shm_name)
-                logger.warning(f"VM view handles: {sorted(vm_view_handles)}")
-                logger.warning(
-                    f"VM source handles: {sorted(vm_source_handles)}"
-                )
-                logger.warning(f"VM chunk handles: {sorted(vm_chunk_handles)}")
 
         return breakdown
 

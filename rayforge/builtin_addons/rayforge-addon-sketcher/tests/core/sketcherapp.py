@@ -11,7 +11,6 @@ sys.path.insert(0, str(project_root))
 
 import json
 import logging
-from typing import Optional
 
 import gi
 
@@ -33,8 +32,8 @@ from sketcher.ui_gtk.studio import SketchStudio
 class SketcherApp(Adw.Application):
     def __init__(self):
         super().__init__(application_id="com.example.SketcherApp")
-        self.studio: Optional[SketchStudio] = None
-        self.window: Optional[Gtk.ApplicationWindow] = None
+        self.studio: SketchStudio | None = None
+        self.window: Gtk.ApplicationWindow | None = None
 
         # Create and register the "quit" action
         quit_action = Gio.SimpleAction.new("quit", None)
@@ -109,7 +108,7 @@ class SketcherApp(Adw.Application):
                             data = json.load(f)
                         new_sketch = Sketch.from_dict(data)
                         self.studio.set_sketch(new_sketch)
-                    except Exception as e:
+                    except (OSError, ValueError, TypeError) as e:
                         logger.error(
                             f"Failed to load sketch file '{path}': {e}"
                         )
@@ -153,7 +152,7 @@ class SketcherApp(Adw.Application):
                         data = current_sketch.to_dict()
                         with open(path, "w", encoding="utf-8") as f:
                             json.dump(data, f, indent=2)
-                    except Exception as e:
+                    except (OSError, ValueError, TypeError) as e:
                         logger.error(f"Failed to save sketch to '{path}': {e}")
         except GLib.Error as e:
             logger.debug(f"File save dialog cancelled: {e.message}")
@@ -197,7 +196,8 @@ class SketcherApp(Adw.Application):
 
     def on_studio_finished(self, sender, sketch):
         print(
-            f"Studio Finished! Sketch has {len(sketch.registry.entities)} entities."
+            "Studio Finished! Sketch has "
+            f"{len(sketch.registry.entities)} entities."
         )
 
         if not self.studio:

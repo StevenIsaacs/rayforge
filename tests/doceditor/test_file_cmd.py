@@ -3,16 +3,27 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from raygeo.geo import Matrix
+from raygeo.ops.state import CoolantMode
 
 from rayforge.core.doc import Doc
 from rayforge.core.group import Group
 from rayforge.core.layer import Layer
 from rayforge.core.source_asset import SourceAsset
+from rayforge.core.step import Step
 from rayforge.core.stock_asset import StockAsset
-from rayforge.core.vectorization_spec import TraceSpec
+from rayforge.core.vectorization_spec import (
+    LayerImportMode,
+    PassthroughSpec,
+    TraceSpec,
+)
 from rayforge.core.workpiece import WorkPiece
 from rayforge.doceditor.editor import DocEditor
-from rayforge.doceditor.file_cmd import FileCmd, ImportAction, PreviewResult
+from rayforge.doceditor.file_cmd import (
+    FileCmd,
+    ImportAction,
+    PreviewResult,
+    _unsupported_coolant_labels,
+)
 from rayforge.image import (
     ImporterFeature,
     ImportManifest,
@@ -22,11 +33,13 @@ from rayforge.image import (
     ParsingResult,
 )
 from rayforge.image.svg.renderer import SVG_RENDERER
-from rayforge.pipeline.coordspace import (
+from rayforge.machine.models.coordspace import (
     AxisDirection,
     MachineSpace,
     OriginCorner,
 )
+from rayforge.machine.models.machine import Machine
+from rayforge.machine.models.spindle import SpindleHead
 from rayforge.shared.tasker.manager import TaskManager
 
 
@@ -44,6 +57,60 @@ def mock_editor(context_initializer):
 def file_cmd(mock_editor):
     """Provides a FileCmd instance."""
     return FileCmd(mock_editor, mock_editor.task_manager)
+
+
+def _doc_with_mill_step():
+    """A doc whose active layer workflow holds one mill step."""
+    doc = Doc()
+    workflow = doc.active_layer.workflow
+    step = Step(typelabel="Mill", name="Mill Step")
+    assert workflow is not None
+    workflow.add_child(step)
+    return doc, step
+
+
+def _spindle_machine(context, cooling_methods):
+    """A machine with a single spindle head supporting the given methods."""
+    machine = Machine(context)
+    machine.heads.clear()
+    head = SpindleHead()
+    head.cooling_methods = tuple(cooling_methods)
+    machine.add_head(head)
+    return machine
+
+
+def test_unsupported_coolant_labels_without_machine(context_initializer):
+    doc, step = _doc_with_mill_step()
+    step.set_coolant_method(CoolantMode.MIST)
+    assert _unsupported_coolant_labels(doc, None) == []
+
+
+def test_unsupported_coolant_labels_supported_method(context_initializer):
+    doc, step = _doc_with_mill_step()
+    machine = _spindle_machine(context_initializer, [CoolantMode.FLOOD])
+    step.set_coolant_method(CoolantMode.FLOOD)
+    assert _unsupported_coolant_labels(doc, machine) == []
+
+
+def test_unsupported_coolant_labels_reports_missing_method(
+    context_initializer,
+):
+    doc, step = _doc_with_mill_step()
+    machine = _spindle_machine(context_initializer, [CoolantMode.FLOOD])
+    step.set_coolant_method(CoolantMode.MIST)
+    assert _unsupported_coolant_labels(doc, machine) == ["Mist"]
+
+
+def test_unsupported_coolant_labels_dedupes(context_initializer):
+    doc, step = _doc_with_mill_step()
+    step2 = Step(typelabel="Mill", name="Second Mill")
+    workflow = doc.active_layer.workflow
+    assert workflow is not None
+    workflow.add_child(step2)
+    machine = _spindle_machine(context_initializer, [])
+    step.set_coolant_method(CoolantMode.FLOOD)
+    step2.set_coolant_method(CoolantMode.MIST)
+    assert _unsupported_coolant_labels(doc, machine) == ["Flood", "Mist"]
 
 
 @pytest.fixture
@@ -85,7 +152,7 @@ def sample_parse_result():
     """Provides a sample ParsingResult."""
     document_bounds = (0, 0, 10, 10)
     unit_scale = 1.0
-    x, y, w, h = document_bounds
+    x, _y, w, h = document_bounds
     world_frame = (x * unit_scale, 0.0, w * unit_scale, h * unit_scale)
     return ParsingResult(
         document_bounds=document_bounds,
@@ -144,23 +211,26 @@ class TestScanImportFile:
         file_path = Path("test.unknown")
         mime_type = "application/octet-stream"
 
-        with patch(
-            "rayforge.doceditor.file_cmd.importer_registry.get_by_mime_type",
-            return_value=None,
-        ):
-            with patch(
+        with (
+            patch(
+                "rayforge.doceditor.file_cmd.importer_registry."
+                "get_by_mime_type",
+                return_value=None,
+            ),
+            patch(
                 "rayforge.doceditor.file_cmd.importer_registry"
                 ".get_by_extension",
                 return_value=None,
-            ):
-                result = file_cmd.scan_import_file(
-                    some_bytes, file_path, mime_type
-                )
+            ),
+        ):
+            result = file_cmd.scan_import_file(
+                some_bytes, file_path, mime_type
+            )
 
-                assert isinstance(result, ImportManifest)
-                assert result.title == "test.unknown"
-                assert result.warnings == ["Unsupported file type: .unknown"]
-                assert "No importer found" in caplog.text
+            assert isinstance(result, ImportManifest)
+            assert result.title == "test.unknown"
+            assert result.warnings == ["Unsupported file type: .unknown"]
+            assert "No importer found" in caplog.text
 
     def test_scan_importer_raises_exception(self, file_cmd, caplog):
         """
@@ -247,7 +317,7 @@ class TestCalculateItemsBbox:
         result = file_cmd._calculate_items_bbox([sample_workpiece])
 
         assert result is not None
-        x, y, w, h = result
+        _x, _y, w, h = result
         assert w == 10.0
         assert h == 20.0
 
@@ -355,7 +425,11 @@ class TestFitAndPositionAtReferenceOrigin:
             mock_machine = MagicMock()
             mock_machine.axis_extents = (200, 150)
             mock_machine.work_area = (0, 0, 200, 150)
-            mock_machine.get_reference_position_world.return_value = (0, 0)
+            mock_machine.panel.reference_position_world = (0, 0)
+            mock_machine.panel.world_position_from_origin.return_value = (
+                0,
+                0,
+            )
             mock_machine.get_coordinate_space.return_value = MachineSpace(
                 origin=OriginCorner.BOTTOM_LEFT,
                 x_positive_direction=AxisDirection.POSITIVE_RIGHT,
@@ -380,7 +454,11 @@ class TestFitAndPositionAtReferenceOrigin:
             mock_machine = MagicMock()
             mock_machine.axis_extents = (200, 150)
             mock_machine.work_area = (0, 0, 200, 150)
-            mock_machine.get_reference_position_world.return_value = (10, 20)
+            mock_machine.panel.reference_position_world = (10, 20)
+            mock_machine.panel.world_position_from_origin.return_value = (
+                10,
+                20,
+            )
             mock_machine.get_coordinate_space.return_value = MachineSpace(
                 origin=OriginCorner.BOTTOM_LEFT,
                 x_positive_direction=AxisDirection.POSITIVE_RIGHT,
@@ -429,6 +507,105 @@ class TestCommitItemsToDocument:
 
         assert source in file_cmd._editor.doc.get_all_assets()
         assert sample_layer in file_cmd._editor.doc.children
+
+    @staticmethod
+    def _imported_layer(name: str) -> tuple[Layer, WorkPiece]:
+        wp = WorkPiece(name=name)
+        layer = Layer(name=name)
+        layer.add_child(wp)
+        return layer, wp
+
+    def test_commit_maps_to_default_layer_and_renames(self, file_cmd):
+        """Map to Existing renames a default-named layer to the imported
+        layer name."""
+        source = SourceAsset(
+            source_file=Path("chaveiros.svg"),
+            original_data=b"<svg></svg>",
+            renderer=SVG_RENDERER,
+        )
+        imported, wp = self._imported_layer("chaveiro")
+        spec = PassthroughSpec(
+            layer_import_mode=LayerImportMode.MAP_TO_EXISTING
+        )
+
+        file_cmd._commit_items_to_document(
+            [imported],
+            source,
+            Path("chaveiros.svg"),
+            vectorization_spec=spec,
+        )
+
+        doc = file_cmd._editor.doc
+        assert doc.layers[0].name == "chaveiro"
+        assert doc.layers[0].workflow is not None
+        assert doc.layers[0].workflow.name == "chaveiro Workflow"
+        assert wp in doc.layers[0].children
+
+    def test_commit_preserves_manually_named_layer(self, file_cmd):
+        """Map to Existing keeps the name of a manually renamed layer."""
+        doc = file_cmd._editor.doc
+        doc.layers[0].set_name("My Custom Layer")
+
+        source = SourceAsset(
+            source_file=Path("chaveiros.svg"),
+            original_data=b"<svg></svg>",
+            renderer=SVG_RENDERER,
+        )
+        imported, wp = self._imported_layer("chaveiro")
+        spec = PassthroughSpec(
+            layer_import_mode=LayerImportMode.MAP_TO_EXISTING
+        )
+
+        file_cmd._commit_items_to_document(
+            [imported],
+            source,
+            Path("chaveiros.svg"),
+            vectorization_spec=spec,
+        )
+
+        assert doc.layers[0].name == "My Custom Layer"
+        assert wp in doc.layers[0].children
+
+    def test_commit_rename_is_undoable(self, file_cmd):
+        """Undoing the import restores the previous layer name."""
+        source = SourceAsset(
+            source_file=Path("chaveiros.svg"),
+            original_data=b"<svg></svg>",
+            renderer=SVG_RENDERER,
+        )
+        imported, wp = self._imported_layer("chaveiro")
+        spec = PassthroughSpec(
+            layer_import_mode=LayerImportMode.MAP_TO_EXISTING
+        )
+
+        file_cmd._commit_items_to_document(
+            [imported],
+            source,
+            Path("chaveiros.svg"),
+            vectorization_spec=spec,
+        )
+
+        doc = file_cmd._editor.doc
+        assert doc.layers[0].name == "chaveiro"
+        file_cmd._editor.history_manager.undo()
+        assert doc.layers[0].name == "Layer 1"
+        assert wp not in doc.layers[0].children
+
+    def test_commit_new_layers_keeps_existing_names(self, file_cmd):
+        """New Layers mode does not rename existing document layers."""
+        doc = file_cmd._editor.doc
+        imported, _wp = self._imported_layer("chaveiro")
+        spec = PassthroughSpec(layer_import_mode=LayerImportMode.NEW_LAYERS)
+
+        file_cmd._commit_items_to_document(
+            [imported],
+            None,
+            Path("chaveiros.svg"),
+            vectorization_spec=spec,
+        )
+
+        assert doc.layers[0].name == "Layer 1"
+        assert imported in doc.children
 
 
 class TestFinalizeImportOnMainThread:
@@ -527,18 +704,20 @@ class TestGeneratePreviewImpl:
     def test_preview_impl_no_workpiece(self, file_cmd, sample_import_result):
         """Test preview when no WorkPiece is found in the payload."""
         sample_import_result.payload.items = []
-        with patch(
-            "rayforge.image.base_importer.Importer.get_doc_items",
-            return_value=sample_import_result,
-        ):
-            with patch.object(
+        with (
+            patch(
+                "rayforge.image.base_importer.Importer.get_doc_items",
+                return_value=sample_import_result,
+            ),
+            patch.object(
                 file_cmd, "_generate_rich_preview_result"
-            ) as mock_gen:
-                file_cmd._generate_preview_impl(
-                    b"data", "test.png", "image/png", TraceSpec(), 256
-                )
-                # Should still call the generator, which can handle empty items
-                mock_gen.assert_called_once()
+            ) as mock_gen,
+        ):
+            file_cmd._generate_preview_impl(
+                b"data", "test.png", "image/png", TraceSpec(), 256
+            )
+            # Should still call the generator, which can handle empty items
+            mock_gen.assert_called_once()
 
 
 class TestLoadFileAsync:
@@ -628,35 +807,41 @@ class TestGetImporterInfo:
         """Test fallback to extension matching."""
         mock_importer = MagicMock()
         mock_importer.features = {ImporterFeature.BITMAP_TRACING}
-        with patch(
-            "rayforge.doceditor.file_cmd.importer_registry.get_by_mime_type",
-            return_value=None,
-        ):
-            with patch(
+        with (
+            patch(
+                "rayforge.doceditor.file_cmd.importer_registry."
+                "get_by_mime_type",
+                return_value=None,
+            ),
+            patch(
                 "rayforge.doceditor.file_cmd.importer_registry"
                 ".get_by_extension",
                 return_value=mock_importer,
-            ):
-                cls, features = file_cmd.get_importer_info(Path("f.png"), None)
-                assert cls is mock_importer
-                assert features == {ImporterFeature.BITMAP_TRACING}
+            ),
+        ):
+            cls, features = file_cmd.get_importer_info(Path("f.png"), None)
+            assert cls is mock_importer
+            assert features == {ImporterFeature.BITMAP_TRACING}
 
     def test_get_info_not_found(self, file_cmd):
         """Test case where no importer is found."""
-        with patch(
-            "rayforge.doceditor.file_cmd.importer_registry.get_by_mime_type",
-            return_value=None,
-        ):
-            with patch(
+        with (
+            patch(
+                "rayforge.doceditor.file_cmd.importer_registry."
+                "get_by_mime_type",
+                return_value=None,
+            ),
+            patch(
                 "rayforge.doceditor.file_cmd.importer_registry"
                 ".get_by_extension",
                 return_value=None,
-            ):
-                cls, features = file_cmd.get_importer_info(
-                    Path("f.txt"), "text/plain"
-                )
-                assert cls is None
-                assert features == set()
+            ),
+        ):
+            cls, features = file_cmd.get_importer_info(
+                Path("f.txt"), "text/plain"
+            )
+            assert cls is None
+            assert features == set()
 
 
 class TestAnalyzeImportTarget:
@@ -719,19 +904,22 @@ class TestAnalyzeImportTarget:
         """Test that unknown files return unsupported."""
         path = Path("test.exe")
         # Ensure no importers match
-        with patch(
-            "rayforge.doceditor.file_cmd.importer_registry.get_by_mime_type",
-            return_value=None,
-        ):
-            with patch(
+        with (
+            patch(
+                "rayforge.doceditor.file_cmd.importer_registry."
+                "get_by_mime_type",
+                return_value=None,
+            ),
+            patch(
                 "rayforge.doceditor.file_cmd.importer_registry"
                 ".get_by_extension",
                 return_value=None,
-            ):
-                action = file_cmd.analyze_import_target(
-                    path, "application/octet-stream"
-                )
-                assert action == ImportAction.UNSUPPORTED
+            ),
+        ):
+            action = file_cmd.analyze_import_target(
+                path, "application/octet-stream"
+            )
+            assert action == ImportAction.UNSUPPORTED
 
 
 class TestExecuteBatchImport:

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Screenshot: Deepnest addon settings dialog."""
 
 import logging
@@ -6,9 +5,11 @@ import time
 from pathlib import Path
 
 from utils import (
+    get_target,
     run_on_main_thread,
     set_window_size,
     take_screenshot,
+    target_to_filename,
     wait_for_settled,
 )
 
@@ -54,6 +55,7 @@ def open_dialog():
 
 
 def main():
+    target = get_target("addon:deepnest")
     _ensure_addon_loaded()
 
     set_window_size(win, 1400, 1000)
@@ -72,7 +74,7 @@ def main():
     dialog = run_on_main_thread(open_dialog)
     time.sleep(0.5)
 
-    take_screenshot("addon-deepnest.png")
+    take_screenshot(target_to_filename(target))
 
     time.sleep(0.25)
     run_on_main_thread(dialog.close)

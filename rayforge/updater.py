@@ -2,7 +2,7 @@ import asyncio
 import logging
 import webbrowser
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import aiohttp
 from blinker import Signal
@@ -44,7 +44,7 @@ class AppUpdateChecker:
         ctx.set_message(_("Checking for Rayforge updates..."))
         try:
             release = await self._fetch_latest_release()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - async task boundary
             logger.error(f"Failed to check for app updates: {e}")
             ctx.set_message(_("Update check failed."))
             return
@@ -79,19 +79,19 @@ class AppUpdateChecker:
             logger.info("Rayforge is up to date.")
             ctx.set_message(_("Rayforge is up to date."))
 
-    async def _fetch_latest_release(self) -> Optional[dict]:
+    async def _fetch_latest_release(self) -> dict | None:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     GITHUB_RELEASES_API,
                     timeout=aiohttp.ClientTimeout(total=15),
-                ) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    logger.warning(
-                        f"GitHub API returned status {response.status}"
-                    )
-                    return None
+                ) as response,
+            ):
+                if response.status == 200:
+                    return await response.json()
+                logger.warning(f"GitHub API returned status {response.status}")
+                return None
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             logger.error(f"Error fetching release info: {e}")
             return None

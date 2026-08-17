@@ -1,7 +1,7 @@
 import copy
 import re
 from gettext import gettext as _
-from typing import List, Optional, Set, cast
+from typing import cast
 
 from gi.repository import Adw, Gtk
 
@@ -13,7 +13,7 @@ from ..varset.varsetwidget import VarSetWidget
 from .template_selector import DialectTemplateSelectorDialog
 
 
-def _text_to_list(text: str) -> List[str]:
+def _text_to_list(text: str) -> list[str]:
     """
     Converts a single string with newlines to a list of non-empty strings.
     """
@@ -21,8 +21,8 @@ def _text_to_list(text: str) -> List[str]:
 
 
 def _get_template_validation_error(
-    template: str, allowed_vars: Set[str]
-) -> Optional[str]:
+    template: str, allowed_vars: set[str]
+) -> str | None:
     """
     Validates a template's syntax and variable names, returning an error
     string if invalid, or None if valid.
@@ -168,9 +168,7 @@ class DialectEditorDialog(PatchedDialogWindow):
                 buffer = text_view.get_buffer()
                 buffer.connect("changed", self._on_row_changed, row, key, True)
 
-    def _set_row_error(
-        self, row: Adw.PreferencesRow, error_msg: Optional[str]
-    ):
+    def _set_row_error(self, row: Adw.PreferencesRow, error_msg: str | None):
         """Applies or removes an error state from a row."""
         error_widget = getattr(row, "_error_icon_widget", None)
 
@@ -181,7 +179,9 @@ class DialectEditorDialog(PatchedDialogWindow):
                     row, (Adw.ActionRow, Adw.ExpanderRow, Adw.EntryRow)
                 ):
                     row.add_suffix(error_widget)
-                setattr(row, "_error_icon_widget", error_widget)
+                row._error_icon_widget = (  # type: ignore[attr-defined]
+                    error_widget
+                )
             row.add_css_class("error")
             error_widget.set_tooltip_text(error_msg)
             error_widget.set_visible(True)

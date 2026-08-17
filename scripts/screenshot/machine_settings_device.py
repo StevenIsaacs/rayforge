@@ -1,10 +1,15 @@
-#!/usr/bin/env python3
 """Screenshot: Machine settings - Device page."""
 
 import logging
 import time
 
-from utils import open_machine_settings, run_on_main_thread, take_screenshot
+from utils import (
+    get_target,
+    open_machine_settings,
+    run_on_main_thread,
+    take_screenshot,
+    target_to_filename,
+)
 
 from rayforge.machine.driver.grbl.grbl_util import get_grbl_setting_varsets
 from rayforge.uiscript import app, win
@@ -33,13 +38,14 @@ def inject_fake_device_settings(dialog):
 
 
 def main():
+    target = get_target(f"machine-settings:{PAGE}")
     time.sleep(0.25)
     dialog = open_machine_settings(win, PAGE)
 
     inject_fake_device_settings(dialog)
 
     time.sleep(0.25)
-    take_screenshot(f"machine-{PAGE}.png")
+    take_screenshot(target_to_filename(target))
     time.sleep(0.25)
     app.quit_idle()
 

@@ -3,9 +3,9 @@ import logging
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 
@@ -24,8 +24,8 @@ class GumroadProvider(LicenseProvider):
 
     def __init__(self, licenses_dir: Path):
         self.config_file = licenses_dir / "gumroad.yaml"
-        self._licenses: Dict[str, str] = {}
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._licenses: dict[str, str] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
         self._load_config()
 
     @property
@@ -47,13 +47,13 @@ class GumroadProvider(LicenseProvider):
         self._cache.pop(product_id, None)
         self._save_config()
 
-    def get_licenses(self) -> Dict[str, str]:
+    def get_licenses(self) -> dict[str, str]:
         return dict(self._licenses)
 
-    def get_cached_result(self, product_id: str) -> Optional[Dict]:
+    def get_cached_result(self, product_id: str) -> dict | None:
         return self._cache.get(product_id)
 
-    def clear_cache(self, product_id: Optional[str] = None) -> None:
+    def clear_cache(self, product_id: str | None = None) -> None:
         if product_id:
             self._cache.pop(product_id, None)
         else:
@@ -62,7 +62,7 @@ class GumroadProvider(LicenseProvider):
     def validate_key(self, product_id: str, license_key: str) -> LicenseResult:
         return self._validate_single(product_id, license_key)
 
-    def validate(self, config: Dict) -> LicenseResult:
+    def validate(self, config: dict) -> LicenseResult:
         product_ids = config.get("product_ids", [])
         if not product_ids:
             product_id = config.get("product_id")
@@ -158,7 +158,7 @@ class GumroadProvider(LicenseProvider):
                 message="License is valid",
                 license_type=license_type,
                 customer_email=purchase.get("email"),
-                last_validated=datetime.now(),
+                last_validated=datetime.now(tz=timezone.utc),
                 metadata={
                     "product_id": product_id,
                     "product_name": purchase.get("product_name"),
@@ -180,32 +180,32 @@ class GumroadProvider(LicenseProvider):
                 status=LicenseStatus.ERROR,
                 message=f"Network error: {e.reason}",
             )
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError) as e:
             logger.error(f"Gumroad validation failed: {e}")
             return LicenseResult(
                 status=LicenseStatus.ERROR,
-                message=f"Validation failed: {str(e)}",
+                message=f"Validation failed: {e!s}",
             )
 
     def _create_test_result(self, product_id: str) -> LicenseResult:
-        expires_at = datetime.now() + timedelta(days=1)
+        expires_at = datetime.now(tz=timezone.utc) + timedelta(days=1)
         result = LicenseResult(
             status=LicenseStatus.VALID,
             message="Test license key",
             license_type=LicenseType.ONE_TIME,
             expires_at=expires_at,
             customer_email="test@example.com",
-            last_validated=datetime.now(),
+            last_validated=datetime.now(tz=timezone.utc),
             metadata={
                 "product_id": product_id,
                 "product_name": "Test Product",
-                "purchase_date": datetime.now().isoformat(),
+                "purchase_date": datetime.now(tz=timezone.utc).isoformat(),
             },
         )
         self._cache_result(product_id, result)
         return result
 
-    def _get_valid_cache(self, product_id: str) -> Optional[Dict]:
+    def _get_valid_cache(self, product_id: str) -> dict | None:
         cached = self._cache.get(product_id)
         if not cached:
             return None
@@ -235,7 +235,7 @@ class GumroadProvider(LicenseProvider):
         self._cache[product_id] = cache_data
         self._save_cache()
 
-    def _cached_to_result(self, cached: Dict) -> LicenseResult:
+    def _cached_to_result(self, cached: dict) -> LicenseResult:
         status = LicenseStatus(cached.get("status"))
         license_type = LicenseType(cached.get("license_type", "unknown"))
         last_validated_str = cached.get("last_validated")
@@ -264,7 +264,7 @@ class GumroadProvider(LicenseProvider):
                     if isinstance(data, dict):
                         self._licenses = data.get("licenses", {})
                         self._cache = data.get("cache", {})
-            except (yaml.YAMLError, IOError) as e:
+            except (OSError, yaml.YAMLError) as e:
                 logger.warning(f"Failed to load Gumroad config: {e}")
 
     def _save_config(self) -> None:

@@ -1,16 +1,15 @@
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from gi.repository import Gdk, GObject, Gtk
+from gi.repository import Gdk, Gio, Gtk
 
 from ...context import get_context
-from ...core.capability import ENGRAVE
 from ...core.step_registry import step_registry
 from ...core.undo.list_cmd import ListItemCommand, ReorderListCommand
 from ..icons import get_icon
 from ..shared.gtk import apply_css
 from ..shared.popover_menu import PopoverMenu
-from .step_settings_dialog import StepSettingsDialog
+from .step_settings.dialog import StepSettingsDialog
 
 if TYPE_CHECKING:
     from ...core.layer import Layer
@@ -62,12 +61,20 @@ class WorkflowRow(Gtk.Box):
 
         self.editor = editor
         self.layer = layer
-        self._workflow: Optional["Workflow"] = None
-        self._drag_source_uid: Optional[str] = None
+        self._workflow: Workflow | None = None
+        self._drag_source_uid: str | None = None
         self._potential_drop_index: int = -1
         self._step_buttons: list = []
         self._btn_uids: dict = {}
-        self._drop_indicator: Optional[Gtk.Box] = None
+        self._drop_indicator: Gtk.Box | None = None
+        self._context_popover: Gtk.PopoverMenu | None = None
+        self._context_step = None
+
+        actions = Gio.SimpleActionGroup()
+        delete_action = Gio.SimpleAction.new("delete", None)
+        delete_action.connect("activate", self._on_delete_action)
+        actions.add_action(delete_action)
+        self.insert_action_group("step", actions)
 
         self._setup_drag_source()
         self._setup_drop_target()
@@ -75,6 +82,11 @@ class WorkflowRow(Gtk.Box):
         self._connect_machine()
         self._connect_workflow()
         self._rebuild()
+
+        right_click = Gtk.GestureClick()
+        right_click.set_button(Gdk.BUTTON_SECONDARY)
+        right_click.connect("pressed", self._on_right_click_pressed)
+        self.add_controller(right_click)
 
     def _setup_drag_source(self):
         self._drag_source = Gtk.DragSource()
@@ -85,9 +97,7 @@ class WorkflowRow(Gtk.Box):
         self.add_controller(self._drag_source)
 
     def _setup_drop_target(self):
-        self._drop_target = Gtk.DropTarget.new(
-            GObject.TYPE_STRING, Gdk.DragAction.MOVE
-        )
+        self._drop_target = Gtk.DropTarget.new(str, Gdk.DragAction.MOVE)
         self._drop_target.connect("drop", self._on_drop)
         self._drop_target.connect("motion", self._on_drop_motion)
         self._drop_target.connect("leave", self._on_drop_leave)
@@ -152,19 +162,16 @@ class WorkflowRow(Gtk.Box):
     def _get_step_icon(self, step) -> str:
         return step.ICON or _FALLBACK_ICON
 
-    def _get_step_color(self, step) -> Optional[str]:
+    def _get_step_color(self, step) -> str | None:
         if not step.visible:
             return None
         machine = get_context().machine
         if not machine or not machine.heads:
             return None
-        try:
-            laser = step.get_selected_laser(machine)
-        except ValueError:
+        head = step.get_selected_head(machine)
+        if head is None:
             return None
-        if ENGRAVE in step.capabilities:
-            return laser.raster_color
-        return laser.cut_color
+        return step.get_operation_color(head)
 
     def _apply_step_color(self, button: Gtk.Button, step):
         color = self._get_step_color(step)
@@ -226,7 +233,7 @@ class WorkflowRow(Gtk.Box):
         spacer.set_hexpand(True)
         self.append(spacer)
 
-        add_icon = get_icon("list-add-symbolic")
+        add_icon = get_icon("add-symbolic")
         add_btn = Gtk.Button(child=add_icon)
         add_btn.add_css_class("flat")
         add_btn.set_tooltip_text(_("Add Step"))
@@ -234,14 +241,14 @@ class WorkflowRow(Gtk.Box):
         add_btn.connect("clicked", self._on_add_step_clicked)
         self.append(add_btn)
 
-    def _step_uid_at(self, x: float) -> Optional[str]:
+    def _step_uid_at(self, x: float) -> str | None:
         for btn in self._step_buttons:
             alloc = btn.get_allocation()
             if alloc.x <= x < alloc.x + alloc.width:
                 return self._btn_uids.get(id(btn))
         return None
 
-    def _btn_at(self, x: float) -> Optional[Gtk.Button]:
+    def _btn_at(self, x: float) -> Gtk.Button | None:
         for btn in self._step_buttons:
             alloc = btn.get_allocation()
             if alloc.x <= x < alloc.x + alloc.width:
@@ -367,8 +374,11 @@ class WorkflowRow(Gtk.Box):
         workflow = self._workflow
         if not workflow or not workflow.doc:
             return
+        machine = self.editor.context.machine
         popup = PopoverMenu(
-            step_factories=step_registry.get_factories(),
+            step_factories=step_registry.get_factories(
+                machine.get_capabilities() if machine else None
+            ),
             context=self.editor.context,
         )
         popup.set_parent(self)
@@ -394,6 +404,46 @@ class WorkflowRow(Gtk.Box):
             StepSettingsDialog.present_for_step(
                 self.editor, new_step, self.get_root()
             )
+
+    def _on_right_click_pressed(self, gesture, n_press, x, y):
+        uid = self._step_uid_at(x)
+        workflow = self._workflow
+        if not uid or not workflow:
+            return
+        step = next((s for s in workflow.steps if s.uid == uid), None)
+        if step is None:
+            return
+        self._context_step = step
+        menu = Gio.Menu.new()
+        menu.append_item(Gio.MenuItem.new(_("Delete"), "step.delete"))
+        self._popup_context_menu(menu, gesture)
+
+    def _popup_context_menu(self, menu: Gio.Menu, gesture: Gtk.Gesture):
+        if self._context_popover:
+            self._context_popover.unparent()
+        popover = Gtk.PopoverMenu.new_from_model(menu)
+        popover.set_parent(self)
+        popover.set_has_arrow(False)
+        ok, rect = gesture.get_bounding_box()
+        if ok:
+            popover.set_pointing_to(rect)
+        self._context_popover = popover
+        popover.popup()
+
+    def _on_delete_action(self, action, param):
+        workflow = self._workflow
+        step = self._context_step
+        if not workflow or not workflow.doc or step is None:
+            return
+        new_list = [s for s in workflow.steps if s is not step]
+        command = ReorderListCommand(
+            target_obj=workflow,
+            list_property_name="steps",
+            new_list=new_list,
+            setter_method_name="set_steps",
+            name=_("Remove step '{name}'").format(name=step.name),
+        )
+        workflow.doc.history_manager.execute(command)
 
     def do_destroy(self):
         self._disconnect_machine()

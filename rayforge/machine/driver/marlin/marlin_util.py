@@ -1,7 +1,8 @@
 """Parsing utilities for the Marlin firmware driver."""
 
 import re
-from typing import Dict, List, Optional, Tuple
+
+from ....shared.units.system import UnitSystem
 
 MARLIN_HANDSHAKE_TIMEOUT = 5.0
 MARLIN_COMMAND_TIMEOUT = 30.0
@@ -21,6 +22,10 @@ m203_feedrate_re = re.compile(
     r"X([+-]?\d+\.?\d*)\s+"
     r"Y([+-]?\d+\.?\d*)"
 )
+m149_units_re = re.compile(
+    r"M149\s+Units\s+in\s+(inches|inch|in|mm|millimeters|millimetres)",
+    re.IGNORECASE,
+)
 m204_accel_re = re.compile(r"echo:\s*M204\s+S([+-]?\d+\.?\d*)")
 m211_max_re = re.compile(
     r"X:?\s*([+-]?\d+\.?\d*)\s+"
@@ -29,8 +34,8 @@ m211_max_re = re.compile(
 
 
 def parse_m114_position(
-    response_lines: List[str],
-) -> Optional[Tuple[float, float, float]]:
+    response_lines: list[str],
+) -> tuple[float, float, float] | None:
     """
     Parse M114 output to extract the (X, Y, Z) position.
 
@@ -51,7 +56,7 @@ def parse_m114_position(
     return None
 
 
-def parse_marlin_version(line: str) -> Optional[str]:
+def parse_marlin_version(line: str) -> str | None:
     """
     Extract the Marlin version string from a boot line.
 
@@ -124,15 +129,15 @@ def is_boot_message(line: str) -> bool:
 
 
 def parse_m115_firmware_info(
-    response_lines: List[str],
-) -> Dict[str, str]:
+    response_lines: list[str],
+) -> dict[str, str]:
     """
     Parse M115 response to extract firmware name and machine type.
 
     Returns a dict with optional keys ``firmware_name`` and
     ``machine_type``.
     """
-    info: Dict[str, str] = {}
+    info: dict[str, str] = {}
     for line in response_lines:
         match = m115_firmware_re.search(line)
         if match:
@@ -144,8 +149,8 @@ def parse_m115_firmware_info(
 
 
 def parse_m211_endstops(
-    response_lines: List[str],
-) -> Optional[Tuple[float, float]]:
+    response_lines: list[str],
+) -> tuple[float, float] | None:
     """
     Parse M211 output to extract X/Y max travel from software endstops.
 
@@ -159,8 +164,8 @@ def parse_m211_endstops(
 
 
 def parse_m503_settings(
-    response_lines: List[str],
-) -> Dict[str, float]:
+    response_lines: list[str],
+) -> dict[str, float]:
     """
     Parse M503 output to extract key motion settings.
 
@@ -168,7 +173,7 @@ def parse_m503_settings(
       - ``max_feedrate_x``, ``max_feedrate_y`` (mm/s from M203)
       - ``acceleration`` (mm/s^2 from M204 S)
     """
-    settings: Dict[str, float] = {}
+    settings: dict[str, float] = {}
     for line in response_lines:
         match = m203_feedrate_re.search(line)
         if match:
@@ -180,9 +185,33 @@ def parse_m503_settings(
     return settings
 
 
+def detect_unit_system_from_m149(
+    response_lines: list[str],
+) -> UnitSystem | None:
+    """
+    Inspect Marlin ``M149`` response lines and infer the device's
+    unit system.
+
+    Marlin reports the active linear unit with lines such as
+    ``echo: M149 Units in inches`` or ``echo: M149 Units in mm``.
+
+    Returns ``UnitSystem.IMPERIAL`` when the unit is inches,
+    ``UnitSystem.METRIC`` when it is millimeters, or ``None`` when
+    no recognizable ``M149`` line is present.
+    """
+    for line in response_lines:
+        match = m149_units_re.search(line)
+        if match:
+            unit = match.group(1).lower()
+            if unit in ("inches", "inch", "in"):
+                return UnitSystem.IMPERIAL
+            return UnitSystem.METRIC
+    return None
+
+
 def extract_marlin_device_name(
-    m115_lines: List[str],
-    boot_lines: Optional[List[str]] = None,
+    m115_lines: list[str],
+    boot_lines: list[str] | None = None,
 ) -> str:
     """
     Extract a human-readable device name from M115 and boot output.
@@ -211,7 +240,7 @@ def extract_marlin_device_name(
     return "Unknown Marlin Device"
 
 
-def gcode_to_p_number(wcs_slot: str) -> Optional[int]:
+def gcode_to_p_number(wcs_slot: str) -> int | None:
     """Converts a G-code WCS name (e.g., "G54") to its P-number."""
     try:
         if not wcs_slot.startswith("G"):

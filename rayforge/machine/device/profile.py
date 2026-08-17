@@ -4,19 +4,22 @@ from dataclasses import asdict, dataclass
 from dataclasses import fields as dc_fields
 from gettext import gettext as _
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
 
 from ...camera.models.camera import Camera
+from ...camera.v4l import migrate_camera_data
 from ...core.model import Model
 from ...machine.driver import get_driver_cls
 from ...machine.models.dialect import GcodeDialect
-from ...machine.models.laser import Laser
+from ...machine.models.head import head_from_dict
 from ...machine.models.machine import Machine, Origin
+from ...machine.models.machine_panel import PanelOrientation
 from ...machine.models.macro import Macro, MacroTrigger
 from ...machine.models.rotary_module import RotaryModule
 from ...machine.models.zone import Zone
+from ...shared.units.system import UnitSystem
 
 if TYPE_CHECKING:
     from ...context import RayforgeContext
@@ -42,7 +45,7 @@ class DeviceMeta:
 _DEVICE_META_FIELDS = frozenset(f.name for f in dc_fields(DeviceMeta))
 
 
-def parse_meta(data: Dict, manifest_path: Path) -> DeviceMeta:
+def parse_meta(data: dict, manifest_path: Path) -> DeviceMeta:
     api_version = data.get("api_version", 1)
     if api_version != CURRENT_API_VERSION:
         raise ValueError(
@@ -52,7 +55,7 @@ def parse_meta(data: Dict, manifest_path: Path) -> DeviceMeta:
 
     device_data = data.get("device", {})
     if not isinstance(device_data, dict):
-        raise ValueError(f"Invalid 'device' section in {manifest_path}")
+        raise TypeError(f"Invalid 'device' section in {manifest_path}")
 
     if not device_data.get("name"):
         raise ValueError(f"Missing 'device.name' in {manifest_path}")
@@ -69,10 +72,10 @@ _TUPLE_FIELDS = frozenset({"axis_extents", "work_margins", "soft_limits"})
 _VALID_ORIGINS = sorted(o.value for o in Origin)
 
 
-def parse_machine_config(data: Dict, manifest_path: Path) -> "MachineConfig":
+def parse_machine_config(data: dict, manifest_path: Path) -> "MachineConfig":
     raw = data.get("machine", {})
     if not isinstance(raw, dict):
-        raise ValueError(f"Invalid 'machine' section in {manifest_path}")
+        raise TypeError(f"Invalid 'machine' section in {manifest_path}")
 
     _validate_machine_config(raw, manifest_path)
 
@@ -90,6 +93,23 @@ def parse_machine_config(data: Dict, manifest_path: Path) -> "MachineConfig":
                     f"{manifest_path}. Must be one of: "
                     f"{_VALID_ORIGINS}"
                 )
+        elif key == "unit_system":
+            try:
+                value = UnitSystem(value)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid unit_system '{raw['unit_system']}' in "
+                    f"{manifest_path}. Must be one of: "
+                    f"{sorted(u.value for u in UnitSystem)}"
+                )
+        elif key == "panel_orientation":
+            try:
+                value = PanelOrientation(value)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid panel_orientation "
+                    f"'{raw['panel_orientation']}' in {manifest_path}"
+                )
         elif key in _TUPLE_FIELDS:
             value = tuple(value)
         kwargs[key] = value
@@ -97,7 +117,7 @@ def parse_machine_config(data: Dict, manifest_path: Path) -> "MachineConfig":
     return MachineConfig(**kwargs)
 
 
-def _validate_machine_config(config: Dict[str, Any], manifest_path: Path):
+def _validate_machine_config(config: dict[str, Any], manifest_path: Path):
     for key in config:
         if key not in _MACHINE_CONFIG_KEYS:
             logger.warning(
@@ -140,27 +160,22 @@ def _validate_machine_config(config: Dict[str, Any], manifest_path: Path):
                 f"in {manifest_path}"
             )
 
-    if "heads" in config:
-        if not isinstance(config["heads"], list):
-            raise ValueError(f"'heads' must be a list in {manifest_path}")
+    if "heads" in config and not isinstance(config["heads"], list):
+        raise ValueError(f"'heads' must be a list in {manifest_path}")
 
-    if "hookmacros" in config:
-        if not isinstance(config["hookmacros"], list):
-            raise ValueError(f"'hookmacros' must be a list in {manifest_path}")
+    if "hookmacros" in config and not isinstance(config["hookmacros"], list):
+        raise ValueError(f"'hookmacros' must be a list in {manifest_path}")
 
-    if "rotary_modules" in config:
-        if not isinstance(config["rotary_modules"], list):
-            raise ValueError(
-                f"'rotary_modules' must be a list in {manifest_path}"
-            )
+    if "rotary_modules" in config and not isinstance(
+        config["rotary_modules"], list
+    ):
+        raise ValueError(f"'rotary_modules' must be a list in {manifest_path}")
 
-    if "nogo_zones" in config:
-        if not isinstance(config["nogo_zones"], list):
-            raise ValueError(f"'nogo_zones' must be a list in {manifest_path}")
+    if "nogo_zones" in config and not isinstance(config["nogo_zones"], list):
+        raise ValueError(f"'nogo_zones' must be a list in {manifest_path}")
 
-    if "cameras" in config:
-        if not isinstance(config["cameras"], list):
-            raise ValueError(f"'cameras' must be a list in {manifest_path}")
+    if "cameras" in config and not isinstance(config["cameras"], list):
+        raise ValueError(f"'cameras' must be a list in {manifest_path}")
 
 
 def _resolve_and_copy_models(
@@ -201,36 +216,40 @@ def _copy_model_ref(
 
 @dataclass
 class MachineConfig:
-    driver: Optional[str] = None
-    driver_args: Optional[Dict[str, Any]] = None
-    driver_config: Optional[Dict[str, Any]] = None
-    gcode_precision: Optional[int] = None
-    supports_arcs: Optional[bool] = None
-    supports_curves: Optional[bool] = None
-    axis_extents: Optional[Tuple[float, float]] = None
-    work_margins: Optional[Tuple[float, float, float, float]] = None
-    soft_limits: Optional[Tuple[float, float, float, float]] = None
-    origin: Optional[Origin] = None
-    max_travel_speed: Optional[int] = None
-    max_cut_speed: Optional[int] = None
-    home_on_start: Optional[bool] = None
-    acceleration: Optional[int] = None
-    single_axis_homing_enabled: Optional[bool] = None
-    rotary_enabled_default: Optional[bool] = None
-    heads: Optional[List[Dict[str, Any]]] = None
-    hookmacros: Optional[List[Dict[str, Any]]] = None
-    rotary_modules: Optional[List[Dict[str, Any]]] = None
-    nogo_zones: Optional[List[Dict[str, Any]]] = None
-    cameras: Optional[List[Dict[str, Any]]] = None
+    driver: str | None = None
+    driver_args: dict[str, Any] | None = None
+    driver_config: dict[str, Any] | None = None
+    gcode_precision: int | None = None
+    supports_arcs: bool | None = None
+    supports_curves: bool | None = None
+    axis_extents: tuple[float, float] | None = None
+    work_margins: tuple[float, float, float, float] | None = None
+    soft_limits: tuple[float, float, float, float] | None = None
+    origin: Origin | None = None
+    panel_orientation: PanelOrientation | None = None
+    max_travel_speed: int | None = None
+    max_cut_speed: int | None = None
+    home_on_start: bool | None = None
+    acceleration: int | None = None
+    single_axis_homing_enabled: bool | None = None
+    has_z: bool | None = None
+    rotary_enabled_default: bool | None = None
+    unit_system: UnitSystem | None = None
+    heads: list[dict[str, Any]] | None = None
+    capabilities: list[str] | None = None
+    hookmacros: list[dict[str, Any]] | None = None
+    rotary_modules: list[dict[str, Any]] | None = None
+    nogo_zones: list[dict[str, Any]] | None = None
+    cameras: list[dict[str, Any]] | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         for key, value in asdict(self).items():
             if value is None:
                 continue
             if isinstance(value, tuple):
                 result[key] = list(value)
-            elif isinstance(value, Origin):
+            elif isinstance(value, (Origin, PanelOrientation, UnitSystem)):
                 result[key] = value.value
             else:
                 result[key] = value
@@ -289,13 +308,25 @@ class MachineConfig:
             work_margins=work_margins,
             soft_limits=machine.soft_limits,
             origin=machine.origin,
+            panel_orientation=machine.panel.orientation,
             max_travel_speed=machine.max_travel_speed,
             max_cut_speed=machine.max_cut_speed,
             home_on_start=machine.home_on_start,
             acceleration=machine.acceleration,
             single_axis_homing_enabled=(machine.single_axis_homing_enabled),
             rotary_enabled_default=machine.rotary_enabled_default,
+            unit_system=machine.unit_system,
             heads=heads,
+            capabilities=(
+                [
+                    c.value
+                    for c in sorted(
+                        machine._explicit_capabilities, key=lambda c: c.value
+                    )
+                ]
+                if machine._explicit_capabilities
+                else None
+            ),
             hookmacros=hookmacros,
             rotary_modules=rotary_modules,
             nogo_zones=nogo_zones,
@@ -310,8 +341,8 @@ _MACHINE_CONFIG_KEYS = frozenset(f.name for f in dc_fields(MachineConfig))
 class DeviceProfile:
     meta: DeviceMeta
     machine_config: MachineConfig
-    dialect_config: Dict[str, Any]
-    source_dir: Optional[Path] = None
+    dialect_config: dict[str, Any]
+    source_dir: Path | None = None
 
     @property
     def name(self) -> str:
@@ -346,7 +377,7 @@ class DeviceProfile:
             data = yaml.safe_load(f)
 
         if not isinstance(data, dict):
-            raise ValueError(
+            raise TypeError(
                 f"Invalid device manifest: {manifest_path} is not a mapping"
             )
 
@@ -358,7 +389,7 @@ class DeviceProfile:
             driver_cls = get_driver_cls(machine_config.driver)
             driver_uses_gcode = driver_cls.uses_gcode
 
-        dialect_config: Dict[str, Any] = {}
+        dialect_config: dict[str, Any] = {}
         dialect_path = path / DIALECT_FILENAME
         if dialect_path.exists():
             with open(dialect_path, "r") as f:
@@ -389,7 +420,7 @@ class DeviceProfile:
             driver_uses_gcode = driver_cls.uses_gcode
             try:
                 m.set_driver(driver_cls, cfg.driver_args)
-            except Exception as exc:
+            except (ValueError, TypeError, RuntimeError) as exc:
                 logger.error(
                     f"Failed to create driver {cfg.driver} "
                     f"for device '{self.name}': {exc}"
@@ -425,6 +456,10 @@ class DeviceProfile:
             m.set_soft_limits(*cfg.soft_limits)
         if cfg.origin is not None:
             m.origin = cfg.origin
+        if cfg.panel_orientation is not None:
+            # Profile cameras replace the machine's cameras below and their
+            # saved alignment already uses the profile's orientation.
+            m.panel._orientation = cfg.panel_orientation
         if cfg.max_travel_speed is not None:
             m.max_travel_speed = cfg.max_travel_speed
         if cfg.max_cut_speed is not None:
@@ -435,8 +470,12 @@ class DeviceProfile:
             m.acceleration = cfg.acceleration
         if cfg.single_axis_homing_enabled is not None:
             m.single_axis_homing_enabled = cfg.single_axis_homing_enabled
+        if cfg.has_z is not None:
+            m.set_has_z_axis(cfg.has_z)
         if cfg.rotary_enabled_default is not None:
             m.rotary_enabled_default = cfg.rotary_enabled_default
+        if cfg.unit_system is not None:
+            m.unit_system = cfg.unit_system
 
         if cfg.hookmacros is not None:
             for s_data in cfg.hookmacros:
@@ -449,13 +488,18 @@ class DeviceProfile:
         m.cameras = []
         if cfg.cameras is not None:
             for cam_data in cfg.cameras:
-                m.add_camera(Camera.from_dict(cam_data))
+                m.add_camera(Camera.from_dict(migrate_camera_data(cam_data)))
 
         if cfg.heads is not None:
             for head in m.heads[:]:
                 m.remove_head(head)
             for head_data in cfg.heads:
-                m.add_head(Laser.from_dict(head_data))
+                m.add_head(head_from_dict(head_data))
+
+        if cfg.capabilities is not None:
+            m.set_explicit_capabilities(
+                Machine._parse_capabilities(cfg.capabilities)
+            )
 
         if cfg.rotary_modules is not None:
             for rm_data in cfg.rotary_modules:

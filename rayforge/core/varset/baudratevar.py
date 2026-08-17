@@ -1,9 +1,10 @@
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .intvar import IntVar, ValidationError
 
-STANDARD_BAUD_RATES: List[int] = [
+STANDARD_BAUD_RATES: list[int] = [
     9600,
     19200,
     38400,
@@ -17,7 +18,7 @@ STANDARD_BAUD_RATES: List[int] = [
 ]
 
 
-def validate_baud_rate(rate: Optional[int], choices: List[int]):
+def validate_baud_rate(rate: int | None, choices: list[int]):
     """Raises ValidationError if the baud rate is not in the choices list."""
     if rate is None:
         raise ValidationError(_("Baud rate cannot be empty."))
@@ -36,14 +37,16 @@ class BaudrateVar(IntVar):
         self,
         key: str,
         label: str = _("Baud Rate"),
-        description: Optional[str] = _("Connection speed in bits per second"),
-        default: Optional[int] = 115200,
-        value: Optional[int] = None,
-        min_val: Optional[int] = None,
-        max_val: Optional[int] = None,
-        choices: Optional[List[int]] = None,
+        description: str | None = _("Connection speed in bits per second"),
+        default: int | None = 115200,
+        value: int | None = None,
+        min_val: int | None = None,
+        max_val: int | None = None,
+        choices: list[int] | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
-        self.choices: List[int] = (
+        self.choices: list[int] = (
             choices if choices is not None else list(STANDARD_BAUD_RATES)
         )
         super().__init__(
@@ -56,9 +59,10 @@ class BaudrateVar(IntVar):
             min_val=300,
             max_val=4000000,
             validator=lambda v: validate_baud_rate(v, self.choices),
+            visible_when=visible_when,
         )
 
-    def to_dict(self, include_value: bool = False) -> Dict[str, Any]:
+    def to_dict(self, include_value: bool = False) -> dict[str, Any]:
         data = super().to_dict(include_value=include_value)
         data["choices"] = self.choices
         return data

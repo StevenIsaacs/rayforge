@@ -37,7 +37,7 @@ Presets sind Startpunkte - du kannst alle Parameter nach Auswahl anpassen.
 
 Passe die Testraster-Parameter im Einstellungsdialog an:
 
-![Materialtest-Raster-Einstellungen](/screenshots/material-test-grid.png)
+![Materialtest-Raster-Einstellungen](/screenshots/material-test.png)
 
 #### Testtyp
 
@@ -239,6 +239,6 @@ Führe dieselbe Rasterkonfiguration auf verschiedenen Materialien aus, um deine 
 
 ## Verwandte Themen
 
-- **[3D-Vorschau](../ui/3d-preview)** - Testausführung vor dem Ausführen vorschauen
+- **[3D-Vorschau](../../ui/3d-preview.md)** - Testausführung vor dem Ausführen vorschauen
 - **[Gravur](engrave)** - Gravur-Operationen verstehen
 - **[Kontur-Schneiden](contour)** - Schneide-Operationen verstehen

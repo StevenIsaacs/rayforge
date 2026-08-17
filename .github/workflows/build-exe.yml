@@ -20,7 +20,7 @@ jobs:
     outputs:
       version: ${{ steps.set-version.outputs.version }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -124,13 +124,13 @@ jobs:
           zip -r9 "${ZIP_FILE}" "${BUNDLE_DIR}"
 
       - name: Upload PyInstaller bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rayforge-v${{ steps.set-version.outputs.version }}-windows-bundle
           path: dist/rayforge-v${{ steps.set-version.outputs.version }}-windows-bundle.zip
 
       - name: Upload Installer Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rayforge-v${{ steps.set-version.outputs.version }}-installer.zip
           path: dist/rayforge-v${{ steps.set-version.outputs.version }}-installer.exe
@@ -141,12 +141,12 @@ jobs:
     needs: build
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Download Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-v${{ needs.build.outputs.version }}-windows-bundle
 
@@ -198,13 +198,13 @@ jobs:
           fi
 
       - name: Download Installer Artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           # For the release, we use the installer artifact
           name: rayforge-v${{ needs.build.outputs.version }}-installer.zip
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # The file to attach to the release is the installer
           files: rayforge-v${{ needs.build.outputs.version }}-installer.exe

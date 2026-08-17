@@ -1,24 +1,24 @@
-#!/usr/bin/env python3
 """Screenshot: Step settings dialog."""
 
 import logging
-import os
 import time
 
 from utils import (
     find_step_by_type,
+    get_target,
     load_project,
     open_step_settings,
     run_on_main_thread,
     set_window_size,
     take_screenshot,
+    target_to_filename,
 )
 
 from rayforge.uiscript import app, win
 
 logger = logging.getLogger(__name__)
 
-TARGET = os.environ.get("TARGET", "step-settings:contour:general")
+TARGET = get_target("step-settings:contour:general")
 
 ENGRAVE_MODES = {
     "constant_power": "CONSTANT_POWER",
@@ -35,7 +35,12 @@ def parse_target(target: str) -> tuple[str, str, str | None]:
     tab = parts[2] if len(parts) > 2 else "general"
     mode = parts[3] if len(parts) > 3 else None
 
-    page = "post-processing" if tab == "post" else "step-settings"
+    if tab == "post":
+        page = "post-processing"
+    elif tab == "laser":
+        page = "laser"
+    else:
+        page = "step-settings"
     return step_type, page, mode
 
 
@@ -47,13 +52,15 @@ def set_engrave_mode(dialog, mode_name: str):
     mode_index = list(DepthMode).index(mode_enum)
 
     general_view = dialog.general_view
-    logger.info("Searching for mode_row in general_view children...")
+    logger.info("Searching for mode row in general_view varset widgets...")
 
     def find_mode_row(widget, depth=0):
         indent = "  " * depth
         logger.info(f"{indent}Checking: {type(widget).__name__}")
-        if hasattr(widget, "mode_row") and widget.mode_row is not None:
-            return widget.mode_row
+        if hasattr(widget, "row_for"):
+            row = widget.row_for("depth_mode")
+            if row is not None:
+                return row
         child = widget.get_first_child()
         while child:
             result = find_mode_row(child, depth + 1)
@@ -68,7 +75,7 @@ def set_engrave_mode(dialog, mode_name: str):
         logger.info(f"Set engrave mode to: {mode_name} (index {mode_index})")
         return True
 
-    logger.warning("Could not find engraver widget with mode_row")
+    logger.warning("Could not find engraver widget with mode row")
     return False
 
 
@@ -106,7 +113,7 @@ def main():
             run_on_main_thread(lambda m=mode_name: set_engrave_mode(dialog, m))
             time.sleep(0.5)
 
-    output_name = f"{TARGET.replace(':', '-')}.png"
+    output_name = target_to_filename(TARGET)
 
     take_screenshot(output_name)
     time.sleep(0.25)

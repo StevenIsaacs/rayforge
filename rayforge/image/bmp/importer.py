@@ -1,8 +1,9 @@
 import logging
+import struct
 import warnings
 from gettext import gettext as _
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
@@ -38,11 +39,11 @@ class BmpImporter(Importer):
     label = "BMP files"
     mime_types = ("image/bmp",)
     extensions = (".bmp",)
-    features = {ImporterFeature.BITMAP_TRACING}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.BITMAP_TRACING}
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._image: Optional[pyvips.Image] = None
+        self._image: pyvips.Image | None = None
 
     def scan(self) -> ImportManifest:
         """
@@ -52,7 +53,9 @@ class BmpImporter(Importer):
         try:
             parsed_data = parse_bmp(self.raw_data)
             if not parsed_data:
-                self.add_error(_(f"Could not parse BMP header in {fname}"))
+                self.add_error(
+                    _("Could not parse BMP header in {}").format(fname)
+                )
                 return ImportManifest(title=fname, errors=self._errors)
 
             _ignored, width, height, dpi_x, dpi_y = parsed_data
@@ -68,9 +71,9 @@ class BmpImporter(Importer):
                 warnings=self._warnings,
                 errors=self._errors,
             )
-        except Exception as e:
+        except (struct.error, ValueError, IndexError) as e:
             logger.warning(f"BMP scan failed for {fname}: {e}")
-            self.add_error(_(f"Failed to scan BMP file: {e}"))
+            self.add_error(_("Failed to scan BMP file: {}").format(e))
             return ImportManifest(title=fname, errors=self._errors)
 
     def create_source_asset(self, parse_result: ParsingResult) -> SourceAsset:
@@ -112,7 +115,7 @@ class BmpImporter(Importer):
             source_parse_result=parse_result,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         """
         Phase 1: Parsing.
 
@@ -145,7 +148,7 @@ class BmpImporter(Importer):
                 "Failed to create pyvips image from parsed BMP data: %s", e
             )
             self._image = None
-            self.add_error(_(f"Image processing failed: {e}"))
+            self.add_error(_("Image processing failed: {}").format(e))
             return None
 
         # Calculate unit conversion (pixels to mm)
@@ -155,7 +158,7 @@ class BmpImporter(Importer):
         document_bounds = (0.0, 0.0, float(width), float(height))
 
         # World frame is Y-Up, so y-origin is 0. BMPs have no untrimmed bounds.
-        x, y, w, h = document_bounds
+        x, _y, w, h = document_bounds
         world_frame = (
             x * native_unit_to_mm,
             0.0,

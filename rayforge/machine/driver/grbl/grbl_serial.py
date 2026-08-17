@@ -1,17 +1,11 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -25,8 +19,13 @@ from ....core.varset import (
     Var,
     VarSet,
 )
-from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
+from ....pipeline.encoder.base import (
+    EncodedOutput,
+    MachineCodeOpMap,
+    OpsEncoder,
+)
 from ....pipeline.encoder.gcode import GcodeEncoder
+from ....shared.units.system import UnitSystem, inches_to_mm
 from ...transport import SerialTransport, TransportStatus
 from ...transport.grbl import (
     DEFAULT_GRBL_RX_BUFFER_SIZE,
@@ -49,10 +48,12 @@ from .grbl_probe import probe_grbl_device
 from .grbl_util import (
     CommandRequest,
     alarm_code_to_device_error,
+    detect_unit_system_from_settings,
     error_code_to_device_error,
     gcode_to_p_number,
     get_grbl_setting_varsets,
     grbl_setting_re,
+    is_report_in_inches,
     parse_grbl_parser_state,
     parse_opt_info,
     parse_state,
@@ -84,30 +85,32 @@ class GrblSerialDriver(Driver):
     supports_settings = True
     reports_granular_progress = True
     supports_probing = True
+    supports_unit_detection = True
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
-        self.grbl_transport: Optional[GrblSerialTransport] = None
+        self.grbl_transport: GrblSerialTransport | None = None
         self.keep_running = False
-        self._connection_task: Optional[asyncio.Task] = None
-        self._current_request: Optional[CommandRequest] = None
-        self._interactive_request: Optional[CommandRequest] = None
+        self._connection_task: asyncio.Task | None = None
+        self._current_request: CommandRequest | None = None
+        self._interactive_request: CommandRequest | None = None
         self._cmd_lock = asyncio.Lock()
         self._command_queue: asyncio.Queue[CommandRequest] = asyncio.Queue()
-        self._command_task: Optional[asyncio.Task] = None
+        self._command_task: asyncio.Task | None = None
         self._is_cancelled = False
         self._raw_grbl_status: DeviceStatus = DeviceStatus.UNKNOWN
         self._job_running = False
-        self._on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None
+        self._on_command_done: (
+            Callable[[int], None | Awaitable[None]] | None
+        ) = None
         self._last_reported_op_index = -1
-        self._job_exception: Optional[Exception] = None
+        self._job_exception: Exception | None = None
         self._poll_status_while_running: bool = False
         self._deadlock_detection: bool = False
         self._rx_buffer_size_override: int = 0
+        self._report_in_inches: bool = False
         self._handshake_received = asyncio.Event()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def machine_space_wcs(self) -> str:
@@ -118,7 +121,7 @@ class GrblSerialDriver(Driver):
         return _("Machine Coordinates (G53)")
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         if self.grbl_transport and self.grbl_transport.port:
             return f"serial://{self.grbl_transport.port}"
         return None
@@ -192,7 +195,7 @@ class GrblSerialDriver(Driver):
     @classmethod
     async def probe(
         cls, context: "RayforgeContext", **kwargs: Any
-    ) -> Tuple["DeviceProfile", List[str]]:
+    ) -> tuple["DeviceProfile", list[str]]:
         return await probe_grbl_device(cls, context, **kwargs)
 
     def _setup_implementation(self, **kwargs: Any) -> None:
@@ -232,7 +235,7 @@ class GrblSerialDriver(Driver):
         )
 
     def on_serial_status_changed(
-        self, sender, status: TransportStatus, message: Optional[str] = None
+        self, sender, status: TransportStatus, message: str | None = None
     ):
         """
         Handle status changes from the serial transport.
@@ -270,7 +273,7 @@ class GrblSerialDriver(Driver):
                 await self._connection_task
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - awaited task cleanup
                 logger.warning(
                     f"Ignored exception in connection task during cleanup: {e}"
                 )
@@ -282,7 +285,7 @@ class GrblSerialDriver(Driver):
                 await self._command_task
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - awaited task cleanup
                 logger.warning(
                     f"Ignored exception in command task during cleanup: {e}"
                 )
@@ -444,10 +447,7 @@ class GrblSerialDriver(Driver):
                 logger.info("Connection loop cancelled.")
                 break
             except Exception as e:
-                logger.error(
-                    f"Unexpected error in connection loop: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Unexpected error in connection loop")
                 self._update_connection_status(TransportStatus.ERROR, str(e))
             finally:
                 if self.grbl_transport and self.grbl_transport.is_connected:
@@ -523,18 +523,13 @@ class GrblSerialDriver(Driver):
                 logger.info("Command queue processing cancelled.")
                 break
             except Exception as e:
-                logger.error(
-                    f"Unexpected error in command queue: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Unexpected error in command queue")
                 self._update_connection_status(TransportStatus.ERROR, str(e))
         logger.debug("Leaving _process_command_queue.")
 
     def _start_job(
         self,
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ):
         """Initializes state for a new streaming job."""
         self._is_cancelled = False
@@ -610,11 +605,13 @@ class GrblSerialDriver(Driver):
             DeviceStatus.HOLD,
         ):
             return True
+
         buf_avail = self.state.buffer_available
-        if buf_avail is not None and transport._rx_buffer_size > 0:
-            if buf_avail >= transport._rx_buffer_size:
-                return True
-        return False
+        return (
+            buf_avail is not None
+            and transport._rx_buffer_size > 0
+            and buf_avail >= transport._rx_buffer_size
+        )
 
     async def _poll_and_check_idle(
         self, transport, hold_lock: bool = True
@@ -703,7 +700,7 @@ class GrblSerialDriver(Driver):
         transport,
         line: str,
         command_bytes: bytes,
-        op_index: Optional[int],
+        op_index: int | None,
         timeout: float,
     ) -> None:
         """Send a single gcode line with buffer accounting."""
@@ -756,9 +753,9 @@ class GrblSerialDriver(Driver):
 
     async def _stream_gcode(
         self,
-        gcode_lines: List[str],
-        machine_code_to_op_map: Optional[Dict[int, int]] = None,
-        command_times: Optional[List[float]] = None,
+        gcode_lines: list[str],
+        op_map: MachineCodeOpMap | None = None,
+        command_times: list[float] | None = None,
     ):
         """
         The core G-code streaming logic using character-counting protocol.
@@ -786,22 +783,20 @@ class GrblSerialDriver(Driver):
                         "Job cancelled, errored, or machine in ALARM "
                         "state. Stopping G-code sending."
                     )
-                    if self.state.status == DeviceStatus.ALARM:
-                        if not self._job_exception:
-                            self._job_exception = DeviceConnectionError(
-                                "Machine entered ALARM state during job."
-                            )
+                    if (
+                        self.state.status == DeviceStatus.ALARM
+                        and not self._job_exception
+                    ):
+                        self._job_exception = DeviceConnectionError(
+                            "Machine entered ALARM state during job."
+                        )
                     break
 
                 line = strip_gcode_comments(line)
                 if not line:
                     continue
 
-                op_index = (
-                    machine_code_to_op_map.get(line_idx)
-                    if machine_code_to_op_map
-                    else None
-                )
+                op_index = op_map.op_for_line(line_idx) if op_map else None
                 command_bytes = (line + "\n").encode("utf-8")
 
                 if (
@@ -904,13 +899,11 @@ class GrblSerialDriver(Driver):
         encoded: EncodedOutput,
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         self._start_job(on_command_done)
 
-        mapping = encoded.op_map.machine_code_to_op if encoded.op_map else None
+        mapping = encoded.op_map
         gcode_lines = encoded.text.splitlines()
 
         command_times = ops.estimate_command_times(
@@ -929,11 +922,8 @@ class GrblSerialDriver(Driver):
                 f"Job terminated due to device error: {e}. "
                 "Connection remains active."
             )
-        except Exception as e:
-            logger.error(
-                f"Job terminated with unexpected error: {e!r}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception("Job terminated with unexpected error")
 
     async def run_raw(self, machine_code: str) -> None:
         """
@@ -953,11 +943,8 @@ class GrblSerialDriver(Driver):
                 f"Raw G-code terminated due to device error: {e}. "
                 "Connection remains active."
             )
-        except Exception as e:
-            logger.error(
-                f"Raw G-code terminated with unexpected error: {e!r}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception("Raw G-code terminated with unexpected error")
 
     async def cancel(self) -> None:
         logger.debug("Cancel command initiated.")
@@ -991,7 +978,7 @@ class GrblSerialDriver(Driver):
         else:
             raise ConnectionError("Serial transport not initialized")
 
-    async def _execute_command(self, command: str) -> List[str]:
+    async def _execute_command(self, command: str) -> list[str]:
         self._is_cancelled = False
         request = CommandRequest(command)
         await self._command_queue.put(request)
@@ -1012,7 +999,7 @@ class GrblSerialDriver(Driver):
             raise
         return request.response_lines
 
-    async def execute_interactive_command(self, command: str) -> List[str]:
+    async def execute_interactive_command(self, command: str) -> list[str]:
         """
         Send a command and synchronously await its full response.
 
@@ -1068,11 +1055,11 @@ class GrblSerialDriver(Driver):
         self._is_cancelled = False
         await self._send_realtime("!" if hold else "~", add_newline=False)
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         """GRBL supports homing for all axes."""
         return True
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         """
         Homes the specified axes or all axes if none specified.
 
@@ -1112,7 +1099,9 @@ class GrblSerialDriver(Driver):
     async def move_to(self, pos_x, pos_y) -> None:
         dialect = self.dialect
         cmd = dialect.move_to.format(
-            speed=1500, x=float(pos_x), y=float(pos_y)
+            speed=self._to_machine_speed(1500),
+            x=self._to_machine_length(float(pos_x)),
+            y=self._to_machine_length(float(pos_y)),
         )
         await self._execute_command(cmd)
 
@@ -1182,7 +1171,7 @@ class GrblSerialDriver(Driver):
                 break
             await asyncio.sleep(0.05)
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         """GRBL supports jogging for all axes."""
         return True
 
@@ -1196,10 +1185,12 @@ class GrblSerialDriver(Driver):
         """
         # Build the command with all specified axes
         dialect = self.dialect
-        cmd_parts = [dialect.jog.format(speed=speed)]
+        cmd_parts = [dialect.jog.format(speed=self._to_machine_speed(speed))]
 
         for axis_name, distance in deltas.items():
-            cmd_parts.append(f"{axis_name.upper()}{distance}")
+            cmd_parts.append(
+                f"{axis_name.upper()}{self._to_machine_length(distance)}"
+            )
 
         if len(cmd_parts) == 1:
             return
@@ -1207,11 +1198,25 @@ class GrblSerialDriver(Driver):
         cmd = " ".join(cmd_parts)
         await self._execute_command(cmd)
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return get_grbl_setting_varsets()
+
+    async def detect_unit_system(self) -> UnitSystem | None:
+        """
+        Queries the device's ``$$`` settings and infers the unit
+        system from the ``$13`` (Report in inches) flag.
+        """
+        try:
+            response_lines = await self.execute_interactive_command("$$")
+        except (ConnectionError, asyncio.TimeoutError) as e:
+            logger.warning(f"Unit system detection failed: {e}")
+            return None
+        self._report_in_inches = is_report_in_inches(response_lines)
+        return detect_unit_system_from_settings(response_lines)
 
     async def read_settings(self) -> None:
         response_lines = await self.execute_interactive_command("$$")
+        self._report_in_inches = is_report_in_inches(response_lines)
         # Get the list of VarSets, which serve as our template
         known_varsets = self.get_setting_vars()
 
@@ -1219,7 +1224,7 @@ class GrblSerialDriver(Driver):
         key_to_varset_map = {
             var_key: varset
             for varset in known_varsets
-            for var_key in varset.keys()
+            for var_key in varset.keys()  # noqa: SIM118
         }
 
         unknown_vars = VarSet(
@@ -1270,16 +1275,20 @@ class GrblSerialDriver(Driver):
         await self._execute_command(cmd)
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         p_num = gcode_to_p_number(wcs_slot)
         if p_num is None:
             raise ValueError(f"Invalid WCS slot: {wcs_slot}")
-        dialect = self.dialect
-        cmd = dialect.set_wcs_offset.format(p_num=p_num, x=x, y=y, z=z)
+        cmd = self.dialect.format_wcs_offset(
+            p_num,
+            self._to_machine_length(x),
+            self._to_machine_length(y),
+            self._to_machine_length(z) if z is not None else None,
+        )
         await self._execute_command(cmd)
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         response_lines = await self.execute_interactive_command("$#")
         offsets = {}
         for line in response_lines:
@@ -1287,15 +1296,16 @@ class GrblSerialDriver(Driver):
             if match:
                 slot, x_str, y_str, z_str = match.groups()
                 z_str = z_str or "0.000"
+                parsed: Pos = (float(x_str), float(y_str), float(z_str))
                 offsets[slot] = (
-                    float(x_str),
-                    float(y_str),
-                    float(z_str),
+                    tuple(inches_to_mm(v) for v in parsed)
+                    if self._report_in_inches
+                    else parsed
                 )
         self.wcs_updated.send(self, offsets=offsets)
         return offsets
 
-    async def read_parser_state(self) -> Optional[str]:
+    async def read_parser_state(self) -> str | None:
         """Reads the $G parser state to determine the active WCS."""
         try:
             response_lines = await self.execute_interactive_command("$G")
@@ -1306,14 +1316,14 @@ class GrblSerialDriver(Driver):
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         assert axis.name, "Probing requires a single, named axis."
         axis_letter = axis.name.upper()
         dialect = self.dialect
         cmd = dialect.probe_cycle.format(
             axis_letter=axis_letter,
-            max_travel=max_travel,
-            feed_rate=feed_rate,
+            max_travel=self._to_machine_length(max_travel),
+            feed_rate=self._to_machine_speed(feed_rate),
         )
 
         self.probe_status_changed.send(
@@ -1337,6 +1347,8 @@ class GrblSerialDriver(Driver):
                         float(y_str),
                         float(z_str),
                     )
+                    if self._report_in_inches:
+                        pos = tuple(inches_to_mm(v) for v in pos)
                     self.probe_status_changed.send(
                         self, message=f"Probe triggered at {pos}"
                     )
@@ -1402,7 +1414,10 @@ class GrblSerialDriver(Driver):
         logger.info(report, extra=self._log_extra("STATUS_POLL"))
 
         state = parse_state(
-            report, self.state, lambda message: logger.info(message)
+            report,
+            self.state,
+            lambda message: logger.info(message),
+            report_in_inches=self._report_in_inches,
         )
 
         self._raw_grbl_status = state.status
@@ -1497,27 +1512,28 @@ class GrblSerialDriver(Driver):
             self.command_status_changed.send(self, status=TransportStatus.IDLE)
             logger.debug(f"Command '{request.command}' completed with 'ok'")
             self._set_request_finished(request)
-
         # Logic for streaming protocol during a job
-        if self._job_running and pending is not None:
-            if self._on_command_done and pending.op_index is not None:
-                for i in range(
-                    self._last_reported_op_index + 1,
-                    pending.op_index + 1,
-                ):
-                    try:
-                        logger.debug(
-                            f"Firing on_command_done for op_index {i}"
-                        )
-                        result = self._on_command_done(i)
-                        if inspect.isawaitable(result):
-                            asyncio.ensure_future(result)
-                    except Exception as e:
-                        logger.error(
-                            "Error in on_command_done callback",
-                            exc_info=e,
-                        )
-                self._last_reported_op_index = pending.op_index
+        if (
+            self._job_running
+            and pending is not None
+            and self._on_command_done
+            and pending.op_index is not None
+        ):
+            for i in range(
+                self._last_reported_op_index + 1,
+                pending.op_index + 1,
+            ):
+                try:
+                    logger.debug(f"Firing on_command_done for op_index {i}")
+                    result = self._on_command_done(i)
+                    if inspect.isawaitable(result):
+                        asyncio.ensure_future(result)
+                except Exception as e:
+                    logger.error(
+                        "Error in on_command_done callback",
+                        exc_info=e,
+                    )
+            self._last_reported_op_index = pending.op_index
 
     def _handle_error(self, text: str):
         """Handle a parsed 'error:...' response."""
@@ -1601,7 +1617,7 @@ class GrblSerialDriver(Driver):
         else:
             logger.debug(f"Received informational line: {line}")
 
-    def get_error(self, error_code: str) -> Optional[DeviceError]:
+    def get_error(self, error_code: str) -> DeviceError | None:
         """
         Returns error details for a given GRBL error code.
 
@@ -1616,7 +1632,7 @@ class GrblSerialDriver(Driver):
         return error_code_to_device_error(error_code)
 
     def _update_connection_status(
-        self, status: TransportStatus, message: Optional[str] = None
+        self, status: TransportStatus, message: str | None = None
     ):
         log_data = f"Connection status: {status.name}"
         if message:

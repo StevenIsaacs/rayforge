@@ -10,14 +10,14 @@ are fully independent.
 import logging
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from gi.repository import Adw, Gtk
 
+from ..context import get_context
 from ..core.group import Group
 from ..core.item import DocItem
 from ..core.workpiece import WorkPiece
-from ..context import get_context
 from ..doceditor.array import (
     ArrayMode,
     ArrayParams,
@@ -30,8 +30,10 @@ from ..doceditor.array import (
 from ..doceditor.array_cmd import ArrayCmd
 from .canvas2d.elements.crosshair import CrosshairElement
 from .canvas2d.elements.outline import OutlineElement
-from .shared.adwfix import get_spinrow_float, get_spinrow_int
 from .shared.patched_dialog_window import PatchedDialogWindow
+from .shared.pref_rows.angle_spin_row import AngleSpinRow
+from .shared.pref_rows.base import SpinRow
+from .shared.pref_rows.length_spin_row import LengthSpinRow
 
 if TYPE_CHECKING:
     from ..doceditor.editor import DocEditor
@@ -58,7 +60,7 @@ class _BaseArrayDialog(PatchedDialogWindow):
         parent: Gtk.Window,
         editor: "DocEditor",
         surface: "WorkSurface",
-        items: List[DocItem],
+        items: list[DocItem],
         mode: ArrayMode,
         title: str,
     ):
@@ -91,7 +93,11 @@ class _BaseArrayDialog(PatchedDialogWindow):
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(main_box)
         main_box.append(self._build_header(title))
-        main_box.append(self._mode_content())
+        self._updating = True
+        try:
+            main_box.append(self._mode_content())
+        finally:
+            self._updating = False
 
         self.connect("close-request", self._on_close_request)
 
@@ -118,7 +124,7 @@ class _BaseArrayDialog(PatchedDialogWindow):
         """Called on each canvas-drag frame to keep derived values
         (e.g. the circular radius) in sync."""
 
-    def _guide_for(self, params: ArrayParams, bbox) -> Optional[tuple]:
+    def _guide_for(self, params: ArrayParams, bbox) -> tuple | None:
         """Return a ``(center, radius)`` guide circle or ``None``."""
 
     # ------------------------------------------------------------------
@@ -141,18 +147,23 @@ class _BaseArrayDialog(PatchedDialogWindow):
         lower,
         upper,
         step,
-        value,
+        value=None,
         digits: int = 3,
+        subtitle: str = "",
         change_callback=None,
-    ) -> Adw.SpinRow:
-        row = Adw.SpinRow.new_with_range(float(lower), float(upper), step)
-        row.set_title(title)
-        row.set_value(float(value))
-        row.set_numeric(True)
-        row.set_digits(digits)
+    ) -> SpinRow:
+        row = SpinRow(
+            title,
+            subtitle or None,
+            lower=float(lower),
+            upper=float(upper),
+            step_increment=step,
+            digits=digits,
+            numeric=True,
+            value=(lower if value is None else value),
+        )
         cb = change_callback or self._update_preview
-        row.get_adjustment().connect("value-changed", lambda *a: cb())
-        row.connect("notify::text", lambda *a: cb())
+        row.value_changed.connect(lambda *a: cb())
         return row
 
     @staticmethod
@@ -161,12 +172,7 @@ class _BaseArrayDialog(PatchedDialogWindow):
         machine = get_context().machine
         if not machine:
             return (0.0, 0.0)
-        wa = machine.work_area
-        wa_w, wa_h = float(wa[2]), float(wa[3])
-        ref_x, ref_y = machine.get_reference_position_world()
-        space = machine.get_coordinate_space()
-        origin = space.world_position_from_origin(ref_x, ref_y, (wa_w, wa_h))
-        return (origin[0] + wa_w / 2.0, origin[1] + wa_h / 2.0)
+        return machine.panel.work_area_center()
 
     # ------------------------------------------------------------------
     # Preview data
@@ -304,11 +310,23 @@ class GridArrayDialog(_BaseArrayDialog):
         self._spacing_mode_row.connect(
             "notify::selected", self._on_spacing_mode_changed
         )
-        self._col_spacing_row = self._make_spin_row(
-            _("Column spacing"), -10000, 10000, 0.1, 1.0
+        self._col_spacing_row = LengthSpinRow(
+            _("Column spacing"),
+            lower=-10000,
+            upper=10000,
+            value_in_base=1.0,
         )
-        self._row_spacing_row = self._make_spin_row(
-            _("Row spacing"), -10000, 10000, 0.1, 1.0
+        self._col_spacing_row.value_changed.connect(
+            lambda *a: self._update_preview()
+        )
+        self._row_spacing_row = LengthSpinRow(
+            _("Row spacing"),
+            lower=-10000,
+            upper=10000,
+            value_in_base=1.0,
+        )
+        self._row_spacing_row.value_changed.connect(
+            lambda *a: self._update_preview()
         )
 
         for r in (
@@ -331,11 +349,15 @@ class GridArrayDialog(_BaseArrayDialog):
         return ArrayParams(
             mode=ArrayMode.GRID,
             grid=GridArrayParams(
-                rows=get_spinrow_int(self._rows_row),
-                cols=get_spinrow_int(self._cols_row),
+                rows=self._rows_row.get_int_value(),
+                cols=self._cols_row.get_int_value(),
                 spacing_mode=spacing,
-                col_spacing_mm=get_spinrow_float(self._col_spacing_row),
-                row_spacing_mm=get_spinrow_float(self._row_spacing_row),
+                col_spacing_mm=(
+                    self._col_spacing_row.get_value_in_base_units()
+                ),
+                row_spacing_mm=(
+                    self._row_spacing_row.get_value_in_base_units()
+                ),
             ),
         )
 
@@ -358,13 +380,13 @@ class GridArrayDialog(_BaseArrayDialog):
             return
         unit_w = bbox[2] - bbox[0]
         unit_h = bbox[3] - bbox[1]
-        col = get_spinrow_float(self._col_spacing_row)
-        row = get_spinrow_float(self._row_spacing_row)
+        col = self._col_spacing_row.get_value_in_base_units()
+        row = self._row_spacing_row.get_value_in_base_units()
         sign = -1.0 if to_mode == _GAP else 1.0
         self._updating = True
         try:
-            self._col_spacing_row.set_value(col + sign * unit_w)
-            self._row_spacing_row.set_value(row + sign * unit_h)
+            self._col_spacing_row.set_value_in_base_units(col + sign * unit_w)
+            self._row_spacing_row.set_value_in_base_units(row + sign * unit_h)
         finally:
             self._updating = False
 
@@ -397,8 +419,9 @@ class PointRotationArrayDialog(_BaseArrayDialog):
             _("Rotates copies in place around the selection's centre.")
         )
         self._pr_count_row = self._make_spin_row(_("Count"), 1, 360, 1, 6, 0)
-        self._pr_angle_row = self._make_spin_row(
-            _("Total angle (deg)"), -360, 360, 1, 360.0
+        self._pr_angle_row = AngleSpinRow(_("Total angle (deg)"), value=360.0)
+        self._pr_angle_row.value_changed.connect(
+            lambda *a: self._update_preview()
         )
         for r in (self._pr_count_row, self._pr_angle_row):
             group.add(r)
@@ -409,8 +432,8 @@ class PointRotationArrayDialog(_BaseArrayDialog):
         return ArrayParams(
             mode=ArrayMode.POINT_ROTATION,
             point_rotation=PointRotationParams(
-                count=get_spinrow_int(self._pr_count_row),
-                total_angle_deg=get_spinrow_float(self._pr_angle_row),
+                count=self._pr_count_row.get_int_value(),
+                total_angle_deg=self._pr_angle_row.get_value(),
             ),
         )
 
@@ -462,33 +485,36 @@ class CircularArrayDialog(_BaseArrayDialog):
             _("Places copies along a circular arc around a centre.")
         )
         self._c_count_row = self._make_spin_row(_("Count"), 1, 360, 1, 6, 0)
-        self._c_angle_row = self._make_spin_row(
-            _("Total angle (deg)"), -360, 360, 1, 360.0
+        self._c_angle_row = AngleSpinRow(_("Total angle (deg)"), value=360.0)
+        self._c_angle_row.value_changed.connect(
+            lambda *a: self._update_preview()
         )
-        self._c_center_x_row = self._make_spin_row(
+        self._c_center_x_row = LengthSpinRow(
             _("Center X"),
-            -10000,
-            10000,
-            0.1,
-            self._centre[0],
-            change_callback=self._on_center_changed,
+            lower=-10000,
+            upper=10000,
+            value_in_base=self._centre[0],
         )
-        self._c_center_y_row = self._make_spin_row(
+        self._c_center_x_row.value_changed.connect(
+            lambda *a: self._on_center_changed()
+        )
+        self._c_center_y_row = LengthSpinRow(
             _("Center Y"),
-            -10000,
-            10000,
-            0.1,
-            self._centre[1],
-            change_callback=self._on_center_changed,
+            lower=-10000,
+            upper=10000,
+            value_in_base=self._centre[1],
+        )
+        self._c_center_y_row.value_changed.connect(
+            lambda *a: self._on_center_changed()
         )
         r = self._default_radius if self._default_radius > 0.0 else 10.0
-        self._c_radius_row = self._make_spin_row(
+        self._c_radius_row = LengthSpinRow(
             _("Radius"),
-            0,
-            10000,
-            0.1,
-            r,
-            change_callback=self._on_radius_changed,
+            upper=10000,
+            value_in_base=r,
+        )
+        self._c_radius_row.value_changed.connect(
+            lambda *a: self._on_radius_changed()
         )
         self._c_rotate_row = Adw.ActionRow()
         self._c_rotate_row.set_title(_("Rotate copies"))
@@ -517,13 +543,13 @@ class CircularArrayDialog(_BaseArrayDialog):
         return ArrayParams(
             mode=ArrayMode.CIRCULAR,
             circular=CircularArrayParams(
-                count=get_spinrow_int(self._c_count_row),
-                total_angle_deg=get_spinrow_float(self._c_angle_row),
+                count=self._c_count_row.get_int_value(),
+                total_angle_deg=self._c_angle_row.get_value(),
                 center_mm=(
-                    get_spinrow_float(self._c_center_x_row),
-                    get_spinrow_float(self._c_center_y_row),
+                    self._c_center_x_row.get_value_in_base_units(),
+                    self._c_center_y_row.get_value_in_base_units(),
                 ),
-                radius_mm=get_spinrow_float(self._c_radius_row),
+                radius_mm=self._c_radius_row.get_value_in_base_units(),
                 rotate_copies=self._c_rotate_switch.get_active(),
             ),
         )
@@ -532,12 +558,12 @@ class CircularArrayDialog(_BaseArrayDialog):
         """Keep the radius matching the current centre & workpiece."""
         ux = (bbox[0] + bbox[2]) / 2.0
         uy = (bbox[1] + bbox[3]) / 2.0
-        cx = get_spinrow_float(self._c_center_x_row)
-        cy = get_spinrow_float(self._c_center_y_row)
+        cx = self._c_center_x_row.get_value_in_base_units()
+        cy = self._c_center_y_row.get_value_in_base_units()
         r = math.hypot(ux - cx, uy - cy)
         self._updating = True
         try:
-            self._c_radius_row.set_value(r)
+            self._c_radius_row.set_value_in_base_units(r)
         finally:
             self._updating = False
 
@@ -555,13 +581,13 @@ class CircularArrayDialog(_BaseArrayDialog):
             return
         ux = (bbox[0] + bbox[2]) / 2.0
         uy = (bbox[1] + bbox[3]) / 2.0
-        cx = get_spinrow_float(self._c_center_x_row)
-        cy = get_spinrow_float(self._c_center_y_row)
+        cx = self._c_center_x_row.get_value_in_base_units()
+        cy = self._c_center_y_row.get_value_in_base_units()
         r = math.hypot(ux - cx, uy - cy)
         was = self._updating
         self._updating = True
         try:
-            self._c_radius_row.set_value(r)
+            self._c_radius_row.set_value_in_base_units(r)
         finally:
             self._updating = was
 
@@ -575,8 +601,8 @@ class CircularArrayDialog(_BaseArrayDialog):
     def _on_center_dragged(self, pos) -> None:
         self._updating = True
         try:
-            self._c_center_x_row.set_value(pos[0])
-            self._c_center_y_row.set_value(pos[1])
+            self._c_center_x_row.set_value_in_base_units(pos[0])
+            self._c_center_y_row.set_value_in_base_units(pos[1])
             if self._crosshair is not None:
                 self._crosshair.move_to(pos[0], pos[1])
             self._sync_radius()
@@ -587,8 +613,8 @@ class CircularArrayDialog(_BaseArrayDialog):
     def _crosshair_sync(self) -> None:
         if self._crosshair is not None:
             self._crosshair.move_to(
-                self._c_center_x_row.get_value(),
-                self._c_center_y_row.get_value(),
+                self._c_center_x_row.get_value_in_base_units(),
+                self._c_center_y_row.get_value_in_base_units(),
             )
 
     def _on_radius_changed(self) -> None:
@@ -599,9 +625,9 @@ class CircularArrayDialog(_BaseArrayDialog):
             return
         ux = (bbox[0] + bbox[2]) / 2.0
         uy = (bbox[1] + bbox[3]) / 2.0
-        cx = get_spinrow_float(self._c_center_x_row)
-        cy = get_spinrow_float(self._c_center_y_row)
-        new_r = get_spinrow_float(self._c_radius_row)
+        cx = self._c_center_x_row.get_value_in_base_units()
+        cy = self._c_center_y_row.get_value_in_base_units()
+        new_r = self._c_radius_row.get_value_in_base_units()
         dx = cx - ux
         dy = cy - uy
         cur_d = math.hypot(dx, dy)
@@ -609,16 +635,19 @@ class CircularArrayDialog(_BaseArrayDialog):
             was = self._updating
             self._updating = True
             try:
-                self._c_center_x_row.set_value(ux + (dx / cur_d) * new_r)
-                self._c_center_y_row.set_value(uy + (dy / cur_d) * new_r)
+                self._c_center_x_row.set_value_in_base_units(
+                    ux + (dx / cur_d) * new_r
+                )
+                self._c_center_y_row.set_value_in_base_units(
+                    uy + (dy / cur_d) * new_r
+                )
             finally:
                 self._updating = was
         self._update_preview()
 
     def _detach_preview(self) -> None:
-        if self._crosshair is not None:
-            if self._crosshair.parent is not None:
-                self._crosshair.remove()
+        if self._crosshair is not None and self._crosshair.parent is not None:
+            self._crosshair.remove()
         self._crosshair = None
         super()._detach_preview()
 

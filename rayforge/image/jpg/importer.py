@@ -2,7 +2,7 @@ import logging
 import warnings
 from gettext import gettext as _
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
@@ -34,11 +34,11 @@ class JpgImporter(Importer):
     label = "JPEG files"
     mime_types = ("image/jpeg",)
     extensions = (".jpg", ".jpeg")
-    features = {ImporterFeature.BITMAP_TRACING}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.BITMAP_TRACING}
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._image: Optional[pyvips.Image] = None
+        self._image: pyvips.Image | None = None
 
     def scan(self) -> ImportManifest:
         """
@@ -59,7 +59,7 @@ class JpgImporter(Importer):
             logger.warning(
                 f"JPEG scan failed for {self.source_file.name}: {e}"
             )
-            self.add_error(_(f"Failed to scan JPEG file: {e}"))
+            self.add_error(_("Failed to scan JPEG file: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
@@ -115,17 +115,15 @@ class JpgImporter(Importer):
             source_parse_result=parse_result,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         """Phase 2: Parse the JPG into a vips image and extract facts."""
         try:
             image = pyvips.Image.jpegload_buffer(
                 self.raw_data, access=pyvips.Access.RANDOM
             )
         except pyvips.Error as e:
-            logger.error(
-                f"pyvips failed to load JPEG buffer: {e}", exc_info=True
-            )
-            self.add_error(_(f"Image load failed: {e}"))
+            logger.exception("pyvips failed to load JPEG buffer")
+            self.add_error(_("Image load failed: {}").format(e))
             self._image = None
             return None
 
@@ -145,7 +143,7 @@ class JpgImporter(Importer):
             native_unit_to_mm = 25.4 / default_dpi
 
         # World frame is Y-Up, so y-origin is 0.
-        x, y, w, h = document_bounds
+        x, _y, w, h = document_bounds
         world_frame = (
             x * native_unit_to_mm,
             0.0,

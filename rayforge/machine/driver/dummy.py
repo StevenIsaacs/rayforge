@@ -1,16 +1,11 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
     cast,
 )
 
@@ -49,8 +44,8 @@ class NoDeviceDriver(Driver):
         # Internal state for WCS offsets to behave like a stateful machine
         # Initialize from machine's persisted state to prevent overwriting
         # loaded configuration with defaults upon connection.
-        self._offsets: Dict[str, Pos] = cast(
-            Dict[str, Pos],
+        self._offsets: dict[str, Pos] = cast(
+            dict[str, Pos],
             {k: v.offset for k, v in machine.coordinate_systems.items()},
         )
 
@@ -93,7 +88,7 @@ class NoDeviceDriver(Driver):
         assert machine.dialect is not None
         return GcodeEncoder(machine.dialect)
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return [VarSet(title=_("No settings"))]
 
     async def _connect_implementation(self) -> None:
@@ -119,9 +114,7 @@ class NoDeviceDriver(Driver):
         encoded: EncodedOutput,
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         """
         Dummy implementation that simulates command execution.
@@ -132,9 +125,7 @@ class NoDeviceDriver(Driver):
         """
         op_map = encoded.op_map
         # We assume ops are indexed 0..N-1.
-        num_ops = 0
-        if op_map and op_map.op_to_machine_code:
-            num_ops = max(op_map.op_to_machine_code.keys()) + 1
+        num_ops = op_map.op_count if op_map else 0
 
         # Simulate command execution with delays
         for op_index in range(num_ops):
@@ -149,7 +140,9 @@ class NoDeviceDriver(Driver):
                         await result
                 except Exception:
                     # Don't let callback exceptions stop execution
-                    pass
+                    logger.debug(
+                        "Job callback raised on op %d", op_index, exc_info=True
+                    )
         self.job_finished.send(self)
 
     async def run_raw(self, machine_code: str) -> None:
@@ -170,11 +163,11 @@ class NoDeviceDriver(Driver):
     async def cancel(self) -> None:
         pass
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         """Dummy driver supports homing for all axes."""
         return True
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         pass
 
     async def move_to(self, pos_x, pos_y) -> None:
@@ -219,7 +212,7 @@ class NoDeviceDriver(Driver):
             extra={"log_category": "DRIVER_CMD"},
         )
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         """Dummy driver supports jogging for all axes."""
         return True
 
@@ -227,19 +220,19 @@ class NoDeviceDriver(Driver):
         pass
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         """Dummy implementation, updates internal state."""
-        self._offsets[wcs_slot] = (x, y, z)
+        self._offsets[wcs_slot] = (x, y, z if z is not None else 0.0)
         # Notify machine that the driver updated offsets
         self.wcs_updated.send(self, offsets=self._offsets)
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         """Dummy implementation, returns internal state."""
         self.wcs_updated.send(self, offsets=self._offsets)
         return self._offsets
 
-    async def read_parser_state(self) -> Optional[str]:
+    async def read_parser_state(self) -> str | None:
         """
         Simulate reading the active WCS state.
         Returns the machine's active WCS to treat the client's selection
@@ -249,7 +242,7 @@ class NoDeviceDriver(Driver):
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         """
         Dummy implementation, simulates a successful probe after a short delay.
         """

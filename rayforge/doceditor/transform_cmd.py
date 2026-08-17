@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from raygeo.geo import Matrix
 
 from ..context import get_context
 from ..core.item import DocItem
 from ..core.undo import ChangePropertyCommand
+from ..machine.models.machine_panel import PanelOrientation
 
 if TYPE_CHECKING:
     from .editor import DocEditor
@@ -19,12 +20,12 @@ logger = logging.getLogger(__name__)
 class TransformCmd:
     """Handles undoable transformations of document items."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
 
     def create_transform_transaction(
         self,
-        changes: List[Tuple[DocItem, Matrix, Matrix]],
+        changes: list[tuple[DocItem, Matrix, Matrix]],
     ):
         """
         Creates a single, undoable transaction for a list of matrix changes
@@ -57,8 +58,8 @@ class TransformCmd:
 
     @staticmethod
     def group_bbox_world(
-        items: List[DocItem],
-    ) -> Tuple[float, float, float, float]:
+        items: list[DocItem],
+    ) -> tuple[float, float, float, float]:
         """Returns ``(min_x, min_y, max_x, max_y)`` of the items' combined
         axis-aligned bounding box in world space.
 
@@ -78,28 +79,28 @@ class TransformCmd:
         return min_x, min_y, max_x, max_y
 
     @classmethod
-    def group_center_world(cls, items: List[DocItem]) -> Tuple[float, float]:
+    def group_center_world(cls, items: list[DocItem]) -> tuple[float, float]:
         """World-space centre of the items' combined bounding box."""
         min_x, min_y, max_x, max_y = cls.group_bbox_world(items)
         return (min_x + max_x) / 2.0, (min_y + max_y) / 2.0
 
     @staticmethod
     def _world_to_local_matrix(
-        item: DocItem, world_transform: "Matrix"
-    ) -> "Matrix":
+        item: DocItem, world_transform: Matrix
+    ) -> Matrix:
         """Convert a world-space transform back to the item's local matrix
         by cancelling out the parent's world transform."""
         if item.parent:
             parent_world = item.parent.get_world_transform()
             try:
                 return parent_world.invert() @ world_transform
-            except Exception:
+            except ValueError:
                 return item.matrix.copy()
         return world_transform
 
     def nudge_items(
         self,
-        items: List[DocItem],
+        items: list[DocItem],
         dx_mm: float,
         dy_mm: float,
     ):
@@ -135,10 +136,43 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def flip_horizontal(self, items: List[DocItem]):
+    @staticmethod
+    def _flip_matrix_world(item: DocItem, horizontal: bool) -> Matrix:
+        """World-space flip matrix that mirrors around the item's centre.
+
+        The canvas presents PANEL space (the optional 90-degree
+        presentation rotation), so "horizontal"/"vertical" refer to the
+        on-screen axes. The reflection is built in PANEL space around the
+        item's presented centre and conjugated back into WORLD space;
+        for a NATIVE panel this reduces to the plain world-space flip.
         """
-        Flips a list of DocItems horizontally (mirrors along the Y-axis),
-        creating a single undoable transaction for the operation.
+        world_center = item.get_world_transform().transform_point((0.5, 0.5))
+
+        machine = get_context().machine
+        panel = getattr(machine, "panel", None) if machine else None
+        if panel is not None:
+            orientation = getattr(panel, "orientation", None)
+            if isinstance(orientation, PanelOrientation) and (
+                orientation is not PanelOrientation.NATIVE
+            ):
+                world_to_panel = panel.get_world_to_panel_2d()
+                panel_to_world = world_to_panel.invert()
+                panel_center = world_to_panel.transform_point(world_center)
+                if horizontal:
+                    panel_flip = Matrix.flip_horizontal(center=panel_center)
+                else:
+                    panel_flip = Matrix.flip_vertical(center=panel_center)
+                return panel_to_world @ panel_flip @ world_to_panel
+
+        if horizontal:
+            return Matrix.flip_horizontal(center=world_center)
+        return Matrix.flip_vertical(center=world_center)
+
+    def flip_horizontal(self, items: list[DocItem]):
+        """
+        Flips a list of DocItems horizontally (mirrors along the on-screen
+        vertical axis through each item's centre), creating a single
+        undoable transaction for the operation.
 
         Args:
             items: The list of DocItems to flip horizontally.
@@ -150,15 +184,8 @@ class TransformCmd:
         with history_manager.transaction(_("Flip Horizontal")) as t:
             for item in items:
                 old_matrix = item.matrix.copy()
-                # Get the world center of the item before transformation
-                # This ensures we always flip around the same point
-                world_center = item.get_world_transform().transform_point(
-                    (0.5, 0.5)
-                )
-
-                # Create a flip matrix (scale by -1 on X-axis) around world
-                # center
-                flip_matrix = Matrix.flip_horizontal(center=world_center)
+                # Flip around the item's own centre so it stays in place.
+                flip_matrix = self._flip_matrix_world(item, horizontal=True)
                 new_matrix = flip_matrix @ old_matrix
 
                 if old_matrix.is_close(new_matrix):
@@ -172,10 +199,11 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def flip_vertical(self, items: List[DocItem]):
+    def flip_vertical(self, items: list[DocItem]):
         """
-        Flips a list of DocItems vertically (mirrors along the X-axis),
-        creating a single undoable transaction for the operation.
+        Flips a list of DocItems vertically (mirrors along the on-screen
+        horizontal axis through each item's centre), creating a single
+        undoable transaction for the operation.
 
         Args:
             items: The list of DocItems to flip vertically.
@@ -187,15 +215,8 @@ class TransformCmd:
         with history_manager.transaction(_("Flip Vertical")) as t:
             for item in items:
                 old_matrix = item.matrix.copy()
-                # Get the world center of the item before transformation
-                # This ensures we always flip around the same point
-                world_center = item.get_world_transform().transform_point(
-                    (0.5, 0.5)
-                )
-
-                # Create a flip matrix (scale by -1 on Y-axis) around world
-                # center
-                flip_matrix = Matrix.flip_vertical(center=world_center)
+                # Flip around the item's own centre so it stays in place.
+                flip_matrix = self._flip_matrix_world(item, horizontal=False)
                 new_matrix = flip_matrix @ old_matrix
 
                 if old_matrix.is_close(new_matrix):
@@ -209,7 +230,7 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def set_position(self, items: List[DocItem], x: float, y: float):
+    def set_position(self, items: list[DocItem], x: float, y: float):
         """
         Sets the position of **every** item individually using machine
         coordinates.  Each item's top-left corner is moved to the world
@@ -237,8 +258,7 @@ class TransformCmd:
                 size_world = item.size
 
                 if machine:
-                    space = machine.get_coordinate_space()
-                    x_world, y_world = space.machine_item_to_world(
+                    x_world, y_world = machine.panel.machine_item_to_world(
                         (x, y), size_world
                     )
                 else:
@@ -263,7 +283,7 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def set_angle(self, items: List[DocItem], angle: float):
+    def set_angle(self, items: list[DocItem], angle: float):
         """Sets **every** item's local rotation angle to *angle* degrees,
         preserving each item's own world-space center."""
         history_manager = self._editor.history_manager
@@ -287,7 +307,7 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def set_shear(self, items: List[DocItem], shear: float):
+    def set_shear(self, items: list[DocItem], shear: float):
         """Sets **every** item's local shear angle to *shear* degrees,
         preserving each item's own world-space center."""
         history_manager = self._editor.history_manager
@@ -313,11 +333,11 @@ class TransformCmd:
 
     def set_size(
         self,
-        items: List[DocItem],
-        width: Optional[float] = None,
-        height: Optional[float] = None,
+        items: list[DocItem],
+        width: float | None = None,
+        height: float | None = None,
         fixed_ratio: bool = False,
-        sizes: Optional[List[Tuple[float, float]]] = None,
+        sizes: list[tuple[float, float]] | None = None,
     ):
         """Sets the size of each item individually.
 
@@ -341,8 +361,8 @@ class TransformCmd:
             return
 
         def _calculate_missing_dim(
-            item: DocItem, w: Optional[float], h: Optional[float]
-        ) -> Tuple[float, float]:
+            item: DocItem, w: float | None, h: float | None
+        ) -> tuple[float, float]:
             """Calculates final width and height handling aspect ratio."""
             current_w, current_h = item.size
             final_w = w if w is not None else current_w
@@ -385,7 +405,7 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def set_position_group(self, items: List[DocItem], x: float, y: float):
+    def set_position_group(self, items: list[DocItem], x: float, y: float):
         """Moves the selection so its **combined bounding box** reaches
         the given target in machine coordinates.
 
@@ -409,8 +429,9 @@ class TransformCmd:
 
         machine = get_context().machine
         if machine:
-            space = machine.get_coordinate_space()
-            target_world = space.machine_item_to_world((x, y), group_size)
+            target_world = machine.panel.machine_item_to_world(
+                (x, y), group_size
+            )
         else:
             target_world = (x, y)
 
@@ -436,7 +457,7 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def set_angle_group(self, items: List[DocItem], angle: float):
+    def set_angle_group(self, items: list[DocItem], angle: float):
         """Rotates the whole selection so the anchor item (``items[0]``)
         reaches *angle* degrees.
 
@@ -481,7 +502,7 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def set_shear_group(self, items: List[DocItem], shear: float):
+    def set_shear_group(self, items: list[DocItem], shear: float):
         """Shears the whole selection so the anchor item (``items[0]``)
         reaches *shear* degrees.
 
@@ -522,9 +543,9 @@ class TransformCmd:
 
     def set_size_group(
         self,
-        items: List[DocItem],
-        width: Optional[float] = None,
-        height: Optional[float] = None,
+        items: list[DocItem],
+        width: float | None = None,
+        height: float | None = None,
         fixed_ratio: bool = False,
     ):
         """Resizes the whole selection uniformly so the combined bounding
@@ -601,35 +622,35 @@ class TransformCmd:
                 )
                 t.execute(cmd)
 
-    def reset_position(self, items: List[DocItem]):
+    def reset_position(self, items: list[DocItem]):
         """Moves every item's top-left corner to machine (0, 0)."""
         self.set_position(items, 0.0, 0.0)
 
-    def reset_position_group(self, items: List[DocItem]):
+    def reset_position_group(self, items: list[DocItem]):
         """Moves the selection's bounding box so its origin-corner sits
         at machine (0, 0)."""
         self.set_position_group(items, 0.0, 0.0)
 
-    def reset_angle(self, items: List[DocItem]):
+    def reset_angle(self, items: list[DocItem]):
         """Sets every item's angle to 0°."""
         self.set_angle(items, 0.0)
 
-    def reset_angle_group(self, items: List[DocItem]):
+    def reset_angle_group(self, items: list[DocItem]):
         """Resets the group's rotation to 0°."""
         self.set_angle_group(items, 0.0)
 
-    def reset_shear(self, items: List[DocItem]):
+    def reset_shear(self, items: list[DocItem]):
         """Sets every item's shear to 0°."""
         self.set_shear(items, 0.0)
 
-    def reset_shear_group(self, items: List[DocItem]):
+    def reset_shear_group(self, items: list[DocItem]):
         """Resets the group's shear to 0°."""
         self.set_shear_group(items, 0.0)
 
     @classmethod
     def get_position_group(
-        cls, items: List[DocItem]
-    ) -> Optional[Tuple[float, float]]:
+        cls, items: list[DocItem]
+    ) -> tuple[float, float] | None:
         """Machine-coordinate position of the group's bounding-box
         origin-corner (the corner the machine origin refers to).
 
@@ -641,14 +662,15 @@ class TransformCmd:
         min_x, min_y, max_x, max_y = cls.group_bbox_world(items)
         gw, gh = max_x - min_x, max_y - min_y
         if machine:
-            space = machine.get_coordinate_space()
-            return space.world_item_to_machine((min_x, min_y), (gw, gh))
+            return machine.panel.world_item_to_machine(
+                (min_x, min_y), (gw, gh)
+            )
         return (min_x, min_y)
 
     @classmethod
     def get_size_group(
-        cls, items: List[DocItem]
-    ) -> Optional[Tuple[float, float]]:
+        cls, items: list[DocItem]
+    ) -> tuple[float, float] | None:
         """World-space (width, height) of the group bounding box."""
         if not items:
             return None
@@ -656,14 +678,14 @@ class TransformCmd:
         return (max_x - min_x, max_y - min_y)
 
     @classmethod
-    def get_angle_group(cls, items: List[DocItem]) -> Optional[float]:
+    def get_angle_group(cls, items: list[DocItem]) -> float | None:
         """Angle (degrees) of the anchor item, representing the group."""
         if not items:
             return None
         return items[0].angle
 
     @classmethod
-    def get_shear_group(cls, items: List[DocItem]) -> Optional[float]:
+    def get_shear_group(cls, items: list[DocItem]) -> float | None:
         """Shear (degrees) of the anchor item, representing the group."""
         if not items:
             return None

@@ -1,6 +1,6 @@
 import logging
 import warnings
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional
 
 from raygeo.geo import Geometry
 
@@ -28,7 +28,7 @@ class DxfRenderer(Renderer):
     def compute_render_spec(
         self,
         segment: Optional["SourceAssetSegment"],
-        target_size: Tuple[int, int],
+        target_size: tuple[int, int],
         source_context: "RenderContext",
     ) -> "RenderSpecification":
         """
@@ -52,7 +52,7 @@ class DxfRenderer(Renderer):
         import_result: "ImportResult",
         target_width: int,
         target_height: int,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         """Generates a preview by rendering the vectorized geometry."""
         vec_result = import_result.vectorization_result
         if not vec_result:
@@ -83,7 +83,7 @@ class DxfRenderer(Renderer):
         width: int,
         height: int,
         **kwargs,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         boundaries = kwargs.get("boundaries")
         if not boundaries or boundaries.is_empty():
             logger.warning(

@@ -5,7 +5,7 @@ Laser nicht betreten sollte. Wenn aktiviert, werden sie als Teil der
 [Auftrags-Plausibilitätsprüfungen](../features/sanity-checks.md) vor dem
 Ausführen oder Exportieren geprüft.
 
-![No-Go-Zonen](/screenshots/machine-nogo-zones.png)
+![No-Go-Zonen](/screenshots/machine-settings-nogo-zones.png)
 
 ## Eine No-Go-Zone hinzufügen
 
@@ -25,8 +25,9 @@ Jede Zone hat die folgenden Einstellungen:
 
 No-Go-Zonen werden sowohl auf der 2D- als auch der 3D-Canvas als
 halbdurchsichtige Overlays angezeigt. Verwende die No-Go-Zonen-Umschalttaste
-im Canvas-Overlay, um sie ein- oder auszublenden. Die Sichtbarkeitseinstellung
-wird zwischen Sitzungen gespeichert.
+im Canvas-Overlay, um sie ein- oder auszublenden. Die Umschaltung wird nur
+angezeigt, wenn mindestens eine No-Go-Zone konfiguriert ist. Die
+Sichtbarkeitseinstellung wird zwischen Sitzungen gespeichert.
 
 ---
 

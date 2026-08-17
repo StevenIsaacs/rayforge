@@ -1,9 +1,10 @@
 import logging
-from typing import Optional
+from typing import ClassVar
 
 from ...core.source_asset import SourceAsset
 from ...core.vectorization_spec import (
     LayerImportMode,
+    LayerSource,
     PassthroughSpec,
     TraceSpec,
     VectorizationSpec,
@@ -36,10 +37,11 @@ class SvgImporter(Importer):
     label = "SVG files"
     mime_types = ("image/svg+xml",)
     extensions = (".svg",)
-    features = {
+    features: ClassVar[set[ImporterFeature]] = {
         ImporterFeature.DIRECT_VECTOR,
         ImporterFeature.BITMAP_TRACING,
         ImporterFeature.LAYER_SELECTION,
+        ImporterFeature.COLOR_LAYERS,
     }
 
     def scan(self) -> ImportManifest:
@@ -47,8 +49,8 @@ class SvgImporter(Importer):
         return SvgVectorImporter(self.raw_data, self.source_file).scan()
 
     def get_doc_items(
-        self, vectorization_spec: Optional[VectorizationSpec] = None
-    ) -> Optional[ImportResult]:
+        self, vectorization_spec: VectorizationSpec | None = None
+    ) -> ImportResult | None:
         """
         Delegates the full import process to the appropriate strategy.
         """
@@ -73,16 +75,27 @@ class SvgImporter(Importer):
                     "Scanning for all available layers."
                 )
                 manifest = self.scan()
-                all_layer_ids = [layer.id for layer in manifest.layers]
+                if spec_to_use.layer_source == LayerSource.COLORS:
+                    all_layer_ids = [
+                        layer.id for layer in manifest.color_layers
+                    ]
+                else:
+                    all_layer_ids = [layer.id for layer in manifest.layers]
                 if all_layer_ids:
                     logger.debug(
                         f"Populating spec with all layers: {all_layer_ids}"
                     )
                     # Create a new spec object that matches the UI's default.
-                    # This ensures the "merge" strategy is used in the engine.
+                    # This ensures the "merge" strategy is used in the engine
+                    # unless the caller explicitly chose another mode.
+                    layer_import_mode = spec_to_use.layer_import_mode
+                    if layer_import_mode == LayerImportMode.MAP_TO_EXISTING:
+                        layer_import_mode = LayerImportMode.FLATTEN
                     spec_to_use = PassthroughSpec(
                         active_layer_ids=all_layer_ids,
-                        layer_import_mode=LayerImportMode.FLATTEN,
+                        layer_import_mode=layer_import_mode,
+                        layer_source=spec_to_use.layer_source,
+                        color_attr=spec_to_use.color_attr,
                     )
 
             logger.debug("SvgImporter: Delegating to SvgVectorImporter.")
@@ -123,9 +136,10 @@ class SvgImporter(Importer):
                             and item.source_segment.pristine_geometry
                         ):
                             return True
-                    elif isinstance(item, Layer):
-                        if check_for_geometry(item.children):
-                            return True
+                    elif isinstance(item, Layer) and check_for_geometry(
+                        item.children
+                    ):
+                        return True
                 return False
 
             item_count = len(import_result.payload.items)
@@ -159,7 +173,7 @@ class SvgImporter(Importer):
     # These abstract methods must be implemented to satisfy the ABC contract,
     # but get_doc_items bypasses them in this facade.
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         raise NotImplementedError(
             "SvgImporter is a facade; parse is delegated via get_doc_items"
         )
@@ -180,7 +194,7 @@ class SvgImporter(Importer):
         self,
         existing_source_asset: SourceAsset,
         vectorization_spec: VectorizationSpec,
-    ) -> Optional[ImportResult]:
+    ) -> ImportResult | None:
         if isinstance(vectorization_spec, TraceSpec):
             delegate = SvgTraceImporter(self.raw_data, self.source_file)
         else:

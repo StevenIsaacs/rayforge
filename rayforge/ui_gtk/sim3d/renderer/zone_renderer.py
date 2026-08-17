@@ -1,12 +1,13 @@
 import logging
 import math
-from typing import List, Tuple
 
 import numpy as np
 from OpenGL import GL
 
 from ....machine.models.zone import Zone, ZoneShape
-from ..gl_utils import BaseRenderer, RenderContext, Shader
+from ..gl_utils import ShaderSet
+from ..render_context import RenderContext
+from .base import BaseRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ _DEFAULT_EDGE_COLOR = (1.0, 0.0, 0.0, 0.2)
 _CYLINDER_SEGMENTS = 16
 
 
-def _rect_triangles(p: dict) -> List[float]:
+def _rect_triangles(p: dict) -> list[float]:
     x, y = p.get("x", 0.0), p.get("y", 0.0)
     w, h = p.get("w", 10.0), p.get("h", 10.0)
     z = 0.003
@@ -41,7 +42,7 @@ def _rect_triangles(p: dict) -> List[float]:
     ]
 
 
-def _rect_edges(p: dict) -> List[float]:
+def _rect_edges(p: dict) -> list[float]:
     x, y = p.get("x", 0.0), p.get("y", 0.0)
     w, h = p.get("w", 10.0), p.get("h", 10.0)
     z = 0.004
@@ -73,7 +74,7 @@ def _rect_edges(p: dict) -> List[float]:
     ]
 
 
-def _box_triangles(p: dict) -> List[float]:
+def _box_triangles(p: dict) -> list[float]:
     x, y, z = p.get("x", 0.0), p.get("y", 0.0), p.get("z", 0.0)
     w, h, d = p.get("w", 10.0), p.get("h", 10.0), p.get("d", 10.0)
     x2, y2, z2 = x + w, y + h, z + d
@@ -91,7 +92,7 @@ def _box_triangles(p: dict) -> List[float]:
     return verts
 
 
-def _box_edges(p: dict) -> List[float]:
+def _box_edges(p: dict) -> list[float]:
     x, y, z = p.get("x", 0.0), p.get("y", 0.0), p.get("z", 0.0)
     w, h, d = p.get("w", 10.0), p.get("h", 10.0), p.get("d", 10.0)
     x2, y2, z2 = x + w, y + h, z + d
@@ -171,13 +172,13 @@ def _box_edges(p: dict) -> List[float]:
     ]
 
 
-def _cylinder_triangles(p: dict) -> List[float]:
+def _cylinder_triangles(p: dict) -> list[float]:
     cx, cy = p.get("x", 0.0), p.get("y", 0.0)
     cz = p.get("z", 0.0)
     radius = p.get("radius", 5.0)
     height = p.get("height", 10.0)
     n = _CYLINDER_SEGMENTS
-    verts: List[float] = []
+    verts: list[float] = []
     for i in range(n):
         a1 = 2.0 * math.pi * i / n
         a2 = 2.0 * math.pi * (i + 1) / n
@@ -241,13 +242,13 @@ def _cylinder_triangles(p: dict) -> List[float]:
     return verts
 
 
-def _cylinder_edges(p: dict) -> List[float]:
+def _cylinder_edges(p: dict) -> list[float]:
     cx, cy = p.get("x", 0.0), p.get("y", 0.0)
     cz = p.get("z", 0.0)
     radius = p.get("radius", 5.0)
     height = p.get("height", 10.0)
     n = _CYLINDER_SEGMENTS
-    verts: List[float] = []
+    verts: list[float] = []
     for i in range(n):
         a1 = 2.0 * math.pi * i / n
         a2 = 2.0 * math.pi * (i + 1) / n
@@ -276,6 +277,8 @@ _EDGE_FUNCS = {
 
 
 class ZoneRenderer(BaseRenderer):
+    visibility_key = "show_nogo_zones"
+
     def __init__(self):
         super().__init__()
         self._fill_vao = 0
@@ -284,12 +287,12 @@ class ZoneRenderer(BaseRenderer):
         self._edge_vao = 0
         self._edge_vbo = 0
         self._edge_vertex_count = 0
-        self._fill_color: Tuple[float, ...] = _DEFAULT_FILL_COLOR
-        self._edge_color: Tuple[float, ...] = _DEFAULT_EDGE_COLOR
+        self._fill_color: tuple[float, ...] = _DEFAULT_FILL_COLOR
+        self._edge_color: tuple[float, ...] = _DEFAULT_EDGE_COLOR
 
-    def update_zones(self, zones: List[Zone]):
-        fill_verts: List[float] = []
-        edge_verts: List[float] = []
+    def update_zones(self, zones: list[Zone]):
+        fill_verts: list[float] = []
+        edge_verts: list[float] = []
         for zone in zones:
             if not zone.enabled:
                 continue
@@ -300,18 +303,12 @@ class ZoneRenderer(BaseRenderer):
             if edge_fn:
                 edge_verts.extend(edge_fn(zone.params))
 
-        if self._fill_vao:
-            GL.glDeleteVertexArrays(1, [self._fill_vao])
-            self._fill_vao = 0
-        if self._fill_vbo:
-            GL.glDeleteBuffers(1, [self._fill_vbo])
-            self._fill_vbo = 0
-        if self._edge_vao:
-            GL.glDeleteVertexArrays(1, [self._edge_vao])
-            self._edge_vao = 0
-        if self._edge_vbo:
-            GL.glDeleteBuffers(1, [self._edge_vbo])
-            self._edge_vbo = 0
+        self._delete_owned(self._fill_vao, self._fill_vbo)
+        self._fill_vao = 0
+        self._fill_vbo = 0
+        self._delete_owned(self._edge_vao, self._edge_vbo)
+        self._edge_vao = 0
+        self._edge_vbo = 0
 
         if fill_verts:
             self._fill_vao = self._create_vao()
@@ -344,11 +341,21 @@ class ZoneRenderer(BaseRenderer):
     def init_gl(self) -> None:
         pass
 
-    def render(
-        self, ctx: RenderContext, shader: Shader, mvp: np.ndarray
-    ) -> None:
+    def prepare(self, ctx: RenderContext) -> None:
+        """No per-frame state to prepare."""
+
+    def render(self, ctx: RenderContext, shaders: ShaderSet, **kwargs) -> None:
         if not self._fill_vao and not self._edge_vao:
             return
+
+        shader = shaders.main
+        if shader is None:
+            return
+
+        physical_to_visual = (
+            ctx.viewport.margin_shift @ ctx.viewport.world_to_panel
+        )
+        mvp = ctx.camera.mvp_ui @ physical_to_visual
 
         shader.use()
         GL.glEnable(GL.GL_BLEND)
@@ -362,12 +369,9 @@ class ZoneRenderer(BaseRenderer):
             shader.set_vec4("uColor", self._fill_color)
             GL.glBindVertexArray(self._fill_vao)
             GL.glDrawArrays(GL.GL_TRIANGLES, 0, self._fill_vertex_count)
-            GL.glDepthMask(GL.GL_TRUE)
 
         if self._edge_vao:
             shader.set_mat4("uMVP", mvp)
             shader.set_vec4("uColor", self._edge_color)
             GL.glBindVertexArray(self._edge_vao)
             GL.glDrawArrays(GL.GL_LINES, 0, self._edge_vertex_count)
-
-        GL.glBindVertexArray(0)

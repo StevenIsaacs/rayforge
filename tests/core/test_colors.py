@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from rayforge.core.color import ColorSet
+from rayforge.core.color import ColorSet, colorize_rgb, normalize_color
 
 
 class TestColorSetGetLut:
@@ -155,5 +155,63 @@ class TestColorSetImmutability:
     def test_frozen_dataclass(self):
         colorset = ColorSet(_data={"color": (1.0, 0.0, 0.0, 1.0)})
 
-        with pytest.raises(Exception):
-            setattr(colorset, "_data", {})
+        with pytest.raises(AttributeError):
+            colorset._data = {}  # type: ignore[assignment]
+
+
+class TestNormalizeColor:
+    def test_lowercase_hex(self):
+        assert normalize_color("#e34c4c") == "#e34c4c"
+
+    def test_uppercase_hex(self):
+        assert normalize_color("#E34C4C") == "#e34c4c"
+
+    def test_short_hex(self):
+        assert normalize_color("#f00") == "#ff0000"
+
+    def test_css_color_name(self):
+        assert normalize_color("red") == "#ff0000"
+
+    def test_rgb_string(self):
+        assert normalize_color("rgb(227, 76, 76)") == "#e34c4c"
+
+    def test_eight_digit_hex_drops_alpha(self):
+        assert normalize_color("#e34c4cff") == "#e34c4c"
+
+    def test_whitespace(self):
+        assert normalize_color("  #E34C4C  ") == "#e34c4c"
+
+    def test_invalid_returns_none(self):
+        assert normalize_color("") is None
+        assert normalize_color(None) is None
+        assert normalize_color("not-a-color") is None
+        assert normalize_color("   ") is None
+
+
+class TestColorizeRgb:
+    def test_white_shifts_exactly_to_tint(self):
+        """A white pixel becomes exactly the tint color."""
+        rgb = np.array([[[255, 255, 255]]], dtype=np.uint8)
+        out = colorize_rgb(rgb, (1.0, 0.0, 0.0, 1.0))
+        assert out[0, 0].tolist() == pytest.approx([255.0, 0.0, 0.0], abs=1.0)
+
+    def test_colored_pixel_shifts_hue_preserving_brightness(self):
+        """A colored (e.g. pale blue) pixel shifts to the tint hue."""
+        rgb = np.array([[[200, 225, 230]]], dtype=np.uint8)  # pale blue
+        out = colorize_rgb(rgb, (1.0, 0.0, 0.0, 1.0))
+        # red channel carries all the energy, others are ~0
+        assert out[0, 0, 1] < 1.0
+        assert out[0, 0, 2] < 1.0
+        assert out[0, 0, 0] > 200.0
+
+    def test_darker_texel_darker_result(self):
+        """Shading is preserved: darker texel -> darker tinted result."""
+        a = colorize_rgb(
+            np.array([[[255, 255, 255]]], dtype=np.uint8), (0.0, 1.0, 0.0, 1.0)
+        )
+        b = colorize_rgb(
+            np.array([[[128, 128, 128]]], dtype=np.uint8), (0.0, 1.0, 0.0, 1.0)
+        )
+        assert a[0, 0, 1] == pytest.approx(255.0, abs=1.0)  # green channel
+        assert b[0, 0, 1] == pytest.approx(128.0, abs=1.0)
+        assert a[0, 0, 1] > b[0, 0, 1]

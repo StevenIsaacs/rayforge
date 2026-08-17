@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Optional
+from typing import TYPE_CHECKING
+
+from raygeo.geo import Matrix
 
 from .base import LayoutStrategy
 
 if TYPE_CHECKING:
-    from raygeo.geo import Matrix
-
     from ...core.item import DocItem
     from ...shared.tasker.context import ExecutionContext
 
@@ -15,14 +15,14 @@ class SpreadHorizontallyStrategy(LayoutStrategy):
     """Distributes items evenly in the horizontal direction."""
 
     def calculate_deltas(
-        self, context: Optional[ExecutionContext] = None
-    ) -> Dict[DocItem, Matrix]:
+        self, context: ExecutionContext | None = None
+    ) -> dict[DocItem, Matrix]:
         if len(self.items) < 3:
             return {}
 
         wps_with_bboxes = []
         for wp in self.items:
-            bbox = self._get_item_world_bbox(wp)
+            bbox = self._get_item_panel_bbox(wp)
             if bbox:
                 wps_with_bboxes.append((wp, bbox))
 
@@ -48,7 +48,7 @@ class SpreadHorizontallyStrategy(LayoutStrategy):
             target_min_x = current_x + gap_size
             delta_x = target_min_x - bbox[0]
             if abs(delta_x) > 1e-6:
-                deltas[wp] = Matrix.translation(delta_x, 0)
+                deltas[wp] = self._world_delta(delta_x, 0)
 
             item_width = bbox[2] - bbox[0]
             current_x = target_min_x + item_width
@@ -60,14 +60,14 @@ class SpreadVerticallyStrategy(LayoutStrategy):
     """Distributes items evenly in the vertical direction."""
 
     def calculate_deltas(
-        self, context: Optional[ExecutionContext] = None
-    ) -> Dict[DocItem, Matrix]:
+        self, context: ExecutionContext | None = None
+    ) -> dict[DocItem, Matrix]:
         if len(self.items) < 3:
             return {}
 
         wps_with_bboxes = []
         for wp in self.items:
-            bbox = self._get_item_world_bbox(wp)
+            bbox = self._get_item_panel_bbox(wp)
             if bbox:
                 wps_with_bboxes.append((wp, bbox))
 
@@ -93,7 +93,7 @@ class SpreadVerticallyStrategy(LayoutStrategy):
             target_min_y = current_y + gap_size
             delta_y = target_min_y - bbox[1]
             if abs(delta_y) > 1e-6:
-                deltas[wp] = Matrix.translation(0, delta_y)
+                deltas[wp] = self._world_delta(0, delta_y)
 
             item_height = bbox[3] - bbox[1]
             current_y = target_min_y + item_height

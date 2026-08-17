@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from typing import Optional
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -18,12 +17,12 @@ class WebSocketTransport(Transport):
     def __init__(self, uri: str, origin=None):
         super().__init__()
         self.uri = uri
-        self._websocket: Optional[websockets.ClientConnection] = None
+        self._websocket: websockets.ClientConnection | None = None
         self._origin = origin
         self._running = False
         self._reconnect_interval = 5
         self._lock = asyncio.Lock()
-        self._receive_task: Optional[asyncio.Task] = None
+        self._receive_task: asyncio.Task | None = None
         self._status = TransportStatus.DISCONNECTED
 
     @property
@@ -32,7 +31,7 @@ class WebSocketTransport(Transport):
         return self._status == TransportStatus.CONNECTED
 
     def _set_status(
-        self, status: TransportStatus, message: Optional[str] = None
+        self, status: TransportStatus, message: str | None = None
     ) -> None:
         """
         Internal helper to set status and send signal, avoiding duplicates.
@@ -71,7 +70,7 @@ class WebSocketTransport(Transport):
                 # This is an expected part of a clean shutdown or reconnect
                 # cycle.
                 pass
-            except Exception as e:
+            except (websockets.exceptions.WebSocketException, OSError) as e:
                 self._set_status(TransportStatus.ERROR, message=str(e))
             finally:
                 # Always clean up the connection before the next step.
@@ -134,7 +133,7 @@ class WebSocketTransport(Transport):
             pass
         except ConnectionClosed:
             pass
-        except Exception as e:
+        except websockets.exceptions.WebSocketException as e:
             logger.warning(f"Error during purge: {e}")
 
     async def _receive_loop(self) -> None:
@@ -149,7 +148,7 @@ class WebSocketTransport(Transport):
                     self.received.send(self, data=message)
         except ConnectionClosed:
             pass  # The outer connect() loop will handle this.
-        except Exception as e:
+        except websockets.exceptions.WebSocketException as e:
             self._set_status(TransportStatus.ERROR, message=str(e))
 
     async def _safe_close(self) -> None:
@@ -162,6 +161,6 @@ class WebSocketTransport(Transport):
             except Exception:
                 # Ignore errors on close, as we are tearing down the
                 # connection.
-                pass
+                logger.debug("Error closing websocket", exc_info=True)
             finally:
                 self._websocket = None

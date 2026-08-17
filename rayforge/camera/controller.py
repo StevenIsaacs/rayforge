@@ -3,7 +3,7 @@ import multiprocessing as mp
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Optional
 
 import cv2
 import numpy as np
@@ -40,22 +40,48 @@ COMMON_RESOLUTIONS = [
 ]
 
 
+def _get_linux_scan_targets() -> list[str]:
+    """Get device identifiers to scan on Linux.
+
+    Prefers persistent /dev/v4l/by-id/ paths. Falls back to
+    numeric indices if by-id is not available.
+    """
+    from .v4l import get_sorted_by_id_paths
+
+    by_id_paths = get_sorted_by_id_paths()
+    if by_id_paths:
+        return by_id_paths
+    return [str(i) for i in range(10)]
+
+
+def _to_videocapture_arg(target: str) -> int | str:
+    """Convert a scan target for cv2.VideoCapture.
+
+    OpenCV 5.0 treats string arguments as filenames, so numeric
+    device IDs like "0" must be passed as integers. Device paths
+    (e.g. /dev/v4l/by-id/...) are passed as strings.
+    """
+    if target.isdigit():
+        return int(target)
+    return target
+
+
 def _probe_camera_device(args):
     """Probe a single camera device. Runs in subprocess."""
     device_id, backend = args
     try:
-        cap = cv2.VideoCapture(device_id, backend)
+        cap = cv2.VideoCapture(_to_videocapture_arg(device_id), backend)
         if cap.isOpened():
             cap.release()
             return device_id
         if cap:
             cap.release()
-    except Exception:
+    except cv2.error:
         pass
     return None
 
 
-def _scan_cameras_in_subprocess() -> List[str]:
+def _scan_cameras_in_subprocess() -> list[str]:
     """Scan for cameras in a separate process to isolate crashes."""
     if sys.platform.startswith("linux"):
         backends = [cv2.CAP_V4L2, cv2.CAP_ANY]
@@ -64,8 +90,13 @@ def _scan_cameras_in_subprocess() -> List[str]:
     else:
         backends = [cv2.CAP_ANY]
 
+    if sys.platform.startswith("linux"):
+        targets = _get_linux_scan_targets()
+    else:
+        targets = [str(i) for i in range(10)]
+
     devices = []
-    work = [(i, b) for i in range(10) for b in backends]
+    work = [(t, b) for t in targets for b in backends]
 
     try:
         ctx = mp.get_context("spawn")
@@ -75,14 +106,14 @@ def _scan_cameras_in_subprocess() -> List[str]:
             for r in results:
                 if r is not None and str(r) not in devices:
                     devices.append(str(r))
-    except Exception as e:
+    except (mp.ProcessError, mp.TimeoutError, OSError) as e:
         logger.warning(f"Subprocess camera scan failed: {e}")
         return _scan_cameras_fallback()
 
     return devices
 
 
-def _scan_cameras_fallback() -> List[str]:
+def _scan_cameras_fallback() -> list[str]:
     """Fallback camera scan if subprocess fails."""
     devices = []
     if sys.platform.startswith("linux"):
@@ -92,18 +123,23 @@ def _scan_cameras_fallback() -> List[str]:
     else:
         backends = [(cv2.CAP_ANY, "default")]
 
-    for i in range(10):
+    if sys.platform.startswith("linux"):
+        targets = _get_linux_scan_targets()
+    else:
+        targets = [str(i) for i in range(10)]
+
+    for target in targets:
         for backend, name in backends:
             try:
-                cap = cv2.VideoCapture(i, backend)
+                cap = cv2.VideoCapture(_to_videocapture_arg(target), backend)
                 if cap.isOpened():
-                    devices.append(str(i))
+                    devices.append(str(target))
                     cap.release()
                     break
                 if cap:
                     cap.release()
-            except Exception as e:
-                logger.debug(f"Error probing camera {i}: {e}")
+            except (cv2.error, OSError) as e:
+                logger.debug(f"Error probing camera {target}: {e}")
 
     return devices
 
@@ -182,7 +218,7 @@ class VideoCaptureDevice:
                     f"OpenCV error camera {device_id_int} {name} "
                     f"(attempt {attempt + 1}): {e}"
                 )
-            except Exception as e:
+            except OSError as e:
                 logger.warning(
                     f"Error camera {device_id_int} {name} "
                     f"(attempt {attempt + 1}): {e}"
@@ -202,7 +238,7 @@ class VideoCaptureDevice:
             f"Tried: {names}. Last error: {last_error}"
         )
         logger.error(msg)
-        raise IOError(msg)
+        raise OSError(msg)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.cap is None:
@@ -214,7 +250,7 @@ class VideoCaptureDevice:
                     f"(backend: {self._backend_used})"
                 )
                 self.cap.release()
-        except Exception as e:
+        except (cv2.error, OSError) as e:
             logger.warning(f"Error releasing camera {self.device_id}: {e}")
         finally:
             self.cap = None
@@ -229,19 +265,19 @@ class CameraController:
 
     def __init__(self, config: Camera):
         self.config = config
-        self._image_data: Optional[np.ndarray] = None
-        self._raw_image_data: Optional[np.ndarray] = None
+        self._image_data: np.ndarray | None = None
+        self._raw_image_data: np.ndarray | None = None
         # For Temporal Smoothing
-        self._accumulator: Optional[np.ndarray] = None
+        self._accumulator: np.ndarray | None = None
         self._active_subscribers: int = 0
-        self._capture_thread: Optional[threading.Thread] = None
+        self._capture_thread: threading.Thread | None = None
         self._running: bool = False
         self._settings_dirty: bool = True  # Flag to re-apply settings
         self._consecutive_failures: int = 0
 
         # We no longer probe hardware directly because V4L2 and DirectShow
         # drivers often crash or drop buffers when aggressively queried.
-        self._available_resolutions: List[Tuple[int, int]] = COMMON_RESOLUTIONS
+        self._available_resolutions: list[tuple[int, int]] = COMMON_RESOLUTIONS
         self._resolutions_probed: bool = True
 
         # Signals
@@ -262,38 +298,46 @@ class CameraController:
             self._stop_capture_stream()
 
     @staticmethod
-    def list_available_devices() -> List[str]:
+    def list_available_devices() -> list[str]:
         """
         Lists available camera device IDs.
         Returns a list of strings, where each string is a device ID.
+        On Linux, prefers persistent /dev/v4l/by-id/ paths.
         """
         logger.debug("Scanning for camera devices...")
         devices = []
         backends = get_backends_for_platform()
 
-        for i in range(10):
+        if sys.platform.startswith("linux"):
+            targets = _get_linux_scan_targets()
+        else:
+            targets = [str(i) for i in range(10)]
+
+        for target in targets:
             for backend, name in backends:
                 try:
-                    cap = cv2.VideoCapture(i, backend)
+                    cap = cv2.VideoCapture(
+                        _to_videocapture_arg(target), backend
+                    )
                     if cap.isOpened():
-                        devices.append(str(i))
+                        devices.append(str(target))
                         cap.release()
-                        logger.debug(f"Found camera {i} via {name}")
+                        logger.debug(f"Found camera {target} via {name}")
                         break
                 except cv2.error as e:
-                    logger.debug(f"OpenCV error camera {i} {name}: {e}")
-                except Exception as e:
-                    logger.debug(f"Error camera {i}: {e}")
+                    logger.debug(f"OpenCV error camera {target} {name}: {e}")
+                except OSError as e:
+                    logger.debug(f"Error camera {target}: {e}")
 
         logger.info(f"Available cameras: {devices}")
         return devices
 
     @property
-    def image_data(self) -> Optional[np.ndarray]:
+    def image_data(self) -> np.ndarray | None:
         return self._image_data
 
     @property
-    def raw_image_data(self) -> Optional[np.ndarray]:
+    def raw_image_data(self) -> np.ndarray | None:
         return self._raw_image_data
 
     @property
@@ -333,14 +377,14 @@ class CameraController:
         return pixbuf
 
     @property
-    def resolution(self) -> Tuple[int, int]:
+    def resolution(self) -> tuple[int, int]:
         if self._image_data is None:
             return 640, 480
         height, width, _ = self._image_data.shape
         return width, height
 
     @property
-    def available_resolutions(self) -> List[Tuple[int, int]]:
+    def available_resolutions(self) -> list[tuple[int, int]]:
         return self._available_resolutions
 
     @property
@@ -407,9 +451,9 @@ class CameraController:
 
     def get_work_surface_image(
         self,
-        output_size: Tuple[int, int],
-        physical_area: Tuple[Pos, Pos],
-    ) -> Optional[np.ndarray]:
+        output_size: tuple[int, int],
+        physical_area: tuple[Pos, Pos],
+    ) -> np.ndarray | None:
         """
         Get an image aligned to world coordinates.
 
@@ -455,9 +499,9 @@ class CameraController:
     def _transform_with_homography(
         self,
         image: np.ndarray,
-        output_size: Tuple[int, int],
-        physical_area: Tuple[Pos, Pos],
-    ) -> Optional[np.ndarray]:
+        output_size: tuple[int, int],
+        physical_area: tuple[Pos, Pos],
+    ) -> np.ndarray | None:
         """
         Transform an image using homography to world coordinates.
 
@@ -554,7 +598,7 @@ class CameraController:
 
             self._settings_dirty = False
             logger.debug("Applied camera hardware settings.")
-        except Exception as e:
+        except (cv2.error, OSError, ValueError) as e:
             # We log as a warning because the stream may still work
             logger.warning(f"Could not apply one or more camera settings: {e}")
 
@@ -624,7 +668,7 @@ class CameraController:
                 frame_to_process = cv2.undistort(
                     frame_to_process, cam_mat, dist
                 )
-            except Exception as e:
+            except cv2.error as e:
                 logger.error(f"Failed to undistort frame: {e}")
 
         return frame_to_process
@@ -647,7 +691,7 @@ class CameraController:
             # Emit the signal in a GLib-safe way
             idle_add(self.image_captured.send, self)
             return True
-        except Exception as e:
+        except (cv2.error, OSError, ValueError) as e:
             logger.error(f"Error reading frame: {e}")
             return False
 
@@ -697,17 +741,14 @@ class CameraController:
                 # Open the device ONCE
                 with VideoCaptureDevice(self.config.device_id) as cap:
                     if cap is None:
-                        raise IOError("VideoCapture returned None")
+                        raise OSError("VideoCapture returned None")
                     self._capture_frames_from_device(cap)
-            except IOError as e:
+            except OSError as e:
                 logger.error(f"IO error for {self.config.name}: {e}")
             except cv2.error as e:
                 logger.error(f"OpenCV error for {self.config.name}: {e}")
-            except Exception as e:
-                logger.error(
-                    f"Unexpected error for {self.config.name}: {e}",
-                    exc_info=True,
-                )
+            except Exception:
+                logger.exception(f"Unexpected error for {self.config.name}")
 
             if self._running:
                 logger.info(
@@ -770,14 +811,12 @@ class CameraController:
                 # Apply settings before capturing the single frame
                 self._apply_settings(cap)
                 self._read_frame(cap)
-        except IOError as e:
+        except OSError as e:
             logger.error(f"IO error capturing image: {e}")
             self._image_data = None
         except cv2.error as e:
             logger.error(f"OpenCV error capturing image: {e}")
             self._image_data = None
-        except Exception as e:
-            logger.error(
-                f"Unexpected error capturing image: {e}", exc_info=True
-            )
+        except Exception:
+            logger.exception("Unexpected error capturing image")
             self._image_data = None

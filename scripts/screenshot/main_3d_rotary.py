@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Screenshot: Main window in 3D mode with rotary project.
 
@@ -10,6 +9,7 @@ import time
 
 from utils import (
     clear_window_subtitle,
+    get_target,
     hide_panel,
     load_project,
     restore_panel_states,
@@ -20,6 +20,7 @@ from utils import (
     show_bottom_tab,
     show_panel,
     take_screenshot,
+    target_to_filename,
     wait_for_3d_rendered,
     wait_for_settled,
     wcs,
@@ -34,6 +35,7 @@ PANELS = ["show_3d_view", "toggle_bottom_panel"]
 
 
 def main():
+    target = get_target("main:3d-rotary")
     set_window_size(win, 2400, 1650)
 
     load_project(win, "rotary.ryp")
@@ -72,18 +74,17 @@ def main():
         )
 
         def _set_perspective() -> None:
-            if win.canvas3d and win.canvas3d.camera:
-                win.canvas3d.camera.is_perspective = True
-                win.canvas3d.queue_render()
+            if win.canvas3d:
+                win.canvas3d.set_perspective(True)
 
         run_on_main_thread(_set_perspective)
         time.sleep(0.5)
 
-        seek_3d_playback(win, 0.6)
+        seek_3d_playback(win, 1.0)
 
         clear_window_subtitle(win)
         logger.info("Taking screenshot: main-3d-rotary.png")
-        take_screenshot("main-3d-rotary.png")
+        take_screenshot(target_to_filename(target))
 
     restore_panel_states(win, saved_states)
 

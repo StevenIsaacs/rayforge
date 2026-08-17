@@ -4,13 +4,8 @@ Tasker package for managing tasks, contexts, and execution.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from .manager import TaskManagerProxy
+from .manager import TaskManager, TaskManagerProxy
 from .task import Task
-
-if TYPE_CHECKING:
-    from .manager import TaskManager
 
 # This is the global, thread-safe, and process-safe singleton.
 # It's a lightweight proxy that will create the real TaskManager on
@@ -21,7 +16,7 @@ task_mgr: TaskManager = TaskManagerProxy()  # type: ignore
 
 
 __all__ = [
-    "TaskManager",
     "Task",
+    "TaskManager",
     "task_mgr",
 ]

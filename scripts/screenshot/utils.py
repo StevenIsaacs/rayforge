@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Shared utilities for screenshot scripts.
 
@@ -8,17 +7,16 @@ GLib.idle_add for thread safety.
 """
 
 import logging
+import os
 import subprocess
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Event
 from typing import (
     TYPE_CHECKING,
-    Callable,
-    List,
     Optional,
-    Tuple,
     TypeVar,
 )
 
@@ -27,15 +25,18 @@ from gi.repository import Adw, GLib
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
+from rayforge.core.recipe import Recipe
+from rayforge.core.step_registry import step_registry
+from rayforge.ui_gtk.doceditor.recipes import (
+    AddEditRecipeDialog,
+)
+from rayforge.ui_gtk.doceditor.step_settings.dialog import (
+    StepSettingsDialog,
+)
+
 if TYPE_CHECKING:
     from rayforge.core.step import Step
     from rayforge.ui_gtk.array_dialog import _BaseArrayDialog
-    from rayforge.ui_gtk.doceditor.edit_recipe_dialog import (
-        AddEditRecipeDialog,
-    )
-    from rayforge.ui_gtk.doceditor.step_settings_dialog import (
-        StepSettingsDialog,
-    )
     from rayforge.ui_gtk.machine.settings_dialog import MachineSettingsDialog
     from rayforge.ui_gtk.mainwindow import MainWindow
     from rayforge.ui_gtk.settings.settings_dialog import SettingsWindow
@@ -54,6 +55,20 @@ SCREENSHOT_TOOLS = [
 T = TypeVar("T")
 
 
+def get_target(default: str) -> str:
+    """Return the screenshot target from the TARGET environment variable."""
+    return os.environ.get("TARGET", default)
+
+
+def target_to_filename(target: str) -> str:
+    """Map a target to its output filename (1:1).
+
+    Targets use ``:`` as a separator (e.g. ``machine-settings:camera``);
+    filenames use ``-`` (e.g. ``machine-settings-camera.png``).
+    """
+    return target.replace(":", "-") + ".png"
+
+
 def _save_png_deterministic(img: Image.Image, output_path: Path) -> bool:
     """
     Save a PNG image deterministically, only updating if content changed.
@@ -67,11 +82,14 @@ def _save_png_deterministic(img: Image.Image, output_path: Path) -> bool:
     if output_path.exists():
         try:
             existing = Image.open(output_path)
-            if existing.size == img.size and existing.mode == img.mode:
-                if _images_visually_equal(existing, img):
-                    logger.info(f"Screenshot unchanged: {output_path}")
-                    return True
-        except Exception as e:
+            if (
+                existing.size == img.size
+                and existing.mode == img.mode
+                and _images_visually_equal(existing, img)
+            ):
+                logger.info(f"Screenshot unchanged: {output_path}")
+                return True
+        except (OSError, ValueError) as e:
             logger.debug(f"Comparison failed: {e}")
 
     pnginfo = PngInfo()
@@ -113,14 +131,14 @@ def run_on_main_thread(func: Callable[[], T], timeout: float = 10.0) -> T:
     """
     Run a function on the main GTK thread and wait for completion.
     """
-    result: List[T] = []
-    exception: List[Optional[Exception]] = [None]
+    result: list[T] = []
+    exception: list[Exception | None] = [None]
     done = Event()
 
     def wrapper() -> bool:
         try:
             result.append(func())
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - arbitrary main-thread callback
             exception[0] = e
         finally:
             done.set()
@@ -156,6 +174,7 @@ def take_screenshot(output_name: str) -> bool:
             [*cmd_args, str(temp_path)],
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode == 0:
             try:
@@ -163,7 +182,7 @@ def take_screenshot(output_name: str) -> bool:
                 _save_png_deterministic(img, output_path)
                 temp_path.unlink()
                 return True
-            except Exception as e:
+            except (OSError, ValueError, TypeError) as e:
                 logger.error(f"Failed to process screenshot: {e}")
                 if temp_path.exists():
                     temp_path.unlink()
@@ -202,6 +221,7 @@ def take_window_screenshot(win: "MainWindow", output_name: str) -> bool:
         ["xwininfo", "-id", str(xid)],
         capture_output=True,
         text=True,
+        check=False,
     )
     if result.returncode != 0:
         logger.error(f"xwininfo failed: {result.stderr}")
@@ -249,6 +269,7 @@ def take_window_screenshot(win: "MainWindow", output_name: str) -> bool:
             [*args, str(temp_path)],
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode == 0:
             try:
@@ -264,7 +285,7 @@ def take_window_screenshot(win: "MainWindow", output_name: str) -> bool:
                 temp_path.unlink()
                 logger.info(f"Window screenshot saved to {output_path}")
                 return True
-            except Exception as e:
+            except (OSError, ValueError, TypeError) as e:
                 logger.error(f"Failed to process screenshot: {e}")
                 if temp_path.exists():
                     temp_path.unlink()
@@ -277,10 +298,10 @@ def take_window_screenshot(win: "MainWindow", output_name: str) -> bool:
 def take_cropped_screenshot(
     output_name: str,
     *,
-    from_bottom: Optional[int] = None,
-    from_top: Optional[int] = None,
-    from_left: Optional[int] = None,
-    from_right: Optional[int] = None,
+    from_bottom: int | None = None,
+    from_top: int | None = None,
+    from_left: int | None = None,
+    from_right: int | None = None,
 ) -> bool:
     """
     Take a screenshot of the active window and crop it.
@@ -308,6 +329,7 @@ def take_cropped_screenshot(
             [*cmd_args, str(temp_path)],
             capture_output=True,
             text=True,
+            check=False,
         )
         if result.returncode == 0:
             success = True
@@ -333,7 +355,7 @@ def take_cropped_screenshot(
         temp_path.unlink()
         logger.info(f"Cropped screenshot saved to {output_path}")
         return True
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         logger.error(f"Failed to crop screenshot: {e}")
         if temp_path.exists():
             temp_path.unlink()
@@ -370,17 +392,7 @@ def wait_for_3d_rendered(win: "MainWindow", timeout: float = 15.0) -> bool:
             time.sleep(0.1)
             continue
 
-        ready = run_on_main_thread(
-            lambda: (
-                canvas._gl_initialized
-                and canvas._compiled_artifact is not None
-                and not canvas._artifact_gl_dirty
-                and (
-                    canvas._scene_preparation_task is None
-                    or canvas._scene_preparation_task.is_final()
-                )
-            )
-        )
+        ready = run_on_main_thread(lambda c=canvas: c.scene_is_ready())
         if ready:
             time.sleep(0.3)
             logger.info("3D scene is compiled and rendered")
@@ -553,7 +565,7 @@ def open_step_settings(
     win: "MainWindow", step_index: int = 0, page: str = "step-settings"
 ) -> "StepSettingsDialog":
     """Open step settings dialog for the step at the given index."""
-    from rayforge.ui_gtk.doceditor.step_settings_dialog import (
+    from rayforge.ui_gtk.doceditor.step_settings.dialog import (
         StepSettingsDialog,
     )
 
@@ -592,11 +604,11 @@ def get_step_by_index(win: "MainWindow", index: int) -> Optional["Step"]:
     return run_on_main_thread(_get)
 
 
-def get_all_steps(win: "MainWindow") -> List["Step"]:
+def get_all_steps(win: "MainWindow") -> list["Step"]:
     """Get all steps across all layers."""
 
-    def _get() -> List["Step"]:
-        steps: List["Step"] = []
+    def _get() -> list["Step"]:
+        steps: list[Step] = []
         for layer in win.doc_editor.doc.layers:
             if layer.workflow and layer.workflow.steps:
                 steps.extend(layer.workflow.steps)
@@ -605,10 +617,10 @@ def get_all_steps(win: "MainWindow") -> List["Step"]:
     return run_on_main_thread(_get)
 
 
-def get_step_types(win: "MainWindow") -> List[str]:
+def get_step_types(win: "MainWindow") -> list[str]:
     """Get all unique step types (typelabels) in the document."""
 
-    def _get() -> List[str]:
+    def _get() -> list[str]:
         types: set = set()
         for layer in win.doc_editor.doc.layers:
             if layer.workflow and layer.workflow.steps:
@@ -621,10 +633,10 @@ def get_step_types(win: "MainWindow") -> List[str]:
 
 def find_step_by_type(
     win: "MainWindow", step_type: str
-) -> Tuple[Optional["Step"], int]:
+) -> tuple[Optional["Step"], int]:
     """Find first step matching the given type."""
 
-    def _find() -> Tuple[Optional["Step"], int]:
+    def _find() -> tuple[Optional["Step"], int]:
         normalized = step_type.lower().replace(" ", "-")
         for layer in win.doc_editor.doc.layers:
             if layer.workflow and layer.workflow.steps:
@@ -637,19 +649,34 @@ def find_step_by_type(
 
 
 def open_recipe_editor(
-    win: "MainWindow", page: str = "general"
+    win: "MainWindow",
+    page: str = "general",
+    *,
+    step_type: str | None = None,
+    settings_page: int = 0,
 ) -> "AddEditRecipeDialog":
-    """Open recipe editor dialog from app settings."""
-    from rayforge.core.recipe import Recipe
-    from rayforge.ui_gtk.doceditor.edit_recipe_dialog import (
-        AddEditRecipeDialog,
-    )
+    """Open recipe editor dialog from app settings.
+
+    Args:
+        page: Which tab to activate ("general", "applicability",
+            "settings", or "post-processing"). For "settings",
+            ``settings_page`` selects which of the dynamic settings
+            pages to show. "post-processing" requires ``step_type`` so
+            the tab exists.
+        step_type: Optional step class name to target. Selecting a step
+            type (e.g. a laser step) splits the settings into inherited
+            and step-specific pages and enables the post-processing tab.
+        settings_page: Index into the dynamic settings pages to activate
+            when ``page`` is "settings".
+    """
 
     settings_dialog = open_app_settings(win, "recipes")
     time.sleep(0.5)
 
     recipe = Recipe(name="3mm Plywood Cut")
     recipe.description = "A recipe for cutting 3mm plywood with a diode laser"
+    if step_type:
+        recipe.target_step_types = [step_type]
 
     def _open() -> "AddEditRecipeDialog":
         dialog = AddEditRecipeDialog(
@@ -659,13 +686,18 @@ def open_recipe_editor(
         dialog.set_default_size(700, 800)
         dialog.present()
 
-        button_map = {
-            "general": dialog.btn_general,
-            "applicability": dialog.btn_applicability,
-            "settings": dialog.btn_settings,
-        }
-        if page in button_map:
-            button_map[page].set_active(True)
+        if page == "general":
+            dialog._tab_buttons["general"].set_active(True)
+        elif page == "applicability":
+            dialog._tab_buttons["applicability"].set_active(True)
+        elif page == "settings" and dialog._settings_pages:
+            names = list(dialog._settings_pages)
+            index = min(settings_page, len(names) - 1)
+            dialog._tab_buttons[names[index]].set_active(True)
+        elif page == "post-processing":
+            button = dialog._tab_buttons.get("post-processing")
+            if button is not None:
+                button.set_active(True)
         return dialog
 
     dialog = run_on_main_thread(_open)
@@ -675,10 +707,6 @@ def open_recipe_editor(
 
 def open_material_test(win: "MainWindow") -> "StepSettingsDialog":
     """Open material test grid dialog."""
-    from rayforge.core.step_registry import step_registry
-    from rayforge.ui_gtk.doceditor.step_settings_dialog import (
-        StepSettingsDialog,
-    )
 
     def _open() -> "StepSettingsDialog":
         step_cls = step_registry.get("MaterialTestStep")
@@ -718,7 +746,7 @@ def open_array_dialog(
         ),
         "circular": (ArrayMode.CIRCULAR, CircularArrayDialog),
     }
-    array_mode, cls = mode_map[mode]
+    _array_mode, cls = mode_map[mode]
 
     def _open():
         items = list(win.surface.get_selected_items())
@@ -751,10 +779,7 @@ def seek_3d_playback(win: "MainWindow", fraction: float) -> None:
     """
 
     def _seek() -> None:
-        canvas = win.canvas3d
-        if canvas is None:
-            return
-        canvas.seek_playback_to_fraction(fraction)
+        win._canvas3d_playback.seek_to_fraction(fraction)
 
     run_on_main_thread(_seek)
     time.sleep(0.3)

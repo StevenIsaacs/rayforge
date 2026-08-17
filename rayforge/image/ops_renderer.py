@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional
 
 import cairo
 
@@ -33,7 +33,7 @@ class OpsRenderer(Renderer):
     def compute_render_spec(
         self,
         segment: Optional["SourceAssetSegment"],
-        target_size: Tuple[int, int],
+        target_size: tuple[int, int],
         source_context: "RenderContext",
     ) -> "RenderSpecification":
         """
@@ -51,7 +51,7 @@ class OpsRenderer(Renderer):
 
     def _render_to_cairo_surface(
         self, boundaries: Geometry, width: int, height: int
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         """Internal helper for renderer reuse."""
         render_width, render_height = width, height
         if render_width <= 0 or render_height <= 0:
@@ -147,7 +147,7 @@ class OpsRenderer(Renderer):
         width: int,
         height: int,
         **kwargs,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         boundaries = kwargs.get("boundaries")
         if not boundaries or boundaries.is_empty():
             logger.warning(

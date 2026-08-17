@@ -1,10 +1,9 @@
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Optional
 
 import yaml
 
-from .capability import Capability
 from .recipe import Recipe
 
 if TYPE_CHECKING:
@@ -21,7 +20,7 @@ class RecipeManager:
 
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
-        self.recipes: Dict[str, Recipe] = {}
+        self.recipes: dict[str, Recipe] = {}
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.load()
 
@@ -48,7 +47,7 @@ class RecipeManager:
                 recipe.uid = data.get("uid", file.stem)
                 self.recipes[recipe.uid] = recipe
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - arbitrary user YAML file
                 logger.error(f"Error loading recipe file {file.name}: {e}")
         logger.info(f"Loaded {len(self.recipes)} recipes.")
 
@@ -60,7 +59,7 @@ class RecipeManager:
             with open(recipe_file, "w") as f:
                 data = recipe.to_dict()
                 yaml.safe_dump(data, f, sort_keys=False)
-        except Exception as e:
+        except (OSError, yaml.YAMLError) as e:
             logger.error(f"Failed to save recipe {recipe.uid}: {e}")
 
     def add_recipe(self, recipe: Recipe):
@@ -86,29 +85,30 @@ class RecipeManager:
                         f"Failed to delete recipe file {recipe_file}: {e}"
                     )
 
-    def get_recipe_by_id(self, recipe_id: str) -> Optional[Recipe]:
+    def get_recipe_by_id(self, recipe_id: str) -> Recipe | None:
         """Retrieves a recipe by its unique identifier."""
         return self.recipes.get(recipe_id)
 
-    def get_all_recipes(self) -> List[Recipe]:
+    def get_all_recipes(self) -> list[Recipe]:
         """Returns a list of all loaded recipes."""
         return list(self.recipes.values())
 
     def find_recipes(
         self,
-        stock_items: List["StockItem"],
-        capabilities: Optional[Tuple[Capability, ...]] = None,
+        stock_items: list["StockItem"],
         machine: Optional["Machine"] = None,
-    ) -> List[Recipe]:
+        step_type: str | None = None,
+    ) -> list[Recipe]:
         """
         Finds matching recipes, sorted from most specific to least specific.
 
         Args:
             stock_items: A list of StockItems. If empty, only generic recipes
                          (without material/thickness constraints) are returned.
-            capabilities: An optional filter to only return recipes for a
-                         specific set of capabilities.
             machine: An optional machine context to match against. Can be None.
+            step_type: An optional step class name (as registered in
+                       ``step_registry``) to match
+                       :attr:`Recipe.target_step_types` against.
 
         Returns:
             A list of Recipe objects, sorted by relevance.
@@ -117,7 +117,7 @@ class RecipeManager:
         candidates = [
             r
             for r in self.get_all_recipes()
-            if r.matches(stock_items, capabilities, machine)
+            if r.matches(stock_items, machine, step_type=step_type)
         ]
 
         # 2. Sort candidates based on their specificity score and name

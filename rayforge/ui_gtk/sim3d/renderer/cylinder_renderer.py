@@ -4,12 +4,13 @@ Renders a cylinder wireframe for visualizing rotary mode workpieces.
 
 import logging
 import math
-from typing import Tuple
 
 import numpy as np
 from OpenGL import GL
 
-from ..gl_utils import BaseRenderer, RenderContext, Shader
+from ..gl_utils import ShaderSet
+from ..render_context import RenderContext
+from .base import BaseRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +34,21 @@ class CylinderRenderer(BaseRenderer):
         self.vao: int = 0
         self.vbo: int = 0
         self.vertex_count = 0
-        self._color: Tuple[float, float, float, float] = (
+        self._mvp: np.ndarray | None = None
+        self._color: tuple[float, float, float, float] = (
             0.5,
             0.5,
             0.5,
             0.3,
         )
 
-    def set_color(self, color: Tuple[float, float, float, float]):
+    def set_color(self, color: tuple[float, float, float, float]):
         """Sets the wireframe color."""
         self._color = color
+
+    def prepare(self, ctx: RenderContext) -> None:
+        """Caches the per-frame MVP matrix for the cylinder mesh."""
+        self._mvp = ctx.kinematics.cylinder_mesh_mvp()
 
     def init_gl(self) -> None:
         """Generates cylinder wireframe vertices and initializes OpenGL."""
@@ -99,21 +105,21 @@ class CylinderRenderer(BaseRenderer):
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
         GL.glBindVertexArray(0)
 
-    def render(
-        self, ctx: RenderContext, shader: Shader, mvp_matrix: np.ndarray
-    ) -> None:
+    def render(self, ctx: RenderContext, shaders: ShaderSet, **kwargs) -> None:
         """
         Renders the cylinder wireframe.
 
         Args:
-            shader: The shader program to use.
-            mvp_matrix: The Model-View-Projection matrix.
+            shaders: The shader set; the ``main`` program is used.
         """
-        if not self.vao or self.vertex_count == 0:
+        shader = shaders.main
+        if not shader or not self.vao or self.vertex_count == 0:
+            return
+        if self._mvp is None:
             return
 
         shader.use()
-        shader.set_mat4("uMVP", mvp_matrix)
+        shader.set_mat4("uMVP", self._mvp)
         shader.set_vec4("uColor", self._color)
         shader.set_float("uUseVertexColor", 0.0)
         shader.set_float("uHasNormals", 0.0)
@@ -122,5 +128,3 @@ class CylinderRenderer(BaseRenderer):
         GL.glBlendFunc(GL.GL_SRC_ALPHA, GL.GL_ONE_MINUS_SRC_ALPHA)
         GL.glBindVertexArray(self.vao)
         GL.glDrawArrays(GL.GL_LINES, 0, self.vertex_count)
-        GL.glBindVertexArray(0)
-        GL.glDisable(GL.GL_BLEND)

@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from raygeo.geo import Geometry
 from raygeo.geo.shape.line import (
@@ -24,8 +25,8 @@ class Bezier(Entity):
         start_idx: EntityID,
         end_idx: EntityID,
         construction: bool = False,
-        cp1: Optional[GeoPoint] = None,
-        cp2: Optional[GeoPoint] = None,
+        cp1: GeoPoint | None = None,
+        cp2: GeoPoint | None = None,
     ):
         super().__init__(id, construction)
         self.start_idx: EntityID = start_idx
@@ -36,9 +37,7 @@ class Bezier(Entity):
 
     def get_control_points(
         self, registry: "EntityRegistry"
-    ) -> Tuple[
-        Optional[float], Optional[float], Optional[float], Optional[float]
-    ]:
+    ) -> tuple[float | None, float | None, float | None, float | None]:
         cp1_x, cp1_y = None, None
         cp2_x, cp2_y = None, None
         if self.cp1 is not None:
@@ -55,7 +54,7 @@ class Bezier(Entity):
 
     def get_control_points_or_endpoints(
         self, registry: "EntityRegistry"
-    ) -> Tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float]:
         start = registry.get_point(self.start_idx)
         end = registry.get_point(self.end_idx)
         cp1_x_opt, cp1_y_opt, cp2_x_opt, cp2_y_opt = self.get_control_points(
@@ -68,16 +67,16 @@ class Bezier(Entity):
         return cp1_x, cp1_y, cp2_x, cp2_y
 
     def is_line(self, registry: "EntityRegistry") -> bool:
-        cp1_x, cp1_y, cp2_x, cp2_y = self.get_control_points(registry)
+        cp1_x, _cp1_y, cp2_x, _cp2_y = self.get_control_points(registry)
         return cp1_x is None and cp2_x is None
 
-    def get_point_ids(self) -> List[EntityID]:
+    def get_point_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx]
 
-    def get_endpoint_ids(self) -> List[EntityID]:
+    def get_endpoint_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx]
 
-    def get_junction_point_ids(self) -> List[EntityID]:
+    def get_junction_point_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx]
 
     def hit_test(
@@ -110,8 +109,7 @@ class Bezier(Entity):
             _, _, dist_sq = get_line_segment_closest_point(
                 points[i], points[i + 1], mx, my
             )
-            if dist_sq < min_dist_sq:
-                min_dist_sq = dist_sq
+            min_dist_sq = min(min_dist_sq, dist_sq)
 
         return min_dist_sq < threshold**2
 
@@ -161,7 +159,7 @@ class Bezier(Entity):
         x3: float,
         y3: float,
         num_samples: int,
-    ) -> List[tuple]:
+    ) -> list[tuple]:
         points = []
         for i in range(num_samples + 1):
             t = i / num_samples
@@ -288,7 +286,7 @@ class Bezier(Entity):
             points = list(reversed(points))
         return points
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = super().to_dict()
         data.update(
             {
@@ -305,7 +303,7 @@ class Bezier(Entity):
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Bezier":
+    def from_dict(cls, data: dict[str, Any]) -> "Bezier":
         cp1 = None
         if "cp1_dx" in data and "cp1_dy" in data:
             cp1 = (data["cp1_dx"], data["cp1_dy"])

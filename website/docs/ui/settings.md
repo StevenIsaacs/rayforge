@@ -4,7 +4,7 @@ description: "Application settings in Rayforge — configure UI preferences, uni
 
 # Settings
 
-![General Settings](/screenshots/application-general.png)
+![General Settings](/screenshots/app-settings-general.png)
 
 Customize Rayforge to match your workflow and preferences. Open the settings
 dialog via **Edit → Settings** or press <kbd>ctrl+comma</kbd>.
@@ -58,6 +58,7 @@ application. Each has its own dedicated documentation:
 - [Materials](../application-settings/materials.md) — manage your material
   libraries
 - [Recipes](../application-settings/recipes.md) — manage saved operation recipes
+- [Color Rules](../application-settings/color-rules.md) — map SVG colors to step types
 - [AI Providers](../application-settings/ai-provider.md) — configure AI providers
   for use by addons
 - [Addons](../application-settings/addons.md) — install, update, and remove

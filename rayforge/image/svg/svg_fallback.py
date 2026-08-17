@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SVG_LOAD_AVAILABLE: Optional[bool] = None
+_SVG_LOAD_AVAILABLE: bool | None = None
 
 
 def _check_svg_load_capability() -> bool:
@@ -42,10 +42,10 @@ def _check_svg_load_capability() -> bool:
         if img.width == 1 and img.height == 1:
             return True
     except pyvips.Error:
-        pass
+        return False
     except Exception:
-        pass
-
+        logger.debug("SVG load capability probe failed", exc_info=True)
+        return False
     return False
 
 
@@ -71,7 +71,7 @@ def render_svg_to_cairo(
     import gi
 
     gi.require_version("Rsvg", "2.0")
-    from gi.repository import Rsvg
+    from gi.repository import GLib, Rsvg
 
     if not svg_data:
         return None
@@ -102,14 +102,14 @@ def render_svg_to_cairo(
         handle.render_document(ctx, viewport)
         return surface
 
-    except Exception as e:
+    except (cairo.Error, GLib.Error) as e:
         logger.error(f"Failed to render SVG with Cairo/Rsvg: {e}")
         return None
 
 
 def cairo_surface_to_vips(
     surface: "cairo.ImageSurface",
-) -> Optional[pyvips.Image]:
+) -> pyvips.Image | None:
     """
     Converts a Cairo ImageSurface to a pyvips Image.
 
@@ -140,14 +140,14 @@ def cairo_surface_to_vips(
 
         return r.bandjoin([g, b, a])
 
-    except Exception as e:
+    except pyvips.Error as e:
         logger.error(f"Failed to convert Cairo surface to pyvips: {e}")
         return None
 
 
 def load_svg_with_fallback(
-    svg_data: bytes, width: Optional[int] = None, height: Optional[int] = None
-) -> Optional[pyvips.Image]:
+    svg_data: bytes, width: int | None = None, height: int | None = None
+) -> pyvips.Image | None:
     """
     Loads SVG data using either libvips or Cairo fallback.
 

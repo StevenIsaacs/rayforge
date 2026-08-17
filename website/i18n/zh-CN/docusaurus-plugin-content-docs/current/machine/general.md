@@ -6,7 +6,7 @@ description: "在 Rayforge 中配置机器的常规设置 — 设置机器名称
 
 机器设置中的"常规"页面包含机器名称、驱动程序选择和连接设置，以及速度参数。
 
-![常规设置](/screenshots/machine-general.png)
+![常规设置](/screenshots/machine-settings-general.png)
 
 ## 机器名称
 
@@ -70,6 +70,6 @@ GRBL 设备有两种串行驱动程序选项：
 
 ## 另请参阅
 
-- [配置向导](config-wizard) - 自动检测和配置已连接的设备
+- [首次设置](../getting-started/first-time-setup.md) - 使用配置向导逐步创建机器
 - [硬件设置](hardware) - 工作区域尺寸和轴配置
 - [设备设置](device) - 读取和写入控制器上的固件设置

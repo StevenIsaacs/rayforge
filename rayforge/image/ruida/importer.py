@@ -1,7 +1,7 @@
 import logging
 from gettext import gettext as _
 from pathlib import Path
-from typing import Dict, Optional
+from typing import ClassVar
 
 from raygeo.geo import Geometry
 
@@ -30,12 +30,12 @@ class RuidaImporter(Importer):
     label = "Ruida files"
     mime_types = ("application/x-rd-file", "application/octet-stream")
     extensions = (".rd",)
-    features = {ImporterFeature.DIRECT_VECTOR}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.DIRECT_VECTOR}
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._job: Optional[RuidaJob] = None
-        self._geometries_by_layer: Dict[Optional[str], Geometry] = {}
+        self._job: RuidaJob | None = None
+        self._geometries_by_layer: dict[str | None, Geometry] = {}
 
     def scan(self) -> ImportManifest:
         """
@@ -62,18 +62,17 @@ class RuidaImporter(Importer):
             logger.warning(
                 f"Ruida scan failed for {self.source_file.name}: {e}"
             )
-            self.add_error(_(f"Ruida file is invalid: {e}"))
+            self.add_error(_("Ruida file is invalid: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
         except Exception as e:
-            logger.error(
+            logger.exception(
                 f"Unexpected error during Ruida scan for "
-                f"{self.source_file.name}: {e}",
-                exc_info=True,
+                f"{self.source_file.name}"
             )
             self.add_error(
-                _(f"Unexpected error while scanning Ruida file: {e}")
+                _("Unexpected error while scanning Ruida file: {}").format(e)
             )
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
@@ -135,7 +134,7 @@ class RuidaImporter(Importer):
         # Key must match the layer_id declared in parse() ("__default__")
         # so that ItemAssembler can find it when layout items request that
         # layer.
-        geometries_for_layout: Dict[Optional[str], Geometry] = {
+        geometries_for_layout: dict[str | None, Geometry] = {
             "__default__": merged_geo
         }
 
@@ -144,14 +143,14 @@ class RuidaImporter(Importer):
             source_parse_result=parse_result,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         """Phase 2: Parse Ruida file into geometric facts."""
         try:
             job = self._get_job()
             self._job = job
         except RuidaParseError as e:
             logger.error("Ruida file parse failed: %s", e)
-            self.add_error(_(f"Failed to parse Ruida commands: {e}"))
+            self.add_error(_("Failed to parse Ruida commands: {}").format(e))
             self._job = None
             return None
 
@@ -174,7 +173,7 @@ class RuidaImporter(Importer):
             )
             empty_result.background_world_transform = bg_item.world_matrix
 
-            self._geometries_by_layer: Dict[Optional[str], Geometry] = {
+            self._geometries_by_layer: dict[str | None, Geometry] = {
                 "__default__": pristine_geo
             }
             return empty_result

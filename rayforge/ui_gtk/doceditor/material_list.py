@@ -1,18 +1,25 @@
 """Material list UI components for Rayforge."""
 
 import logging
+import shutil
 import uuid
 from gettext import gettext as _
-from typing import Optional, cast
+from pathlib import Path
+from typing import cast
 
 from blinker import Signal
 from gi.repository import Adw, Gtk
 
 from ...context import get_context
-from ...core.material import Material, MaterialAppearance
+from ...core.material import (
+    SUPPORTED_TEXTURE_SUFFIXES,
+    Material,
+    MaterialAppearance,
+)
 from ...core.material_library import MaterialLibrary
 from ..icons import get_icon
 from ..shared.preferences_group import PreferencesGroupWithButton
+from ..shared.texture_loader import create_material_swatch
 from .add_material_dialog import AddMaterialDialog
 
 logger = logging.getLogger(__name__)
@@ -42,19 +49,7 @@ class MaterialRow(Gtk.Box):
         self.set_margin_start(12)
         self.set_margin_end(6)
 
-        color_box = Gtk.Box()
-        color_box.set_size_request(24, 24)
-        color_box.set_valign(Gtk.Align.CENTER)
-        color_box.add_css_class("material-color")
-        color_provider = Gtk.CssProvider()
-        color_data = (".material-color {{ background-color: {}; }}").format(
-            self.material.get_display_color()
-        )
-        color_provider.load_from_string(color_data)
-        color_box.get_style_context().add_provider(
-            color_provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
-        self.prepend(color_box)
+        self.prepend(create_material_swatch(self.material))
 
         labels_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=0, hexpand=True
@@ -115,13 +110,13 @@ class MaterialListWidget(PreferencesGroupWithButton):
         self.material_added = Signal()
         self.material_deleted = Signal()
         self._setup_ui()
-        self._current_library: Optional[MaterialLibrary] = None
+        self._current_library: MaterialLibrary | None = None
 
     def _setup_ui(self):
         """Configures the widget's list box."""
         self.list_box.set_show_separators(True)
 
-    def set_library(self, library: Optional[MaterialLibrary]):
+    def set_library(self, library: MaterialLibrary | None):
         """Set the current library and update the materials list."""
         logger.debug(
             f"MaterialListEditor: Setting library to "
@@ -194,16 +189,16 @@ class MaterialListWidget(PreferencesGroupWithButton):
 
         def on_response(d, response_id):
             if response_id == "delete":
-                if self._current_library is not None:
-                    if self._current_library.remove_material(material.uid):
-                        self._populate_materials()
-                        self.material_deleted.send(
-                            self, library=self._current_library
-                        )
-                    else:
-                        logger.error(
-                            f"Failed to remove material '{material.uid}'"
-                        )
+                if (
+                    self._current_library is not None
+                    and self._current_library.remove_material(material.uid)
+                ):
+                    self._populate_materials()
+                    self.material_deleted.send(
+                        self, library=self._current_library
+                    )
+                else:
+                    logger.error(f"Failed to remove material '{material.uid}'")
             d.destroy()
 
         dialog.connect("response", on_response)
@@ -240,6 +235,18 @@ class MaterialListWidget(PreferencesGroupWithButton):
         material.name = data["name"]
         material.category = data["category"]
         material.appearance.color = data["color"]
+        material.appearance.tintable = bool(data.get("tintable", False))
+        material.appearance.roughness = float(data.get("roughness", 0.8))
+        material.appearance.metallic = float(data.get("metallic", 0.0))
+        material.appearance.texture_size_mm = float(
+            data.get("texture_size_mm", 300.0)
+        )
+
+        texture_source = data.get("texture")
+        if texture_source is not None:
+            self._install_material_texture(material, texture_source)
+        else:
+            material.appearance.texture = None
 
         # Save the updated material
         if material.file_path:
@@ -251,7 +258,7 @@ class MaterialListWidget(PreferencesGroupWithButton):
                     f"'{library.library_id}'"
                 )
                 self.material_added.send(self, library=library)
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.error(f"Failed to update material: {e}")
                 root = self.get_root()
                 err_dialog = Adw.MessageDialog(
@@ -294,10 +301,19 @@ class MaterialListWidget(PreferencesGroupWithButton):
             name=data["name"],
             description="",
             category=data["category"],
-            appearance=MaterialAppearance(color=data["color"]),
+            appearance=MaterialAppearance(
+                color=data["color"],
+                tintable=bool(data.get("tintable", False)),
+                roughness=float(data.get("roughness", 0.8)),
+                metallic=float(data.get("metallic", 0.0)),
+                texture_size_mm=float(data.get("texture_size_mm", 300.0)),
+            ),
         )
 
         if library.add_material(material):
+            texture_source = data.get("texture")
+            if texture_source is not None:
+                self._install_material_texture(material, texture_source)
             self._populate_materials()
             logger.info(
                 f"Added material '{data['name']}' to library "
@@ -313,3 +329,41 @@ class MaterialListWidget(PreferencesGroupWithButton):
             )
             err_dialog.add_response("ok", _("OK"))
             err_dialog.present()
+
+    def _install_material_texture(
+        self, material: Material, texture_source: Path
+    ):
+        """
+        Copy a chosen texture file into the material's library.
+
+        The texture is stored next to the material YAML as
+        "<uid>.<suffix>" (WebP or PNG) and referenced by that relative
+        name, so the material stays valid if the library is moved.
+        """
+        if material.file_path is None:
+            logger.error(
+                f"Cannot install texture for '{material.uid}': "
+                "material has no file path"
+            )
+            return
+        if texture_source.suffix.lower() not in SUPPORTED_TEXTURE_SUFFIXES:
+            logger.error(
+                f"Ignoring texture '{texture_source}' for "
+                f"'{material.uid}': only WebP and PNG are supported"
+            )
+            return
+
+        dest = (
+            material.file_path.parent
+            / f"{material.uid}{texture_source.suffix.lower()}"
+        )
+        try:
+            shutil.copy2(texture_source, dest)
+        except OSError as e:
+            logger.error(f"Failed to copy texture '{texture_source}': {e}")
+            return
+        material.appearance.texture = dest.name
+        try:
+            material.save_to_file(material.file_path)
+        except OSError as e:
+            logger.error(f"Failed to save material after texture copy: {e}")

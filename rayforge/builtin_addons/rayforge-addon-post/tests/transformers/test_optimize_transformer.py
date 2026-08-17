@@ -5,6 +5,26 @@ from raygeo.ops.state import AirAssistMode
 from raygeo.ops.types import CommandCategory, CommandType
 
 
+class _ProgressCallback:
+    def __init__(self, context):
+        self._context = context
+
+    def __call__(self, progress, message):
+        self._context.set_progress(progress)
+        if message:
+            self._context.set_message(message)
+
+    def is_cancelled(self):
+        return self._context.is_cancelled()
+
+
+def _apply(optimizer, ops, context=None):
+    """Run the optimizer through the Rust spec dispatch."""
+    specs = [optimizer.to_spec(None, None, None)]
+    cb = _ProgressCallback(context) if context else None
+    Ops.apply_transformers(ops, specs, progress_cb=cb)
+
+
 def _make_seg(start: tuple, end: tuple) -> Ops:
     """Create a 2-point segment: move_to then line_to."""
     ops = Ops()
@@ -66,7 +86,7 @@ def test_greedy_order_segments(mock_progress_context):
         ]
     )
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     travel_after = _travel_distance(ops)
     # s1(0->10) then s3(10->10) connect at (10,0) with zero travel.
     # Only one jump: from (10,10) to (100,100) ≈ 127.
@@ -94,7 +114,7 @@ def test_greedy_order_with_flip(mock_progress_context):
         ]
     )
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     travel_after = _travel_distance(ops)
     # s1(0→10) then s3_flipped(10→10) connect with zero travel.
     # One jump: (10,10) → (100,100) ≈ 127.
@@ -126,7 +146,7 @@ def test_kdtree_order_segments(mock_progress_context):
     )
     travel_before = _travel_distance(ops.copy())
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     travel_after = _travel_distance(ops)
     # Original: (10,0)→(100,0)=90, (110,0)→(10,10)≈100.5, (110,10)→(110,0)=10
     # Optimized: no travel between A→C (connect at 10,0),
@@ -158,7 +178,7 @@ def test_two_opt(mock_progress_context):
     )
     travel_before = _travel_distance(ops.copy())
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     travel_after = _travel_distance(ops)
     # Original: (1,0)→(10,10)≈12.8, (11,10)→(2,0)≈10.5, (1,0)→(11,10)≈10.5
     # Optimized A,C,B,D: (1,0)→(1,0)=0, (2,0)→(10,10)≈12.8, (11,10)→(11,10)=0
@@ -205,7 +225,7 @@ def test_run_optimization(mock_progress_context):
 
     # Run the optimizer
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
 
     # Calculate travel distance after optimization
     ops.preload_state()
@@ -244,7 +264,7 @@ def test_run_with_air_assist_change(mock_progress_context):
 
     # Run optimizer
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
 
     ops.preload_state()
 
@@ -299,7 +319,7 @@ def test_run_preserves_markers(mock_progress_context):
     ops.line_to(110, 110)  # Seg 4
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
 
     # Find the marker
     marker_idx = -1
@@ -357,7 +377,7 @@ def test_run_optimization_with_unsplit_scanline(mock_progress_context):
     ops.scan_to(10, 0, 0, power_values=bytearray([10, 20, 30]))
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
     travel_after = _calculate_travel_distance(ops)
 
@@ -409,7 +429,7 @@ def test_run_optimization_with_split_scanline(mock_progress_context):
     ops.scan_to(110, 5, 0, power_values=bytearray([50, 50, 0, 0, 0, 60, 60]))
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     moving_indices = [
@@ -463,7 +483,7 @@ def test_optimizer_does_not_split_overscanned_scanline(
 
     # Act: Run the optimizer
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
 
     # Assert: The optimizer should NOT have split the scanline.
     scan_indices = [
@@ -514,7 +534,7 @@ def test_run_optimization_scanline_flip_preserves_state(
     ops.scan_to(10, 0, power_values=bytearray([10, 20, 30]))
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     scan_indices = [
@@ -563,7 +583,7 @@ def test_run_optimization_scanline_split_preserves_state(
     ops.line_to(101, 101)
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     # The original ScanLine stays as a single command
@@ -618,7 +638,7 @@ def test_run_with_state_change_and_scanlines(mock_progress_context):
     ops.scan_to(110, 110, power_values=bytearray([40]))
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     # Find the index where the state changes
@@ -698,7 +718,7 @@ def test_run_optimization_with_overscan_and_flip_preserves_state(
     # point on Path 2, which is its end (15,10), causing a flip.
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     # Find the scan command after optimization
@@ -765,7 +785,7 @@ def test_workpiece_level_optimization(mock_progress_context):
 
     # Run optimizer at per-step level (workpiece=None)
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
 
     ops.preload_state()
     travel_after = ops.distance() - ops.cut_distance()
@@ -804,7 +824,7 @@ def test_bezier_passes_through_optimizer(mock_progress_context):
     ops.bezier_to((110, 10, 0), (120, 10, 0), (130, 0, 0))
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     bezier_indices = [
@@ -851,7 +871,7 @@ def test_bezier_segment_flip(mock_progress_context):
     ops.bezier_to((25, 5, 0), (15, 5, 0), (10, 0, 0))
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
     ops.preload_state()
 
     bezier_indices = [
@@ -892,7 +912,7 @@ def test_mixed_lines_and_bezier(mock_progress_context):
     ops.line_to(10, 10)
 
     optimizer = Optimize()
-    optimizer.run(ops, context=mock_progress_context)
+    _apply(optimizer, ops, mock_progress_context)
 
     ops.preload_state()
     travel_after = ops.distance() - ops.cut_distance()

@@ -1,32 +1,36 @@
-#!/usr/bin/env python3
 """Screenshot: Machine settings - Camera page and dialogs."""
 
 import logging
-import os
 import subprocess
 import time
 from pathlib import Path
 
 import cv2
 from gi.repository import GLib
-from utils import open_machine_settings, run_on_main_thread, take_screenshot
+from utils import (
+    get_target,
+    open_machine_settings,
+    run_on_main_thread,
+    take_screenshot,
+    target_to_filename,
+)
 
 from rayforge.camera.models.camera import Camera
 from rayforge.context import get_context
 from rayforge.ui_gtk.camera.alignment_dialog import CameraAlignmentDialog
-from rayforge.ui_gtk.camera.calibration_wizard import CalibrationWizard
 from rayforge.ui_gtk.camera.image_settings_dialog import (
     CameraImageSettingsDialog,
 )
 from rayforge.ui_gtk.camera.lens_calibration_dialog import (
     LensCalibrationDialog,
 )
+from rayforge.ui_gtk.camera.wizard.wizard import CameraWizard
 from rayforge.uiscript import app, win
 
 logger = logging.getLogger(__name__)
 
 PAGE = "camera"
-TARGET = os.environ.get("TARGET", f"machine-settings:{PAGE}")
+TARGET = get_target(f"machine-settings:{PAGE}")
 
 MOCK_IMAGE_PATH = (
     Path(__file__).parent.parent.parent
@@ -36,24 +40,12 @@ MOCK_IMAGE_PATH = (
     / "work-surface.png"
 )
 
-WIZARD_PAGES = {
-    "lens-calibration:wizard-card": "camera-lens-calibration-wizard-card.png",
-    "lens-calibration:wizard-capture": "camera-lens-calibration-wizard-capture.png",
-}
+WIZARD_PAGES = ("card", "capture")
 
 DIALOGS = {
-    "image-settings": {
-        "dialog_cls": CameraImageSettingsDialog,
-        "output": "camera-image-settings.png",
-    },
-    "lens-calibration": {
-        "dialog_cls": LensCalibrationDialog,
-        "output": "camera-lens-calibration.png",
-    },
-    "image-alignment": {
-        "dialog_cls": CameraAlignmentDialog,
-        "output": "camera-image-alignment.png",
-    },
+    "image-settings": {"dialog_cls": CameraImageSettingsDialog},
+    "lens-calibration": {"dialog_cls": LensCalibrationDialog},
+    "image-alignment": {"dialog_cls": CameraAlignmentDialog},
 }
 
 
@@ -67,15 +59,11 @@ def parse_target(target: str) -> dict | None:
         return None
     sub = ":".join(parts[2:])
     if sub.startswith("lens-calibration:wizard-"):
-        parts = sub.split(":wizard-")
-        wizard_page = parts[1] if len(parts) > 1 else ""
-        if wizard_page not in ("card", "capture"):
+        wizard_page = sub.split(":wizard-")[1] if ":wizard-" in sub else ""
+        if wizard_page not in WIZARD_PAGES:
             logger.error(f"Unknown wizard page: {wizard_page}")
             return None
-        output = WIZARD_PAGES.get(
-            sub, f"camera-lens-calibration-wizard-{wizard_page}.png"
-        )
-        return {"type": "wizard", "page": wizard_page, "output": output}
+        return {"type": "wizard", "page": wizard_page}
     if sub in DIALOGS:
         return {"type": "dialog", "key": sub}
     logger.error(f"Unknown target: {target}")
@@ -155,7 +143,7 @@ def setup_camera_page(dialog):
 def take_wizard_screenshot(parent_dialog, wizard_page: str, output: str):
     """Open the lens calibration wizard directly and take a screenshot."""
 
-    camera, controller = add_mock_camera(parent_dialog)
+    _camera, controller = add_mock_camera(parent_dialog)
     if not controller:
         logger.error("Failed to create mock camera controller")
         return
@@ -164,19 +152,23 @@ def take_wizard_screenshot(parent_dialog, wizard_page: str, output: str):
 
     def _open_wizard():
         nonlocal wizard
-        wizard = CalibrationWizard(parent_dialog, controller)
+        wizard = CameraWizard(parent_dialog, controller)
         wizard.present()
         return wizard
 
     wizard = run_on_main_thread(_open_wizard)
     time.sleep(0.5)
 
+    def _choose_automatic():
+        # image settings -> lens choice -> (automatic) -> card -> capture
+        choice = wizard._pages["lens_choice"]
+        choice._on_branch_clicked(choice._automatic_btn)
+
+    run_on_main_thread(_choose_automatic)
+    time.sleep(0.5)
+
     if wizard_page == "capture":
-
-        def _go_to_capture():
-            wizard._next_btn.activate()
-
-        run_on_main_thread(_go_to_capture)
+        run_on_main_thread(lambda: wizard._navigate_to("capture"))
         time.sleep(0.5)
 
     # Activate the wizard window so gnome-screenshot -w captures it
@@ -186,15 +178,16 @@ def take_wizard_screenshot(parent_dialog, wizard_page: str, output: str):
                 "xdotool",
                 "search",
                 "--name",
-                "Lens Calibration Wizard",
+                "Camera Wizard",
                 "windowactivate",
             ],
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,
         )
         time.sleep(0.25)
-    except Exception:
+    except (FileNotFoundError, subprocess.TimeoutExpired):
         logger.warning("xdotool not available, relying on window focus")
 
     take_screenshot(output)
@@ -208,6 +201,7 @@ def take_wizard_screenshot(parent_dialog, wizard_page: str, output: str):
 
 def main():
     target_info = parse_target(TARGET)
+    output = target_to_filename(TARGET)
     time.sleep(0.25)
     dialog = open_machine_settings(win, PAGE)
     time.sleep(0.25)
@@ -215,15 +209,13 @@ def main():
     if target_info is None:
         setup_camera_page(dialog)
         time.sleep(0.25)
-        take_screenshot(f"machine-{PAGE}.png")
+        take_screenshot(output)
         time.sleep(0.25)
         app.quit_idle()
         return
 
     if target_info["type"] == "wizard":
-        take_wizard_screenshot(
-            dialog, target_info["page"], target_info["output"]
-        )
+        take_wizard_screenshot(dialog, target_info["page"], output)
         time.sleep(0.25)
         app.quit_idle()
         return
@@ -234,7 +226,7 @@ def main():
         app.quit_idle()
         return
 
-    camera, controller = add_mock_camera(dialog)
+    _camera, controller = add_mock_camera(dialog)
     if not controller:
         logger.error("Failed to create mock camera controller")
         app.quit_idle()
@@ -247,7 +239,7 @@ def main():
 
     camera_dialog = run_on_main_thread(_open)
     time.sleep(0.5)
-    take_screenshot(config["output"])
+    take_screenshot(output)
 
     def _close():
         camera_dialog.close()

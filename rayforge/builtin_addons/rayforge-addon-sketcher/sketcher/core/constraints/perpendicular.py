@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -57,7 +52,7 @@ class PerpendicularConstraint(Constraint):
 
     @classmethod
     def can_apply_to(
-        cls, selection: "SketchSelection", sketch: Optional["Sketch"] = None
+        cls, selection: SketchSelection, sketch: Sketch | None = None
     ) -> bool:
         if selection.point_ids or len(selection.entity_ids) != 2:
             return False
@@ -67,9 +62,7 @@ class PerpendicularConstraint(Constraint):
         e2 = sketch.registry.get_entity(selection.entity_ids[1])
         if not isinstance(e1, (Line, Arc, Circle)):
             return False
-        if not isinstance(e2, (Line, Arc, Circle)):
-            return False
-        return True
+        return isinstance(e2, (Line, Arc, Circle))
 
     @staticmethod
     def get_type_name() -> str:
@@ -80,7 +73,7 @@ class PerpendicularConstraint(Constraint):
         """Returns a human-readable title for this constraint."""
         return self.get_type_name()
 
-    def get_subtitle(self, registry: "EntityRegistry") -> str:
+    def get_subtitle(self, registry: EntityRegistry) -> str:
         """Returns subtitle describing constrained entities."""
         e1 = registry.get_entity(self.e1_id)
         e2 = registry.get_entity(self.e2_id)
@@ -90,7 +83,7 @@ class PerpendicularConstraint(Constraint):
             )
         return ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "type": "PerpendicularConstraint",
             "e1_id": self.e1_id,
@@ -99,7 +92,7 @@ class PerpendicularConstraint(Constraint):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "PerpendicularConstraint":
+    def from_dict(cls, data: dict[str, Any]) -> PerpendicularConstraint:
         return cls(
             e1_id=data["e1_id"],
             e2_id=data["e2_id"],
@@ -107,7 +100,7 @@ class PerpendicularConstraint(Constraint):
         )
 
     def _get_radius_sq(
-        self, shape: Union[Arc, Circle], reg: "EntityRegistry"
+        self, shape: Arc | Circle, reg: EntityRegistry
     ) -> float:
         """Helper to get squared radius of an Arc or Circle."""
         center = reg.get_point(shape.center_idx)
@@ -121,9 +114,7 @@ class PerpendicularConstraint(Constraint):
             ) ** 2
         return 0.0
 
-    def error(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> float:
+    def error(self, reg: EntityRegistry, params: ParameterContext) -> float:
         e1 = reg.get_entity(self.e1_id)
         e2 = reg.get_entity(self.e2_id)
 
@@ -155,7 +146,7 @@ class PerpendicularConstraint(Constraint):
             lp1 = reg.get_point(line.p1_idx)
             lp2 = reg.get_point(line.p2_idx)
             # This cast is safe due to the isinstance checks above
-            shape_with_center = cast(Union[Arc, Circle], shape)
+            shape_with_center = cast(Arc | Circle, shape)
             center = reg.get_point(shape_with_center.center_idx)
             # Cross product (lp2-lp1) x (center-lp1)
             return (lp2.x - lp1.x) * (center.y - lp1.y) - (
@@ -184,8 +175,8 @@ class PerpendicularConstraint(Constraint):
         return 0.0
 
     def gradient(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> Dict[EntityID, List[Point]]:
+        self, reg: EntityRegistry, params: ParameterContext
+    ) -> dict[EntityID, list[Point]]:
         e1 = reg.get_entity(self.e1_id)
         e2 = reg.get_entity(self.e2_id)
         grad = {}
@@ -282,9 +273,9 @@ class PerpendicularConstraint(Constraint):
 
     def get_visuals(
         self,
-        reg: "EntityRegistry",
+        reg: EntityRegistry,
         to_screen: Callable[[Point], Point],
-    ) -> Optional[Tuple[float, float, Optional[float], Optional[float]]]:
+    ) -> tuple[float, float, float | None, float | None] | None:
         """Calculates screen position and angles for visualization."""
         e1 = reg.get_entity(self.e1_id)
         e2 = reg.get_entity(self.e2_id)
@@ -457,7 +448,7 @@ class PerpendicularConstraint(Constraint):
         self,
         sx: float,
         sy: float,
-        reg: "EntityRegistry",
+        reg: EntityRegistry,
         to_screen: Callable[[Point], Point],
         element: Any,
         threshold: float,
@@ -494,8 +485,8 @@ class PerpendicularConstraint(Constraint):
 
     def draw(
         self,
-        ctx: "cairo.Context",
-        registry: "EntityRegistry",
+        ctx: cairo.Context,
+        registry: EntityRegistry,
         to_screen: Callable[[Point], Point],
         is_selected: bool = False,
         is_hovered: bool = False,

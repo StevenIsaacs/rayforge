@@ -1,5 +1,5 @@
 import logging
-from typing import TYPE_CHECKING, List, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 import cairo
 from blinker import Signal
@@ -40,7 +40,7 @@ class SketchElement(CanvasElement):
         y: float = 0,
         width: float = 1.0,
         height: float = 1.0,
-        sketch: Optional[Sketch] = None,
+        sketch: Sketch | None = None,
         **kwargs,
     ):
         # Pass the required positional arguments to the parent class.
@@ -62,13 +62,13 @@ class SketchElement(CanvasElement):
 
         # Model
         self._sketch: Sketch
-        self.external_hovered_constraint_idx: Optional[int] = None
+        self.external_hovered_constraint_idx: int | None = None
 
         # State Managers
         self.selection = SketchSelection()
         self.hittester = SketchHitTester()
         self.renderer = SketchRenderer(self)
-        self.editor: Optional["SketchEditor"]
+        self.editor: SketchEditor | None
         self.snap_engine = self._create_snap_engine()
 
         # This must be set after self.selection is initialized
@@ -132,26 +132,19 @@ class SketchElement(CanvasElement):
     def _disconnect_signals(self):
         """Disconnects signals to prevent leaks."""
         self.sketch.updated.disconnect(self._on_model_changed)
-        try:
-            self.sketch.input_parameters.var_added.disconnect(
-                self._on_model_changed
-            )
-            self.sketch.input_parameters.var_removed.disconnect(
-                self._on_model_changed
-            )
-            self.sketch.input_parameters.var_value_changed.disconnect(
-                self._on_model_changed
-            )
-            self.sketch.input_parameters.var_definition_changed.disconnect(
-                self._on_model_changed
-            )
-            self.sketch.input_parameters.cleared.disconnect(
-                self._on_model_changed
-            )
-        except Exception as e:
-            logger.warning(
-                f"Error during signal disconnection (safe to ignore): {e}"
-            )
+        self.sketch.input_parameters.var_added.disconnect(
+            self._on_model_changed
+        )
+        self.sketch.input_parameters.var_removed.disconnect(
+            self._on_model_changed
+        )
+        self.sketch.input_parameters.var_value_changed.disconnect(
+            self._on_model_changed
+        )
+        self.sketch.input_parameters.var_definition_changed.disconnect(
+            self._on_model_changed
+        )
+        self.sketch.input_parameters.cleared.disconnect(self._on_model_changed)
 
     def _create_snap_engine(self) -> SnapEngine:
         engine = SnapEngine()
@@ -322,7 +315,7 @@ class SketchElement(CanvasElement):
         tool.on_modifier_change(shift=shift, ctrl=ctrl)
         tool.on_hover_motion(world_x, world_y)
 
-    def get_lines_at_point(self, pid: EntityID) -> List[Line]:
+    def get_lines_at_point(self, pid: EntityID) -> list[Line]:
         return [
             e
             for e in self.sketch.registry.entities
@@ -381,7 +374,7 @@ class SketchElement(CanvasElement):
     def add_alignment_constraint(self):
         self.tools["coincident"]._add_constraint()
 
-    def remove_point_if_unused(self, pid: Optional[int]) -> bool:
+    def remove_point_if_unused(self, pid: int | None) -> bool:
         """
         Removes a point from the registry if it's not part of any entity.
 

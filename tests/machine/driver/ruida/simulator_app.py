@@ -8,7 +8,6 @@ Displays a WorldSurface with a laser dot that tracks the simulator's position.
 import argparse
 import logging
 import socket
-from typing import Optional, Tuple
 
 import gi
 
@@ -29,7 +28,7 @@ class SimpleUdpServer:
         self.host = host
         self.port = port
         self.handler = handler
-        self._socket: Optional[socket.socket] = None
+        self._socket: socket.socket | None = None
         self._timeout_id = 0
 
     def start(self):
@@ -48,7 +47,7 @@ class SimpleUdpServer:
             self._socket.close()
             self._socket = None
 
-    def send_to(self, data: bytes, addr: Tuple[str, int]):
+    def send_to(self, data: bytes, addr: tuple[str, int]):
         if self._socket:
             self._socket.sendto(data, addr)
 
@@ -66,7 +65,7 @@ class SimpleUdpServer:
                     self.send_to(response, addr)
         except BlockingIOError:
             pass
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError) as e:
             logger.error(f"Error in UDP poll: {e}")
         return True
 
@@ -192,7 +191,7 @@ class SimulatorWindow(Gtk.ApplicationWindow):
         idx_to_mode = {0: 2, 1: 0, 2: 1}
         self.simulator.state.ref_point_mode = idx_to_mode.get(idx, 2)
 
-    def _handle_main_packet(self, data: bytes, addr: Tuple[str, int]):
+    def _handle_main_packet(self, data: bytes, addr: tuple[str, int]):
         logger.info(f"Main packet from {addr}: {data.hex()}")
 
         is_valid, payload, recv_cksum, calc_cksum = validate_packet(data)
@@ -237,7 +236,7 @@ class SimulatorWindow(Gtk.ApplicationWindow):
 
         return responses
 
-    def _handle_jog_packet(self, data: bytes, addr: Tuple[str, int]):
+    def _handle_jog_packet(self, data: bytes, addr: tuple[str, int]):
         logger.info(f"JOG packet from {addr}: {data.hex()}")
         response = self.simulator.handle_jog_packet(data)
         logger.info(
@@ -269,7 +268,7 @@ class SimulatorApp(Gtk.Application):
         self.host = host
         self.port = port
         self.jog_port = jog_port
-        self._window: Optional[SimulatorWindow] = None
+        self._window: SimulatorWindow | None = None
 
     def do_activate(self):
         self._window = SimulatorWindow(self, self.simulator, self.codec)

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Screenshot: Main window in standard mode.
 
@@ -10,6 +9,7 @@ import time
 
 from utils import (
     clear_window_subtitle,
+    get_target,
     load_project,
     restore_panel_states,
     save_panel_states,
@@ -17,6 +17,7 @@ from utils import (
     show_bottom_tab,
     show_panel,
     take_screenshot,
+    target_to_filename,
     wait_for_settled,
 )
 
@@ -28,6 +29,7 @@ PANELS = ["toggle_bottom_panel"]
 
 
 def main():
+    target = get_target("main:standard")
     set_window_size(win, 2400, 1650)
 
     load_project(win, "contour.ryp")
@@ -47,7 +49,7 @@ def main():
 
     clear_window_subtitle(win)
     logger.info("Taking screenshot: main-standard.png")
-    take_screenshot("main-standard.png")
+    take_screenshot(target_to_filename(target))
 
     restore_panel_states(win, saved_states)
 

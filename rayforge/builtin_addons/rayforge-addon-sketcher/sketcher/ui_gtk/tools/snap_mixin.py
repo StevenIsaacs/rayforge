@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, List, Optional, Set
+from typing import TYPE_CHECKING, Any
 
 import cairo
 from raygeo.geo.types import Point as GeoPoint
@@ -54,7 +54,7 @@ class SnapMixin:
                 self.draw_snap_feedback(ctx, self.element)
     """
 
-    current_snap_result: Optional[SnapResult] = None
+    current_snap_result: SnapResult | None = None
     magnetic_snap_enabled: bool = True
 
     def toggle_magnetic_snap(self) -> None:
@@ -72,7 +72,7 @@ class SnapMixin:
         element: "SketchElement",
         model_x: float,
         model_y: float,
-        exclude_points: Optional[Set[int]] = None,
+        exclude_points: set[int] | None = None,
     ) -> GeoPoint:
         """Query snap engine for geometry creation.
 
@@ -114,9 +114,9 @@ class SnapMixin:
         element: "SketchElement",
         model_x: float,
         model_y: float,
-        dragged_point_ids: Optional[Set[int]] = None,
-        dragged_entity_ids: Optional[Set[int]] = None,
-        initial_positions: Optional[dict] = None,
+        dragged_point_ids: set[int] | None = None,
+        dragged_entity_ids: set[int] | None = None,
+        initial_positions: dict | None = None,
     ) -> GeoPoint:
         """Query snap engine during drag operations.
 
@@ -171,10 +171,10 @@ class SnapMixin:
         self,
         point_id: int,
         *,
-        end_pid: Optional[int] = None,
+        end_pid: int | None = None,
         snapped_to_existing: bool = False,
-        existing_constraints: Optional[List[Any]] = None,
-    ) -> List[Any]:
+        existing_constraints: list[Any] | None = None,
+    ) -> list[Any]:
         """Build constraints from the current snap result.
 
         Call this when finalizing geometry to create persistent constraints
@@ -191,7 +191,7 @@ class SnapMixin:
         Returns:
             List of constraints to add to the sketch
         """
-        constraints: List[Any] = []
+        constraints: list[Any] = []
         result = self.current_snap_result
         if not result:
             return constraints
@@ -248,7 +248,7 @@ class SnapMixin:
         ]
 
     def _build_axis_constraints(self, result, end_pid, existing):
-        constraints: List[Any] = []
+        constraints: list[Any] = []
         seen: set = set()
         for ec in existing or []:
             if isinstance(ec, (HorizontalConstraint, VerticalConstraint)):
@@ -283,7 +283,7 @@ class SnapMixin:
 
         return constraints
 
-    def get_snapped_point_id(self) -> Optional[int]:
+    def get_snapped_point_id(self) -> int | None:
         """Get the point ID if snapped to an existing point.
 
         Returns:
@@ -294,9 +294,10 @@ class SnapMixin:
             and self.current_snap_result.primary_snap_point
         ):
             sp = self.current_snap_result.primary_snap_point
-            if sp.line_type == SnapLineType.ENTITY_POINT:
-                if isinstance(sp.source, Point):
-                    return sp.source.id
+            if sp.line_type == SnapLineType.ENTITY_POINT and isinstance(
+                sp.source, Point
+            ):
+                return sp.source.id
         return None
 
     def clear_snap_result(self) -> None:

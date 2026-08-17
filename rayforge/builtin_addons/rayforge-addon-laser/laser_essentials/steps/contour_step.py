@@ -1,43 +1,128 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
-from rayforge.core.capability import CUT, SCORE, WITH_KERF, Capability
-from rayforge.core.step import Step
-from rayforge.pipeline.assembler.registry import assembler_registry
-from rayforge.core.cut_side import CutSide
+from raygeo.cnc.execution.specs import ComputePayload
+from raygeo.ops.assembly import Assembler
+from raygeo.ops.assembly.contour import ContourSpec
+from raygeo.ops.part import Part
+
+from rayforge.core.capability import MachineCapability
+from rayforge.core.cut_side import CutOrder, CutSide
+from rayforge.core.step import legacy_producer_params
+from rayforge.core.varset import (
+    BoolVar,
+    FloatVar,
+    LabeledChoiceVar,
+    LengthVar,
+    VarSet,
+)
 from rayforge.pipeline.stage.assembler_helpers import (
-    MachineDefaults,
-    build_part_vector,
-    make_artifact,
-    wrap_assembler_result,
+    build_part_vector_with_raster_fallback,
 )
 from rayforge.pipeline.transformer.registry import transformer_registry
-from raygeo.ops import Ops
+
+from .laser_step import LaserStep
 
 if TYPE_CHECKING:
     from rayforge.context import RayforgeContext
     from rayforge.core.workpiece import WorkPiece
-    from rayforge.machine.models.laser import Laser
-    from rayforge.pipeline.artifact import WorkPieceArtifact
+    from rayforge.machine.models.machine import Machine
+
+    class LeadInOutTransformerType(Protocol):
+        @staticmethod
+        def calculate_auto_distance(
+            step_speed: int, max_acceleration: int
+        ) -> float: ...
 
 
-class ContourStep(Step):
+class ContourStep(LaserStep):
     TYPELABEL = _("Contour")
     ICON = "step-contour-symbolic"
-    CAPABILITIES: Tuple[Capability, ...] = (CUT, SCORE, WITH_KERF)
+    REQUIRED_MACHINE_CAPS = frozenset({MachineCapability.LASER})
     ASSEMBLER_NAME = "contour"
-    SPLIT_CONTOURS = True
 
-    def __init__(
-        self, name: Optional[str] = None, typelabel: Optional[str] = None
-    ):
+    @classmethod
+    def recipe_varset(cls) -> VarSet:
+        return VarSet(
+            vars=[
+                *LaserStep.recipe_varset().vars,
+                LabeledChoiceVar(
+                    key="cut_side",
+                    label=_("Cut Side"),
+                    choices=[(cs.label(), cs.name) for cs in CutSide],
+                    default="CENTERLINE",
+                    allow_none=False,
+                ),
+                LengthVar(
+                    key="offset_mm",
+                    label=_("Offset"),
+                    description=_(
+                        "Shifts the cut path inward/outward per Cut "
+                        "Side (none on Centerline). Defaults to kerf "
+                        "compensation for the head"
+                    ),
+                    default=0.0,
+                    sensitive_when=lambda v: v.get("cut_side") != "CENTERLINE",
+                ),
+                LabeledChoiceVar(
+                    key="cut_order",
+                    label=_("Cut Order"),
+                    description=_("Processing order for nested paths"),
+                    choices=[(co.label(), co.name) for co in CutOrder],
+                    default="INSIDE_OUTSIDE",
+                    allow_none=False,
+                ),
+                BoolVar(
+                    key="remove_inner_paths",
+                    label=_("Remove Inner Paths"),
+                    description=_(
+                        "If enabled, only trace the outer outline of shapes"
+                    ),
+                    default=False,
+                ),
+                LengthVar(
+                    key="overcut",
+                    label=_("Overcut"),
+                    description=_(
+                        "Extend closed contours past their start point "
+                        "so the cut overlaps itself"
+                    ),
+                    default=0.0,
+                    min_val=0.0,
+                    max_val=100.0,
+                ),
+                FloatVar(
+                    key="threshold",
+                    label=_("Threshold"),
+                    description=_(
+                        "Brightness level (0.0-1.0) to define edges"
+                    ),
+                    default=0.5,
+                    min_val=0.0,
+                    max_val=1.0,
+                    visible_when=lambda v: v.get("override_threshold", False),
+                ),
+                BoolVar(
+                    key="override_threshold",
+                    label=_("Rescan Content"),
+                    description=_(
+                        "Ignore source geometry and re-trace within "
+                        "the workpiece"
+                    ),
+                    default=False,
+                ),
+            ]
+        )
+
+    def __init__(self, name: str | None = None, typelabel: str | None = None):
         super().__init__(typelabel=typelabel or self.TYPELABEL, name=name)
+        self.power = 0.8
         self.cut_side = "CENTERLINE"
         self.cut_order = "INSIDE_OUTSIDE"
         self.remove_inner_paths = False
-        self.path_offset_mm = 0.0
+        self.offset_mm = 0.0
         self.overcut = 0.0
         self.override_threshold = False
         self.threshold = 0.5
@@ -50,89 +135,111 @@ class ContourStep(Step):
 
     def get_assembler_kwargs(
         self,
-        machine_defaults: MachineDefaults,
-        workpiece: "WorkPiece",
+        machine: Machine,
+        workpiece: WorkPiece,
     ) -> dict:
         kwargs: dict = {}
         kwargs["cut_side"] = str(self.cut_side).lower()
         kwargs["cut_order"] = str(self.cut_order).lower()
         kwargs["remove_inner"] = self.remove_inner_paths
-        kwargs["path_offset_mm"] = self.path_offset_mm
+        kwargs["offset_mm"] = self.offset_mm
         kwargs["overcut"] = self.overcut
-        kwargs["kerf_mm"] = machine_defaults.kerf_mm
-        kwargs["arc_tolerance"] = machine_defaults.arc_tolerance
-        kwargs["allow_arcs"] = machine_defaults.allow_arcs
-        kwargs["supports_curves"] = machine_defaults.supports_curves
+        kwargs["arc_tolerance"] = machine.arc_tolerance
+        kwargs["allow_arcs"] = machine.supports_arcs
+        kwargs["supports_curves"] = machine.supports_curves
         return kwargs
 
-    def assemble_on_surface(
+    def build_compute_payload(
         self,
-        workpiece: "WorkPiece",
-        laser: "Laser",
-        generation_id: int,
-        surface: Any = None,
-        pixels_per_mm: Optional[Tuple[float, float]] = None,
-        *,
-        machine_defaults: "MachineDefaults",
-        y_offset_mm: float = 0.0,
-        computed_auto_levels: Optional[Tuple[int, int]] = None,
-    ) -> "WorkPieceArtifact":
-        use_surface = surface is not None and (
-            not workpiece.boundaries
-            or workpiece.boundaries.is_empty()
-            or self.override_threshold
-        )
-        part = build_part_vector(
+        machine: Machine,
+        workpiece: WorkPiece,
+    ) -> tuple[Part, ComputePayload]:
+        """Build a :class:`Part` (from the workpiece's vector
+        geometry) and a :class:`ComputePayload` carrying a
+        :class:`ContourSpec` populated from this step's resolved
+        assembler kwargs.
+
+        When the workpiece has no vector boundaries (e.g. an SVG
+        with empty ``pristine_geometry``), the source is rendered
+        to pixels and traced into geometry before assembling.
+        """
+        part = build_part_vector_with_raster_fallback(
             workpiece,
-            surface=surface if use_surface else None,
+            self.pixels_per_mm,
             override_threshold=self.override_threshold,
             threshold=self.threshold,
-            normalize_windings=self.NORMALIZE_WINDINGS,
         )
-        if part is None or not part.has_geometry():
-            return make_artifact(
-                Ops(), workpiece, generation_id, is_vector=self.IS_VECTOR
-            )
-        kwargs = self.get_assembler_kwargs(machine_defaults, workpiece)
-        result = assembler_registry.assemble(
-            self.ASSEMBLER_NAME, part, **kwargs
+        kwargs = self.get_assembler_kwargs(machine, workpiece)
+        spec = ContourSpec(
+            offset_mm=kwargs["offset_mm"],
+            cut_side=kwargs["cut_side"],
+            overcut=kwargs["overcut"],
+            cut_order=kwargs["cut_order"],
+            remove_inner=kwargs["remove_inner"],
+            arc_tolerance=kwargs["arc_tolerance"],
+            allow_arcs=kwargs["allow_arcs"],
+            supports_curves=kwargs["supports_curves"],
         )
-        set_power = machine_defaults.step_power if self.SET_POWER else None
-        return wrap_assembler_result(
-            result,
-            workpiece,
-            laser,
-            generation_id,
-            split_contours=self.SPLIT_CONTOURS,
-            set_power=set_power,
-            is_vector=self.IS_VECTOR,
-        )
+        return part, ComputePayload(assembler=Assembler(spec))
+
+    def assembler_token_params(
+        self,
+        machine: Machine,
+        workpiece: WorkPiece,
+    ) -> dict | None:
+        """Expose the resolved assembler kwargs for the compute token."""
+        return self.get_assembler_kwargs(machine, workpiece)
+
+    def apply_import_settings(self, settings: dict) -> None:
+        """Apply importer-provided settings this step owns."""
+        super().apply_import_settings(settings)
+        offset_mm = settings.get("offset_mm")
+        if offset_mm is not None:
+            self.offset_mm = offset_mm
 
     def to_dict(self) -> dict:
         data = super().to_dict()
         data["cut_side"] = self.cut_side
         data["cut_order"] = self.cut_order
         data["remove_inner_paths"] = self.remove_inner_paths
-        data["path_offset_mm"] = self.path_offset_mm
+        data["offset_mm"] = self.offset_mm
         data["overcut"] = self.overcut
         data["override_threshold"] = self.override_threshold
         data["threshold"] = self.threshold
         return data
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ContourStep":
+    def from_dict(cls, data: dict) -> ContourStep:
         step = cast("ContourStep", super().from_dict(data))
-        step.cut_side = data.get("cut_side", "CENTERLINE")
-        step.cut_order = data.get("cut_order", "INSIDE_OUTSIDE")
-        step.remove_inner_paths = data.get("remove_inner_paths", False)
-        step.path_offset_mm = data.get("path_offset_mm", 0.0)
-        step.overcut = data.get("overcut", 0.0)
-        step.override_threshold = data.get("override_threshold", False)
-        step.threshold = data.get("threshold", 0.5)
+        legacy = legacy_producer_params(data)
+        step.cut_side = data.get(
+            "cut_side",
+            legacy.get("cut_side", legacy.get("kerf_mode", "CENTERLINE")),
+        )
+        step.cut_order = data.get(
+            "cut_order", legacy.get("cut_order", "INSIDE_OUTSIDE")
+        )
+        step.remove_inner_paths = data.get(
+            "remove_inner_paths", legacy.get("remove_inner_paths", False)
+        )
+        if "offset_mm" in data:
+            step.offset_mm = data["offset_mm"]
+        else:
+            path_offset = data.get(
+                "path_offset_mm",
+                legacy.get("path_offset_mm", legacy.get("offset_mm", 0.0)),
+            )
+            step.offset_mm = path_offset + (data.get("kerf_mm", 0.0) / 2.0)
+        step.overcut = data.get("overcut", legacy.get("overcut", 0.0))
+        step.override_threshold = data.get(
+            "override_threshold",
+            legacy.get("override_threshold", False),
+        )
+        step.threshold = data.get("threshold", legacy.get("threshold", 0.5))
         return step
 
     @classmethod
-    def get_default_transformers_dicts(cls) -> Tuple[List, List]:
+    def get_default_transformers_dicts(cls) -> tuple[list, list]:
         Smooth = transformer_registry.get("Smooth")
         LeadInOutTransformer = transformer_registry.get("LeadInOutTransformer")
         TabOpsTransformer = transformer_registry.get("TabOpsTransformer")
@@ -167,14 +274,16 @@ class ContourStep(Step):
     @classmethod
     def create(
         cls,
-        context: "RayforgeContext",
-        name: Optional[str] = None,
+        context: RayforgeContext,
+        name: str | None = None,
         optimize: bool = True,
         **kwargs,
-    ) -> "ContourStep":
+    ) -> ContourStep:
         machine = context.machine
         assert machine is not None
-        default_head = machine.get_default_head()
+        default_head = machine.get_default_laser_head()
+        if default_head is None:
+            raise ValueError("Machine has no laser heads configured.")
 
         step = cls(name=name)
         per_wp, per_step = cls.get_default_transformers_dicts()
@@ -183,18 +292,25 @@ class ContourStep(Step):
 
         step.per_workpiece_transformers_dicts = per_wp
         step.per_step_transformers_dicts = per_step
-        step.selected_laser_uid = default_head.uid
-        step.kerf_mm = default_head.spot_size_mm[0]
+        step.selected_head_uid = default_head.uid
+        step.offset_mm = default_head.kerf_mm
         step.max_cut_speed = machine.max_cut_speed
         step.max_travel_speed = machine.max_travel_speed
-        for cap in machine.get_laser_capabilities(default_head):
-            for var in cap.varset:
-                setattr(step, var.key, var.default)
+        # Operating feed defaults are machine-derived: the machine only
+        # exposes its ceiling, so the default is that ceiling, bounded by
+        # the operation's typical feed rate.
+        step.cut_speed = min(machine.max_cut_speed, 500)
+        params = machine.get_pwm_params(default_head)
+        if params is not None:
+            step.frequency = params.frequency
+            step.pulse_width = params.pulse_width
 
-        # step.cut_speed is only final after the loop above.
-        LeadInOutTransformer = transformer_registry.get("LeadInOutTransformer")
+        LeadInOutTransformer = cast(
+            "LeadInOutTransformerType",
+            transformer_registry.get("LeadInOutTransformer"),
+        )
         if LeadInOutTransformer:
-            calc = getattr(LeadInOutTransformer, "calculate_auto_distance")
+            calc = LeadInOutTransformer.calculate_auto_distance
             auto_distance = calc(step.cut_speed, machine.acceleration)
             for t in per_wp:
                 if t.get("name") == "LeadInOutTransformer":

@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from gettext import gettext as _
-from typing import Dict, List, Optional
 
 from .engine import engine
 
@@ -15,7 +14,7 @@ class Unit:
     name: str  # Programmatic, normalized identifier (e.g., "mm/min")
     label: str  # User-facing, translatable string (e.g., "mm/min")
     quantity: str  # Physical quantity measured (e.g., "speed", "length")
-    description: Optional[str] = None  # Translatable tooltip
+    description: str | None = None  # Translatable tooltip
     precision: int = 2  # Suggested decimal places for display
 
     def to_base(self, value: float) -> float:
@@ -35,8 +34,8 @@ class Unit:
         return converted_value
 
 
-_UNIT_REGISTRY: Dict[str, Unit] = {}
-_BASE_UNITS: Dict[str, str] = {}
+_UNIT_REGISTRY: dict[str, Unit] = {}
+_BASE_UNITS: dict[str, str] = {}
 
 
 def register_unit(unit: Unit):
@@ -61,19 +60,19 @@ def set_base_unit(quantity: str, unit_name: str):
     _BASE_UNITS[quantity] = unit_name
 
 
-def get_units_for_quantity(quantity: str) -> List[Unit]:
+def get_units_for_quantity(quantity: str) -> list[Unit]:
     """Returns all registered units for a specific physical quantity."""
     units = [u for u in _UNIT_REGISTRY.values() if u.quantity == quantity]
     # Sort by label for consistent UI presentation
     return sorted(units, key=lambda u: u.label)
 
 
-def get_unit(name: str) -> Optional[Unit]:
+def get_unit(name: str) -> Unit | None:
     """Retrieves a specific unit by its programmatic name."""
     return _UNIT_REGISTRY.get(name)
 
 
-def get_base_unit_for_quantity(quantity: str) -> Optional[Unit]:
+def get_base_unit_for_quantity(quantity: str) -> Unit | None:
     """Retrieves the designated base unit for a quantity."""
     base_unit_name = _BASE_UNITS.get(quantity)
     return get_unit(base_unit_name) if base_unit_name else None
@@ -100,7 +99,7 @@ set_base_unit("speed", "mm/min")
 # --- Define and Register Length Units ---
 # Application base unit for length is mm.
 
-register_unit(Unit(name="mm", label=_("mm"), quantity="length", precision=1))
+register_unit(Unit(name="mm", label=_("mm"), quantity="length", precision=2))
 register_unit(Unit(name="cm", label=_("cm"), quantity="length", precision=2))
 register_unit(Unit(name="m", label=_("m"), quantity="length", precision=3))
 register_unit(Unit(name="in", label=_("in"), quantity="length", precision=3))

@@ -5,7 +5,6 @@ import os
 import threading
 import time
 from gettext import gettext as _
-from typing import List, Optional
 
 import serial
 from serial.tools import list_ports
@@ -18,16 +17,12 @@ logger = logging.getLogger(__name__)
 class SerialPort(str):
     """A string subclass for identifying serial ports, for UI generation."""
 
-    pass
-
 
 class SerialPortPermissionError(Exception):
     """Custom exception for systemic serial port permission issues."""
 
-    pass
 
-
-def safe_list_ports_linux() -> List[str]:
+def safe_list_ports_linux() -> list[str]:
     """
     A non-crashing implementation of list_ports for sandboxed Linux envs.
 
@@ -48,7 +43,7 @@ def safe_list_ports_linux() -> List[str]:
     ]:
         try:
             ports.extend(glob.glob(pattern))
-        except Exception as e:
+        except OSError as e:
             logger.warning(
                 f"Error scanning for serial ports. Pattern '{pattern}': {e}"
             )
@@ -61,7 +56,7 @@ class SerialTransport(Transport):
     """
 
     @staticmethod
-    def list_ports() -> List[str]:
+    def list_ports() -> list[str]:
         """Lists available serial ports."""
         # If we're on Linux (posix) and running in a Snap, use our
         # safe scanner, as list_ports.comports() fails with permission errors.
@@ -71,13 +66,13 @@ class SerialTransport(Transport):
         # On other systems or outside a Snap, the default is fine.
         try:
             return sorted([p.device for p in list_ports.comports()])
-        except Exception as e:
+        except (OSError, serial.SerialException, TypeError) as e:
             # Fallback for any other unexpected errors
             logger.error(f"Failed to list serial ports with pyserial: {e}")
             return []
 
     @staticmethod
-    def list_usb_ports() -> List[str]:
+    def list_usb_ports() -> list[str]:
         """Like list_ports, but only returns USB serial ports."""
 
         all_ports = SerialTransport.list_ports()
@@ -143,7 +138,7 @@ class SerialTransport(Transport):
             raise SerialPortPermissionError(msg)
 
     @staticmethod
-    def list_baud_rates() -> List[int]:
+    def list_baud_rates() -> list[int]:
         """Returns a list of common serial baud rates."""
         return [
             9600,
@@ -172,11 +167,11 @@ class SerialTransport(Transport):
         super().__init__()
         self.port = port
         self.baudrate = baudrate
-        self._serial: Optional[serial.Serial] = None
+        self._serial: serial.Serial | None = None
         self._running = False
         self._stop_event = threading.Event()
-        self._reader_thread: Optional[threading.Thread] = None
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._reader_thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -228,7 +223,7 @@ class SerialTransport(Transport):
         if self._serial:
             try:
                 self._serial.close()
-            except Exception as e:
+            except serial.SerialException as e:
                 logger.warning(f"Error closing serial port: {e}")
 
         # Wait for the reader thread to finish.
@@ -293,7 +288,7 @@ class SerialTransport(Transport):
         try:
             self._serial.reset_input_buffer()
             logger.debug("Input buffer purged.")
-        except Exception as e:
+        except serial.SerialException as e:
             logger.warning(f"Error during purge: {e}")
 
     def _dispatch_received(self, data: bytes) -> None:
@@ -346,7 +341,7 @@ class SerialTransport(Transport):
                         self._dispatch_error, str(e)
                     )
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - reader thread boundary
                 if self._stop_event.is_set():
                     break
                 logger.error(f"Unexpected error in reader thread: {e}")

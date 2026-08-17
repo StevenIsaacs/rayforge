@@ -17,7 +17,7 @@ def mock_progress_context():
             self.message_calls: list[str] = []
             self._is_cancelled = False
             self._total = 1.0
-            self._sub_contexts: list["_SimpleMockProgressContext"] = []
+            self._sub_contexts: list[_SimpleMockProgressContext] = []
 
         def is_cancelled(self) -> bool:
             return self._is_cancelled
@@ -59,14 +59,12 @@ def register_post_processors():
     """
     Automatically register post_processors transformers for all tests.
     """
-    from rayforge import worker_init
-    from rayforge.pipeline.transformer.registry import transformer_registry
-
-    worker_init._worker_addons_loaded = True
-
     # Import and register transformers directly from the addon
     from post_processors.transformers import (
+        BidirScanOffsetTransformer,
         CropTransformer,
+        LeadInOutTransformer,
+        MergeLinesTransformer,
         MultiPassTransformer,
         Optimize,
         OverscanTransformer,
@@ -74,12 +72,19 @@ def register_post_processors():
         TabOpsTransformer,
     )
 
+    from rayforge.pipeline.transformer.registry import transformer_registry
+
     ADDON_NAME = "post_processors"
     transformer_registry.register(Smooth, addon_name=ADDON_NAME)
-    transformer_registry.register(TabOpsTransformer, addon_name=ADDON_NAME)
-    transformer_registry.register(CropTransformer, addon_name=ADDON_NAME)
     transformer_registry.register(Optimize, addon_name=ADDON_NAME)
-    transformer_registry.register(MultiPassTransformer, addon_name=ADDON_NAME)
+    transformer_registry.register(MergeLinesTransformer, addon_name=ADDON_NAME)
     transformer_registry.register(OverscanTransformer, addon_name=ADDON_NAME)
+    transformer_registry.register(LeadInOutTransformer, addon_name=ADDON_NAME)
+    transformer_registry.register(MultiPassTransformer, addon_name=ADDON_NAME)
+    transformer_registry.register(CropTransformer, addon_name=ADDON_NAME)
+    transformer_registry.register(TabOpsTransformer, addon_name=ADDON_NAME)
+    transformer_registry.register(
+        BidirScanOffsetTransformer, addon_name=ADDON_NAME
+    )
 
     yield

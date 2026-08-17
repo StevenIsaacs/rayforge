@@ -1,22 +1,20 @@
 import logging
 import math
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 import cairo
 import numpy as np
 from gi.repository import Gdk, GLib
 from raygeo.geo import Arc, Bezier, Geometry, Line, Matrix, Move
+from raygeo.image.composite import composite_views_into
 
-from ....core.color import OPS_COLOR_SPEC, ColorSet, ColorSpecDict
 from ....core.step import Step
 from ....core.workpiece import WorkPiece
 from ....pipeline.artifact import (
     BaseArtifactHandle,
     WorkPieceArtifact,
-    WorkPieceViewArtifact,
 )
 from ...canvas import CanvasElement
-from ...shared.gtk_color import GtkColorResolver
 from ..ops_cache_registry import registry
 from .tab_handle import TabHandleElement
 
@@ -77,11 +75,11 @@ class VectorEditState:
 
     def __init__(self, geometry: Geometry):
         self.geometry = geometry
-        self.selected_segments: Set[int] = set()
-        self.hovered_segment: Optional[int] = None
-        self.frame_start: Optional[Tuple[float, float]] = None
-        self.frame_end: Optional[Tuple[float, float]] = None
-        self.frame_drag_start_world: Optional[Tuple[float, float]] = None
+        self.selected_segments: set[int] = set()
+        self.hovered_segment: int | None = None
+        self.frame_start: tuple[float, float] | None = None
+        self.frame_end: tuple[float, float] | None = None
+        self.frame_drag_start_world: tuple[float, float] | None = None
 
 
 class WorkPieceElement(CanvasElement):
@@ -114,30 +112,27 @@ class WorkPieceElement(CanvasElement):
         self.data: WorkPiece = workpiece
         self.view_manager = view_manager
         self._base_image_visible = True
-        self._surface: Optional[cairo.ImageSurface] = None
+        self._surface: cairo.ImageSurface | None = None
 
-        self._ops_visibility: Dict[str, bool] = {}
-        self._artifact_cache: Dict[str, Optional[WorkPieceArtifact]] = {}
-        self._ops_surface_cache: Dict[str, cairo.ImageSurface] = {}
-        self._ops_surface_data_cache: Dict[str, np.ndarray] = {}
-        self._ops_metadata_cache: Dict[str, Tuple] = {}
+        self._ops_visibility: dict[str, bool] = {}
+        self._artifact_cache: dict[str, WorkPieceArtifact | None] = {}
+        self._ops_surface_cache: dict[str, cairo.ImageSurface] = {}
+        self._ops_surface_data_cache: dict[str, np.ndarray] = {}
+        self._ops_metadata_cache: dict[str, tuple] = {}
 
         # Composited ops surface: a single surface that blends all
         # visible step surfaces, rebuilt incrementally.
-        self._composited_surface: Optional[cairo.ImageSurface] = None
-        self._composited_data: Optional[np.ndarray] = None
+        self._composited_surface: cairo.ImageSurface | None = None
+        self._composited_data: np.ndarray | None = None
         self._composited_dirty: bool = True
-        self._composited_bbox_mm: Optional[Tuple] = None
-        self._composited_wp_size_mm: Optional[Tuple] = None
+        self._composited_bbox_mm: tuple | None = None
+        self._composited_wp_size_mm: tuple | None = None
         self._composited_bytes: int = 0
 
-        self._tab_handles: List[TabHandleElement] = []
+        self._tab_handles: list[TabHandleElement] = []
         # Default to False; the correct state will be pulled from the surface.
         self._tabs_visible_override: bool = False
 
-        self._color_spec: ColorSpecDict = OPS_COLOR_SPEC
-        self._color_set: Optional[ColorSet] = None
-        self._last_style_context_hash = -1
         self._rendered_ppm: float = 0.0
 
         # The element's geometry is a 1x1 unit square.
@@ -168,7 +163,7 @@ class WorkPieceElement(CanvasElement):
 
         self.content_transform = Matrix.translation(0, 1) @ Matrix.scale(1, -1)
 
-        self._edit_state: Optional[VectorEditState] = None
+        self._edit_state: VectorEditState | None = None
 
         self.data.updated.connect(self._on_model_content_changed)
         self.data.transform_changed.connect(self._on_transform_changed)
@@ -275,14 +270,10 @@ class WorkPieceElement(CanvasElement):
         # (like zooming) shouldn't erase the persistent data needed by
         # other views or future rebuilds.
 
-        # Trigger a re-render of everything at the new resolution.
-        self.trigger_ops_rerender()
         super().trigger_update()  # Re-renders the base image.
         return True
 
-    def _apply_surface(
-        self, new_surface: Optional[cairo.ImageSurface]
-    ) -> bool:
+    def _apply_surface(self, new_surface: cairo.ImageSurface | None) -> bool:
         """
         Applies the newly rendered surface from the background task.
 
@@ -303,43 +294,35 @@ class WorkPieceElement(CanvasElement):
         self._update_future = None
         return False
 
-    def _update_ops_cache_from_handle(self, step_uid: str):
+    def _update_ops_cache(self, step_uid: str):
         """
-        Loads the view artifact from shared memory and caches it.
+        Loads the view bitmap from the ViewManager and caches it.
 
-        Reads the current bitmap from the live view buffer in shared
-        memory, creates a Cairo surface wrapper around it, and stores
-        the result in the per-step ops cache.
+        Reads the current bitmap from the ViewManager's in-memory cache,
+        creates a Cairo surface wrapper around it, and stores the result
+        in the per-step ops cache.
 
-        Skips if the handle is absent, the artifact is not yet ready,
-        or the buffer is entirely blank (no chunks written yet).
-
-        Note: the numpy array backing the surface is a view into shared
-        memory, not a heap copy.  It is therefore NOT registered in the
-        ops-cache-registry (which tracks heap allocations only).
+        Skips if no view is available or the buffer is entirely blank.
         """
-        view_handle = self.view_manager.get_view_handle(
-            self.data.uid, step_uid
-        )
-        if view_handle is None:
+        result = self.view_manager.get_view_bitmap(self.data.uid, step_uid)
+        if result is None:
             return
 
-        artifact = self.view_manager.store.get(view_handle)
-        if not isinstance(artifact, WorkPieceViewArtifact):
+        bitmap, bbox_mm, workpiece_size_mm = result
+        if bitmap is None:
             return
 
         try:
-            new_data = artifact.bitmap_data
-            if not np.any(new_data):
+            if not np.any(bitmap):
                 self._remove_ops_surface(step_uid)
                 self._invalidate_composited()
                 return
-            height, width, _ = new_data.shape
+            height, width, _ = bitmap.shape
             stride = cairo.ImageSurface.format_stride_for_width(
                 cairo.FORMAT_ARGB32, width
             )
             new_surface = cairo.ImageSurface.create_for_data(
-                new_data,
+                bitmap,
                 cairo.FORMAT_ARGB32,
                 width,
                 height,
@@ -348,10 +331,10 @@ class WorkPieceElement(CanvasElement):
             self._store_ops_surface(
                 step_uid,
                 new_surface,
-                new_data,
-                (artifact.bbox_mm, artifact.workpiece_size_mm),
+                bitmap,
+                (bbox_mm, workpiece_size_mm),
             )
-        except Exception as e:
+        except (cairo.Error, ValueError) as e:
             logger.warning(
                 f"Failed to update ops cache for step {step_uid}: {e}"
             )
@@ -361,7 +344,7 @@ class WorkPieceElement(CanvasElement):
         step_uid: str,
         surface: cairo.ImageSurface,
         data: np.ndarray,
-        metadata: Tuple,
+        metadata: tuple,
     ):
         """
         Stores a step's Cairo surface, backing data, and metadata.
@@ -442,7 +425,7 @@ class WorkPieceElement(CanvasElement):
             if not self._ops_visibility.get(step.uid, True):
                 continue
             if step.uid not in self._ops_surface_cache:
-                self._update_ops_cache_from_handle(step.uid)
+                self._update_ops_cache(step.uid)
             meta = self._ops_metadata_cache.get(step.uid)
             if meta is None:
                 continue
@@ -483,10 +466,8 @@ class WorkPieceElement(CanvasElement):
             h_px = surf.get_height()
             step_ppm_x = (w_px - 2 * OPS_MARGIN_PX) / vw if vw > 1e-9 else 0
             step_ppm_y = (h_px - 2 * OPS_MARGIN_PX) / vh if vh > 1e-9 else 0
-            if step_ppm_x > ppm_x:
-                ppm_x = step_ppm_x
-            if step_ppm_y > ppm_y:
-                ppm_y = step_ppm_y
+            ppm_x = max(ppm_x, step_ppm_x)
+            ppm_y = max(ppm_y, step_ppm_y)
             margin_w = OPS_MARGIN_PX / step_ppm_x if step_ppm_x > 0 else 0
             margin_h = OPS_MARGIN_PX / step_ppm_y if step_ppm_y > 0 else 0
             union_x = min(union_x, vx - margin_w)
@@ -501,12 +482,8 @@ class WorkPieceElement(CanvasElement):
 
         composite_w_mm = union_r - union_x
         composite_h_mm = union_t - union_y
-        comp_w_px = min(
-            int(round(composite_w_mm * ppm_x)), CAIRO_MAX_DIMENSION
-        )
-        comp_h_px = min(
-            int(round(composite_h_mm * ppm_y)), CAIRO_MAX_DIMENSION
-        )
+        comp_w_px = min(round(composite_w_mm * ppm_x), CAIRO_MAX_DIMENSION)
+        comp_h_px = min(round(composite_h_mm * ppm_y), CAIRO_MAX_DIMENSION)
 
         if comp_w_px <= 0 or comp_h_px <= 0:
             self._dispose_composited()
@@ -538,8 +515,8 @@ class WorkPieceElement(CanvasElement):
             comp_data, cairo.FORMAT_ARGB32, comp_w_px, comp_h_px, stride
         )
 
-        # Blit each step surface into the composite.
-        comp_ctx = cairo.Context(comp_surf)
+        # Composite each step bitmap into the target buffer.
+        views: list = []
         for step_uid, surf, meta in visible_steps:
             bbox_mm, wp_size_mm = meta
             vx, vy, vw, vh = bbox_mm
@@ -571,12 +548,10 @@ class WorkPieceElement(CanvasElement):
                 - (vy - union_y) * eff_ppm_y
                 - (surf_h - OPS_MARGIN_PX) * scale_y
             )
-            comp_ctx.save()
-            comp_ctx.translate(dest_x, dest_y)
-            comp_ctx.scale(scale_x, scale_y)
-            comp_ctx.set_source_surface(surf, 0, 0)
-            comp_ctx.paint()
-            comp_ctx.restore()
+            src_data = self._ops_surface_data_cache[step_uid]
+            views.append((src_data, dest_x, dest_y, scale_x, scale_y))
+
+        composite_views_into(comp_data, views)
 
         self._dispose_composited()
         self._composited_surface = comp_surf
@@ -663,14 +638,14 @@ class WorkPieceElement(CanvasElement):
             self._remove_ops_surface(step_uid)
             self._invalidate_composited()
             return
-        self._update_ops_cache_from_handle(step_uid)
+        self._update_ops_cache(step_uid)
         self._composited_dirty = True
         if self.canvas:
             self.canvas.queue_draw()
 
     def get_closest_point_on_path(
         self, world_x: float, world_y: float, threshold_px: float = 5.0
-    ) -> Optional[Dict]:
+    ) -> dict | None:
         """
         Checks if a point in world coordinates is close to the workpiece's
         vector path.
@@ -708,7 +683,7 @@ class WorkPieceElement(CanvasElement):
 
         natural_size = self.data.natural_size
         if natural_size and None not in natural_size:
-            natural_w, natural_h = cast(Tuple[float, float], natural_size)
+            natural_w, natural_h = cast(tuple[float, float], natural_size)
         else:
             natural_w, natural_h = self.data.get_local_size()
 
@@ -846,9 +821,7 @@ class WorkPieceElement(CanvasElement):
         ctx.stroke()
         ctx.restore()
 
-    def _hit_test_segment(
-        self, world_x: float, world_y: float
-    ) -> Optional[int]:
+    def _hit_test_segment(self, world_x: float, world_y: float) -> int | None:
         if not self._edit_state or not self.canvas:
             return None
 
@@ -883,14 +856,14 @@ class WorkPieceElement(CanvasElement):
 
     def _segments_in_frame(
         self, x1: float, y1: float, x2: float, y2: float
-    ) -> Set[int]:
+    ) -> set[int]:
         if not self._edit_state:
             return set()
         return set(self._edit_state.geometry.segments_in_frame(x1, y1, x2, y2))
 
     def _world_to_local(
         self, wx: float, wy: float
-    ) -> Optional[Tuple[float, float]]:
+    ) -> tuple[float, float] | None:
         try:
             inv = self.get_world_transform().invert()
             return inv.transform_point((wx, wy))
@@ -1089,29 +1062,6 @@ class WorkPieceElement(CanvasElement):
         if self.canvas:
             self.canvas.queue_draw()
 
-    def _resolve_colors_if_needed(self):
-        """
-        Creates or updates the ColorSet if the theme has changed. This
-        should be called before any rendering operation.
-        """
-        if not self.canvas:
-            return
-
-        # A simple hash check to see if the style context has changed.
-        # This is not perfect but good enough to detect theme switches.
-        style_context = self.canvas.get_style_context()
-        current_hash = hash(style_context)
-        if (
-            self._color_set is None
-            or current_hash != self._last_style_context_hash
-        ):
-            logger.debug(
-                "Resolving colors for WorkPieceElement due to theme change."
-            )
-            resolver = GtkColorResolver(self.canvas)
-            self._color_set = resolver.resolve(self._color_spec)
-            self._last_style_context_hash = current_hash
-
     def _on_model_content_changed(self, workpiece: WorkPiece):
         """Handler for when the workpiece model's content changes."""
         logger.debug(
@@ -1203,7 +1153,7 @@ class WorkPieceElement(CanvasElement):
 
     def render_to_surface(
         self, width: int, height: int
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         """Renders the base workpiece content to a new surface."""
         return self.data.render_to_pixels(width=width, height=height)
 
@@ -1239,7 +1189,6 @@ class WorkPieceElement(CanvasElement):
             return
 
         # Draw view artifacts (complete, pre-rendered bitmaps)
-        self._resolve_colors_if_needed()
         world_w, world_h = self.data.size
 
         if world_w < 1e-9 or world_h < 1e-9:
@@ -1287,19 +1236,11 @@ class WorkPieceElement(CanvasElement):
                 ctx.paint()
 
                 ctx.restore()
-            except Exception as e:
+            except cairo.Error as e:
                 logger.warning(
                     f"Failed to draw composited ops for "
                     f"'{self.data.name}': {e}"
                 )
-
-    def push_transform_to_model(self):
-        """Updates the data model's matrix with the view's transform."""
-        if self.data.matrix != self.transform:
-            logger.debug(
-                f"Pushing view transform to model for '{self.data.name}'."
-            )
-            self.data.matrix = self.transform.copy()
 
     def on_travel_visibility_changed(self):
         """Handles changes in travel move visibility."""
@@ -1309,13 +1250,6 @@ class WorkPieceElement(CanvasElement):
 
         if self.canvas:
             self.canvas.queue_draw()
-
-    def trigger_ops_rerender(self):
-        """Triggers a re-render of all applicable ops for this workpiece."""
-        if not self.data.layer or not self.data.layer.workflow:
-            return
-
-        logger.debug(f"Triggering ops rerender for '{self.data.name}'.")
 
     def set_tabs_visible_override(self, visible: bool):
         """Sets the global visibility override for tab handles."""

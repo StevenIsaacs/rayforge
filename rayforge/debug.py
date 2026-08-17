@@ -3,9 +3,9 @@ import logging
 import shutil
 import tempfile
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import yaml
 
@@ -25,7 +25,7 @@ class DebugDumpManager:
 
     def create_dump_archive(
         self, editor: Optional["DocEditor"] = None
-    ) -> Optional[Path]:
+    ) -> Path | None:
         """
         Gathers all debug information, writes it to a temporary directory,
         and creates a ZIP archive.
@@ -69,8 +69,7 @@ class DebugDumpManager:
                     )
                     for category, deps in dep_info.items():
                         f.write(f"### {category}\n")
-                        for name, ver in deps:
-                            f.write(f"{name}: {ver}\n")
+                        f.writelines(f"{name}: {ver}\n" for name, ver in deps)
                         f.write("\n")
 
                 # 3. Write configs to YAML files
@@ -80,7 +79,7 @@ class DebugDumpManager:
                 with open(tmp_path / "app_config.yaml", "w") as f:
                     yaml.safe_dump(config.to_dict(), f)
 
-                all_machines_dict: Dict[str, Dict[str, Any]] = {
+                all_machines_dict: dict[str, dict[str, Any]] = {
                     machine_id: machine.to_dict()
                     for machine_id, machine in machine_mgr.machines.items()
                 }
@@ -115,7 +114,9 @@ class DebugDumpManager:
                         zf.writestr("project.json", json_bytes)
 
                 # 7. Create ZIP archive
-                timestamp_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                timestamp_str = datetime.now(tz=timezone.utc).strftime(
+                    "%Y-%m-%d_%H-%M-%S"
+                )
                 archive_name = f"rayforge_debug_{timestamp_str}"
                 # Use a system-wide temp dir for the final archive to ensure
                 # it survives the 'with' block of the temporary directory.
@@ -129,7 +130,7 @@ class DebugDumpManager:
                 return archive_path
 
         except Exception:
-            logger.error("Failed to create debug dump archive", exc_info=True)
+            logger.exception("Failed to create debug dump archive")
             return None
 
     @staticmethod

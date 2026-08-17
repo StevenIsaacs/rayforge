@@ -2,7 +2,7 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 from raygeo.geo import Geometry
 
@@ -23,7 +23,7 @@ class SplitStrategy(ABC):
     """
 
     @abstractmethod
-    def calculate_fragments(self, workpiece: "WorkPiece") -> List[Geometry]:
+    def calculate_fragments(self, workpiece: "WorkPiece") -> list[Geometry]:
         """
         Calculates the geometric fragments for the split operation.
 
@@ -35,7 +35,6 @@ class SplitStrategy(ABC):
             fragment in the same normalized coordinate space (0-1 box, Y-up)
             as the original workpiece's boundaries.
         """
-        pass
 
 
 class ConnectivitySplitStrategy(SplitStrategy):
@@ -44,7 +43,7 @@ class ConnectivitySplitStrategy(SplitStrategy):
     This is the standard "Split" behavior for vector shapes.
     """
 
-    def calculate_fragments(self, workpiece: "WorkPiece") -> List[Geometry]:
+    def calculate_fragments(self, workpiece: "WorkPiece") -> list[Geometry]:
         if not workpiece.boundaries or workpiece.boundaries.is_empty():
             return []
         return workpiece.boundaries.split_into_components()
@@ -58,9 +57,9 @@ class SplitCmd:
 
     def split_items(
         self,
-        items: List[WorkPiece],
-        strategy: SplitStrategy = ConnectivitySplitStrategy(),
-    ) -> List[DocItem]:
+        items: list[WorkPiece],
+        strategy: SplitStrategy | None = None,
+    ) -> list[DocItem]:
         """
         Splits the provided items into multiple fragments based on the given
         strategy. Replaces the original items with the new fragments in the
@@ -74,6 +73,8 @@ class SplitCmd:
         Returns:
             A list of the newly created items.
         """
+        if strategy is None:
+            strategy = ConnectivitySplitStrategy()
         if not items:
             return []
 

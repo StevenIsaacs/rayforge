@@ -1,5 +1,5 @@
 import locale
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from gi.repository import Adw, Gtk
 
@@ -13,7 +13,7 @@ def create_slider(
     adjustment: Gtk.Adjustment,
     digits: int = 1,
     draw_value: bool = True,
-    on_value_changed: Optional[Callable[[Gtk.Scale], None]] = None,
+    on_value_changed: Callable[[Gtk.Scale], None] | None = None,
 ) -> Gtk.Scale:
     scale = Gtk.Scale(
         orientation=Gtk.Orientation.HORIZONTAL,
@@ -38,11 +38,11 @@ _SLIDER_VALUE_ENTRY_CSS = """
 def create_slider_row(
     title: str,
     adjustment: Gtk.Adjustment,
-    subtitle: Optional[str] = None,
+    subtitle: str | None = None,
     digits: int = 1,
     draw_value: bool = True,
-    on_value_changed: Optional[Callable[[Gtk.Scale], None]] = None,
-    format_suffix: Optional[str] = None,
+    on_value_changed: Callable[[Gtk.Scale], None] | None = None,
+    format_suffix: str | None = None,
 ) -> tuple[Adw.ActionRow, Gtk.Scale]:
     scale = create_slider(
         adjustment=adjustment,
@@ -60,7 +60,7 @@ def create_slider_row(
         entry.set_width_chars(8)
         entry.set_alignment(1.0)
         entry.set_has_frame(False)
-        entry.get_style_context().add_class("slider-value-entry")
+        entry.add_css_class("slider-value-entry")
         apply_css(_SLIDER_VALUE_ENTRY_CSS)
 
         def format_value(val):

@@ -1,6 +1,6 @@
 import logging
 from gettext import gettext as _
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from gi.repository import Adw, Gdk, Gtk, Pango
 
@@ -15,7 +15,7 @@ class ImageMetadataDialog(PatchedDialogWindow):
     A dialog that displays image metadata in a clean, organized format.
     """
 
-    def __init__(self, parent: Optional[Gtk.Window] = None):
+    def __init__(self, parent: Gtk.Window | None = None):
         super().__init__()
         self.set_title(_("Image Metadata"))
         self.set_transient_for(parent)
@@ -133,17 +133,9 @@ class ImageMetadataDialog(PatchedDialogWindow):
         row.add_suffix(value_label)
         group.add(row)
 
-        # Add Vector Config row if applicable
-        if import_source.vector_config:
-            row = Adw.ActionRow()
-            row.set_title("Vector Config")
-            value_label = Gtk.Label(label="Configured")
-            row.add_suffix(value_label)
-            group.add(row)
-
         self.page.add(group)
 
-    def _create_metadata_section(self, items: List[Tuple[str, Any]]):
+    def _create_metadata_section(self, items: list[tuple[str, Any]]):
         """
         Creates the Metadata section containing all metadata attributes.
 
@@ -225,15 +217,11 @@ class ImageMetadataDialog(PatchedDialogWindow):
         # Add sections to text
         text_parts.append("Basic Information")
         text_parts.append("=" * 20)
-        text_parts.append(
-            f"Source File: {str(self.import_source.source_file)}"
-        )
+        text_parts.append(f"Source File: {self.import_source.source_file!s}")
         text_parts.append(f"UID: {self.import_source.uid}")
         text_parts.append(
             f"Renderer: {self.import_source.renderer.__class__.__name__}"
         )
-        if self.import_source.vector_config:
-            text_parts.append("Vector Config: Configured")
         text_parts.append("")
 
         if metadata_info:

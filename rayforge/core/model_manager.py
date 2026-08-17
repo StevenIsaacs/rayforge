@@ -4,7 +4,6 @@ import importlib.resources
 import logging
 from gettext import gettext as _
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from blinker import Signal
 
@@ -32,17 +31,17 @@ class ModelManager(AddonRegistry):
 
     def __init__(self):
         self.changed = Signal()
-        self._libraries: Dict[str, ModelLibrary] = {}
-        self._library_addons: Dict[str, Optional[str]] = {}
+        self._libraries: dict[str, ModelLibrary] = {}
+        self._library_addons: dict[str, str | None] = {}
 
-    def get_libraries(self) -> List[ModelLibrary]:
+    def get_libraries(self) -> list[ModelLibrary]:
         """Return all registered libraries in registration order."""
         return list(self._libraries.values())
 
     def add_library(
         self,
         library: ModelLibrary,
-        addon_name: Optional[str] = None,
+        addon_name: str | None = None,
     ) -> bool:
         """
         Register a model library.
@@ -65,10 +64,10 @@ class ModelManager(AddonRegistry):
     def add_library_from_path(
         self,
         path: Path,
-        display_name: Optional[str] = None,
+        display_name: str | None = None,
         read_only: bool = True,
-        addon_name: Optional[str] = None,
-    ) -> Optional[str]:
+        addon_name: str | None = None,
+    ) -> str | None:
         """
         Create and register a library from a directory path.
 
@@ -128,7 +127,7 @@ class ModelManager(AddonRegistry):
             self.changed.send(self)
         return len(to_remove)
 
-    def resolve(self, model: Model) -> Optional[Path]:
+    def resolve(self, model: Model) -> Path | None:
         """
         Resolve a Model to an absolute filesystem path.
 
@@ -147,7 +146,7 @@ class ModelManager(AddonRegistry):
 
         return None
 
-    def get_models(self, library: ModelLibrary) -> List[Model]:
+    def get_models(self, library: ModelLibrary) -> list[Model]:
         """
         List model files directly in the library root directory.
 
@@ -175,7 +174,7 @@ class ModelManager(AddonRegistry):
             for f in files
         ]
 
-    def get_all_models(self) -> List[Model]:
+    def get_all_models(self) -> list[Model]:
         """
         List all models across all libraries.
 
@@ -185,7 +184,7 @@ class ModelManager(AddonRegistry):
             Sorted list of Model instances.
         """
         seen_filenames: set = set()
-        combined: List[Model] = []
+        combined: list[Model] = []
         for lib in self._libraries.values():
             models = self.get_models(lib)
             for m in models:
@@ -194,7 +193,7 @@ class ModelManager(AddonRegistry):
                     seen_filenames.add(m.path.name)
         return sorted(combined, key=lambda m: m.name)
 
-    def _get_bundled_path(self) -> Optional[Path]:
+    def _get_bundled_path(self) -> Path | None:
         try:
             from rayforge.resources import models as resource_models
 

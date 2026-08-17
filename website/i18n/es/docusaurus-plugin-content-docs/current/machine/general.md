@@ -8,7 +8,7 @@ La página General en los Ajustes de máquina contiene el nombre de la
 máquina, la selección del controlador y los ajustes de conexión, así como
 los parámetros de velocidad.
 
-![Ajustes generales](/screenshots/machine-general.png)
+![Ajustes generales](/screenshots/machine-settings-general.png)
 
 ## Nombre de la máquina
 
@@ -86,8 +86,8 @@ sistema.
 
 ## Ver también
 
-- [Asistente de Configuración](config-wizard) - Detectar y configurar
-  automáticamente un dispositivo conectado
+- [Configuración Inicial](../getting-started/first-time-setup.md) - Crea una
+  máquina paso a paso con el asistente de configuración
 - [Ajustes de hardware](hardware) - Dimensiones del área de trabajo y
   configuración de ejes
 - [Ajustes de dispositivo](device) - Leer y escribir ajustes del firmware en

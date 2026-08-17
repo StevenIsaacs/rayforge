@@ -2,10 +2,11 @@ import io
 import logging
 import math
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import replace
 from gettext import gettext as _
 from pathlib import Path
-from typing import DefaultDict, Dict, Iterable, List, Optional, Tuple
+from typing import ClassVar
 
 import ezdxf
 import ezdxf.math
@@ -56,12 +57,15 @@ class DxfImporter(Importer):
     label = "DXF files (2D)"
     mime_types = ("image/vnd.dxf",)
     extensions = (".dxf",)
-    features = {ImporterFeature.DIRECT_VECTOR, ImporterFeature.LAYER_SELECTION}
+    features: ClassVar[set[ImporterFeature]] = {
+        ImporterFeature.DIRECT_VECTOR,
+        ImporterFeature.LAYER_SELECTION,
+    }
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._dxf_doc: Optional[ezdxf.document.Drawing] = None  # type: ignore
-        self._geometries_by_layer: Dict[Optional[str], Geometry] = {}
+        self._dxf_doc: ezdxf.document.Drawing | None = None  # type: ignore
+        self._geometries_by_layer: dict[str | None, Geometry] = {}
 
     def scan(self) -> ImportManifest:
         try:
@@ -70,19 +74,21 @@ class DxfImporter(Importer):
             doc = ezdxf.read(io.StringIO(normalized_str))  # type: ignore
         except DXFStructureError as e:
             logger.warning(f"DXF scan failed: {e}")
-            self.add_error(_(f"DXF file structure is invalid: {e}"))
+            self.add_error(_("DXF file structure is invalid: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
         except Exception as e:
-            logger.error(f"DXF scan error: {e}", exc_info=True)
-            self.add_error(_(f"Unexpected error while scanning DXF: {e}"))
+            logger.exception("DXF scan error")
+            self.add_error(
+                _("Unexpected error while scanning DXF: {}").format(e)
+            )
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
 
         # Count entities per layer to detect empty layers
-        counts: DefaultDict[str, int] = defaultdict(int)
+        counts: defaultdict[str, int] = defaultdict(int)
         if doc.modelspace():
             for e in doc.modelspace():
                 counts[e.dxf.layer] += 1
@@ -125,7 +131,7 @@ class DxfImporter(Importer):
         )
         return source
 
-    def _render_thumbnail(self, size: int = 256) -> Optional[bytes]:
+    def _render_thumbnail(self, size: int = 256) -> bytes | None:
         merged = Geometry()
         for geo in self._geometries_by_layer.values():
             if geo:
@@ -139,7 +145,7 @@ class DxfImporter(Importer):
             color=(0.2, 0.2, 0.2, 1.0),
         )
 
-    def _merged_geometry(self) -> Optional[Geometry]:
+    def _merged_geometry(self) -> Geometry | None:
         if not self._geometries_by_layer:
             return None
         merged = Geometry()
@@ -166,7 +172,7 @@ class DxfImporter(Importer):
                 active_layers_set = set(spec.active_layer_ids)
 
         # Filter geometries based on the active layers in the spec
-        geometries_to_process: Dict[Optional[str], Geometry]
+        geometries_to_process: dict[str | None, Geometry]
         if active_layers_set:
             geometries_to_process = {
                 layer_id: geo
@@ -176,7 +182,7 @@ class DxfImporter(Importer):
         else:
             geometries_to_process = self._geometries_by_layer
 
-        final_geometries: Dict[Optional[str], Geometry]
+        final_geometries: dict[str | None, Geometry]
         if split_layers:
             # For a "split" strategy, return the dictionary of individual
             # layer geometries.
@@ -217,7 +223,7 @@ class DxfImporter(Importer):
 
     def _calculate_geometry_union(
         self, geometries: Iterable[Geometry]
-    ) -> Optional[Rect]:
+    ) -> Rect | None:
         """Calculates the bounding box of a collection of geometries."""
         min_x, min_y, max_x, max_y = (
             float("inf"),
@@ -231,14 +237,10 @@ class DxfImporter(Importer):
             if not geo or geo.is_empty():
                 continue
             gx1, gy1, gx2, gy2 = geo.rect()
-            if gx1 < min_x:
-                min_x = gx1
-            if gy1 < min_y:
-                min_y = gy1
-            if gx2 > max_x:
-                max_x = gx2
-            if gy2 > max_y:
-                max_y = gy2
+            min_x = min(min_x, gx1)
+            min_y = min(min_y, gy1)
+            max_x = max(max_x, gx2)
+            max_y = max(max_y, gy2)
             has_content = True
 
         if not has_content:
@@ -281,14 +283,14 @@ class DxfImporter(Importer):
             background_world_transform=bg_item.world_matrix,
         )
 
-    def _get_layer_manifest(self, doc) -> List[Dict[str, str]]:
+    def _get_layer_manifest(self, doc) -> list[dict[str, str]]:
         return [
             {"id": layer.dxf.name, "name": layer.dxf.name}
             for layer in doc.layers
             if layer.dxf.name.lower() != "defpoints"
         ]
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         try:
             data_str = self.raw_data.decode("utf-8", errors="replace")
             normalized_str = data_str.replace("\r\n", "\n")
@@ -296,7 +298,7 @@ class DxfImporter(Importer):
             self._dxf_doc = doc
         except DXFStructureError as e:
             self._dxf_doc = None
-            self.add_error(_(f"DXF file is corrupt or invalid: {e}"))
+            self.add_error(_("DXF file is corrupt or invalid: {}").format(e))
             return None
 
         # 1. Bounds
@@ -369,13 +371,13 @@ class DxfImporter(Importer):
 
         return result
 
-    def _extract_geometries(self, doc) -> Dict[Optional[str], Geometry]:
+    def _extract_geometries(self, doc) -> dict[str | None, Geometry]:
         """
         Recursively extracts, flattens, sorts, and consumes DXF entities.
         Sorting is critical for creating continuous paths from scrambled
         modelspace entities.
         """
-        raw_paths_by_layer: DefaultDict[str, List] = defaultdict(list)
+        raw_paths_by_layer: defaultdict[str, list] = defaultdict(list)
 
         def process_entity(entity, parent_transform: ezdxf.math.Matrix44):
             # Transform Composition
@@ -411,7 +413,11 @@ class DxfImporter(Importer):
                         path.transform(transform)
                     )
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to convert DXF entity %s",
+                    entity.dxftype(),
+                    exc_info=True,
+                )
 
         # 1. Collect all paths (Disordered)
         identity = ezdxf.math.Matrix44()
@@ -436,7 +442,7 @@ class DxfImporter(Importer):
 
         return final_geometries
 
-    def _chain_paths(self, paths: List) -> List:
+    def _chain_paths(self, paths: list) -> list:
         """
         Greedy sorting of paths to restore continuity.
         Groups paths that share endpoints into contiguous chains.
@@ -446,7 +452,7 @@ class DxfImporter(Importer):
 
         # Index start points for O(1) lookups
         # Precision: 3 decimal places ensures visual continuity matches
-        start_map: DefaultDict[Tuple[int, int], List[int]] = defaultdict(list)
+        start_map: defaultdict[tuple[int, int], list[int]] = defaultdict(list)
 
         for i, p in enumerate(paths):
             s = p.start

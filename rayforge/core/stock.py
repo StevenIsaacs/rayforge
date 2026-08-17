@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from raygeo.geo import Geometry, Matrix
 from raygeo.geo.types import Rect
 
+from .color import ColorRGBA, hex_to_rgba, normalize_color
 from .item import DocItem
 
 if TYPE_CHECKING:
@@ -25,29 +26,37 @@ class StockItem(DocItem):
     a StockAsset for its defining properties like geometry and material.
     """
 
+    # Per-instance color override:
+    #   COLOR_INHERIT (None) -> use the material's color (default)
+    #   COLOR_NONE ("")      -> no color, even if the material defines one
+    #   "#rrggbb"            -> explicit per-instance color
+    COLOR_INHERIT: str | None = None
+    COLOR_NONE = ""
+
     def __init__(self, stock_asset_uid: str, name: str = "Stock"):
         super().__init__(name=name)
         self.stock_asset_uid: str = stock_asset_uid
         self.visible: bool = True
-        self.extra: Dict[str, Any] = {}
+        self.color: str | None = self.COLOR_INHERIT
+        self.extra: dict[str, Any] = {}
 
-    def depends_on_asset(self, asset: "IAsset") -> bool:
+    def depends_on_asset(self, asset: IAsset) -> bool:
         """Checks if this stock item is an instance of the given asset."""
         return self.stock_asset_uid == asset.uid
 
     @property
-    def stock_asset(self) -> Optional["StockAsset"]:
+    def stock_asset(self) -> StockAsset | None:
         """Retrieves the StockAsset this item is an instance of."""
         doc = self.doc
         if doc:
             return cast(
-                "Optional[StockAsset]",
+                "StockAsset | None",
                 doc.get_asset_by_uid(self.stock_asset_uid),
             )
         return None
 
     @property
-    def natural_size(self) -> Tuple[float, float]:
+    def natural_size(self) -> tuple[float, float]:
         """
         Returns the natural size of the stock item, defined by its
         referenced StockAsset's geometry bounding box.
@@ -57,7 +66,7 @@ class StockItem(DocItem):
             return asset.get_natural_size()
         return (1.0, 1.0)  # Fallback
 
-    def get_local_bbox(self) -> Optional[Rect]:
+    def get_local_bbox(self) -> Rect | None:
         """
         StockItems are geometrically defined as a unit square (0,0,1,1) that is
         scaled by their matrix, keeping mathematical consistency with
@@ -65,7 +74,7 @@ class StockItem(DocItem):
         """
         return (0.0, 0.0, 1.0, 1.0)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the StockItem to a dictionary."""
         result = {
             "uid": self.uid,
@@ -75,11 +84,14 @@ class StockItem(DocItem):
             "stock_asset_uid": self.stock_asset_uid,
             "visible": self.visible,
         }
+        # Only persist a non-inheriting color override.
+        if self.color is not None:
+            result["color"] = self.color
         result.update(self.extra)
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "StockItem":
+    def from_dict(cls, data: dict[str, Any]) -> StockItem:
         """
         Deserializes a dictionary into a StockItem instance.
         Assumes the new format with 'stock_asset_uid'. Legacy file handling
@@ -92,6 +104,7 @@ class StockItem(DocItem):
             "matrix",
             "stock_asset_uid",
             "visible",
+            "color",
         }
         extra = {k: v for k, v in data.items() if k not in known_keys}
 
@@ -102,11 +115,12 @@ class StockItem(DocItem):
         new_item.uid = data["uid"]
         new_item.matrix = Matrix.from_list(data["matrix"])
         new_item.visible = data.get("visible", True)
+        new_item.color = data.get("color", cls.COLOR_INHERIT)
         new_item.extra = extra
 
         return new_item
 
-    def duplicate(self) -> "StockItem":
+    def duplicate(self) -> StockItem:
         """
         Creates a deep copy of this StockItem with a new UID.
 
@@ -145,24 +159,24 @@ class StockItem(DocItem):
     # --- Delegated Properties for backward compatibility and convenience ---
 
     @property
-    def thickness(self) -> Optional[float]:
+    def thickness(self) -> float | None:
         """Delegates thickness access to the StockAsset."""
         asset = self.stock_asset
         return asset.thickness if asset else None
 
     @property
-    def material_uid(self) -> Optional[str]:
+    def material_uid(self) -> str | None:
         """Delegates material_uid access to the StockAsset."""
         asset = self.stock_asset
         return asset.material_uid if asset else None
 
     @property
-    def geometry(self) -> "Geometry":
+    def geometry(self) -> Geometry:
         """Delegates geometry access to the StockAsset."""
         asset = self.stock_asset
         return asset.geometry if asset else Geometry()
 
-    def get_world_geometry(self) -> "Geometry":
+    def get_world_geometry(self) -> Geometry:
         """
         Returns the geometry transformed to world space.
         """
@@ -200,7 +214,7 @@ class StockItem(DocItem):
         )
         return world_geo
 
-    def get_world_rect_geometry(self) -> "Geometry":
+    def get_world_rect_geometry(self) -> Geometry:
         """
         Returns a rectangle in world space based on the stock's dimensions.
 
@@ -236,7 +250,7 @@ class StockItem(DocItem):
 
     def get_default_size(
         self, _bounds_width: float = 0, _bounds_height: float = 0
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """Delegates size calculation to the StockAsset."""
         asset = self.stock_asset
         if asset:
@@ -244,7 +258,7 @@ class StockItem(DocItem):
         return 1.0, 1.0
 
     @property
-    def material(self) -> Optional["Material"]:
+    def material(self) -> Material | None:
         """
         Gets the Material object for this stock item via its StockAsset.
 
@@ -261,7 +275,54 @@ class StockItem(DocItem):
         self.visible = visible
         self.updated.send(self)
 
-    def get_natural_aspect_ratio(self) -> Optional[float]:
+    def set_color(self, color: str | None):
+        """
+        Sets the per-instance color override (None = inherit material).
+
+        Colors are canonicalized with :func:`normalize_color`, the app's
+        standard color normalizer, so any accepted CSS form becomes a
+        ``#rrggbb`` hex value.
+        """
+        normalized = color
+        if isinstance(color, str) and color != self.COLOR_NONE:
+            normalized = normalize_color(color)
+            if normalized is None:
+                logger.warning("Ignoring invalid stock color %r", color)
+                return
+        if self.color != normalized:
+            self.color = normalized
+            self.updated.send(self)
+
+    def get_effective_color(self) -> str | None:
+        """
+        Resolve the effective color for this stock item.
+
+        Returns a normalized ``#rrggbb`` string when the item has a color,
+        or None when it does not. Resolution order:
+          1. explicit "no color" override
+          2. explicit per-instance color
+          3. the material's default color (None = material has none)
+        """
+        material = self.material
+        if material is None:
+            return None
+        if self.color == self.COLOR_NONE:
+            return None
+        if self.color:
+            return self.color
+        return normalize_color(material.appearance.color)
+
+    def get_effective_rgba(self) -> ColorRGBA | None:
+        """The effective color as a render-ready RGBA tuple, or None."""
+        color = self.get_effective_color()
+        if not color:
+            return None
+        try:
+            return hex_to_rgba(color)
+        except ValueError:
+            return None
+
+    def get_natural_aspect_ratio(self) -> float | None:
         """
         Returns the aspect ratio of the stock's geometry bounding box
         from its StockAsset.
@@ -272,7 +333,7 @@ class StockItem(DocItem):
         w, h = asset.get_natural_size()
         return w / h if h > 1e-9 else None
 
-    def get_current_aspect_ratio(self) -> Optional[float]:
+    def get_current_aspect_ratio(self) -> float | None:
         """
         Returns the aspect ratio of the stock's current world-space size.
         """

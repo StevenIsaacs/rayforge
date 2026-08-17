@@ -1,6 +1,3 @@
-from typing import Dict, Optional, Set, Type
-
-
 class CommandRegistry:
     """
     Registry for editor command classes.
@@ -11,14 +8,14 @@ class CommandRegistry:
     """
 
     def __init__(self):
-        self._command_classes: Dict[str, Type] = {}
-        self._addon_items: Dict[str, Set[str]] = {}
+        self._command_classes: dict[str, type] = {}
+        self._addon_items: dict[str, set[str]] = {}
 
     def register(
         self,
         command_name: str,
-        command_class: Type,
-        addon_name: Optional[str] = None,
+        command_class: type,
+        addon_name: str | None = None,
     ) -> None:
         """
         Register a command class.
@@ -46,7 +43,7 @@ class CommandRegistry:
         """
         if command_name in self._command_classes:
             del self._command_classes[command_name]
-            for addon_name, items in self._addon_items.items():
+            for items in self._addon_items.values():
                 items.discard(command_name)
             return True
         return False
@@ -71,7 +68,7 @@ class CommandRegistry:
                 count += 1
         return count
 
-    def get(self, command_name: str) -> Optional[Type]:
+    def get(self, command_name: str) -> type | None:
         """
         Look up a command class by name.
 
@@ -83,7 +80,7 @@ class CommandRegistry:
         """
         return self._command_classes.get(command_name)
 
-    def all_commands(self) -> Dict[str, Type]:
+    def all_commands(self) -> dict[str, type]:
         """
         Return a copy of all registered command classes.
 

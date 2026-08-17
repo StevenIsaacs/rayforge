@@ -4,7 +4,6 @@
 import argparse
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -25,7 +24,7 @@ SECTION_ANONYMOUS = (
 )
 
 
-def find_font(font_name: str = "DejaVuSans-Bold.ttf") -> Optional[str]:
+def find_font(font_name: str = "DejaVuSans-Bold.ttf") -> str | None:
     font_paths = [
         Path("/usr/share/fonts/truetype/dejavu") / font_name,
         Path("/usr/share/fonts/truetype/liberation") / font_name,
@@ -40,7 +39,7 @@ def find_font(font_name: str = "DejaVuSans-Bold.ttf") -> Optional[str]:
     return None
 
 
-def parse_supporters(filepath: Path) -> Tuple[List[str], int]:
+def parse_supporters(filepath: Path) -> tuple[list[str], int]:
     content = filepath.read_text()
     lines = content.splitlines()
 
@@ -74,7 +73,7 @@ def parse_supporters(filepath: Path) -> Tuple[List[str], int]:
 
 
 def generate_image(
-    names: List[str],
+    names: list[str],
     anonymous_count: int,
     output_path: Path,
     title: str = "Thank You",

@@ -7,7 +7,7 @@ from rayforge.core.varset.floatvar import FloatVar
 from rayforge.core.varset.intvar import IntVar
 from rayforge.core.varset.urlvar import UrlVar, WebsocketUrlVar
 from rayforge.core.varset.var import ValidationError, Var
-from rayforge.core.varset.varset import VarSet
+from rayforge.core.varset.varset import VarSet, merge_varsets
 
 
 class TestVarSet:
@@ -26,8 +26,8 @@ class TestVarSet:
         ]
         vs = VarSet(vars=vars_list)
         assert len(vs) == 2
-        assert "a" in vs.keys()
-        assert "b" in vs.keys()
+        assert "a" in vs.keys()  # noqa: SIM118
+        assert "b" in vs.keys()  # noqa: SIM118
 
     def test_add_var(self):
         """Test adding a Var to the set."""
@@ -35,7 +35,7 @@ class TestVarSet:
         v = Var(key="test1", label="Test 1", var_type=str, default="abc")
         vs.add(v)
         assert len(vs) == 1
-        assert "test1" in vs.keys()
+        assert "test1" in vs.keys()  # noqa: SIM118
         assert vs["test1"] is v
 
     def test_add_duplicate_key(self):
@@ -239,7 +239,7 @@ class TestVarSet:
         assert rehydrated_vs.title == original_vs.title
         assert rehydrated_vs.description == original_vs.description
         assert len(rehydrated_vs) == len(original_vs)
-        for key in original_vs.keys():
+        for key in original_vs.keys():  # noqa: SIM118
             assert rehydrated_vs[key].to_dict() == original_vs[key].to_dict()
 
     def test_serialization_metadata_flag(self):
@@ -374,9 +374,9 @@ class TestVarSet:
 
         # --- Assert ---
         # 1. The VarSet's keys should be updated.
-        assert "new_key" in vs.keys()
-        assert "old_key" not in vs.keys()
-        assert sorted(list(vs.keys())) == ["new_key", "other_key"]
+        assert "new_key" in vs.keys()  # noqa: SIM118
+        assert "old_key" not in vs.keys()  # noqa: SIM118
+        assert sorted(vs.keys()) == ["new_key", "other_key"]
 
         # 2. Accessing by the new key should work.
         assert vs.get("new_key") is v1
@@ -555,3 +555,24 @@ class TestWebsocketUrlVar:
         assert serialized["description"] == "A WebSocket endpoint"
         assert serialized["default"] == "ws://localhost/ws"
         assert serialized["value"] == "wss://example.com/ws"
+
+
+class TestMergeVarsets:
+    def test_merges_vars(self):
+        first = VarSet(vars=[Var(key="a", label="A", var_type=int)])
+        second = VarSet(vars=[Var(key="b", label="B", var_type=int)])
+        merged = merge_varsets(first, second)
+        assert set(merged.keys()) == {"a", "b"}
+        assert next(iter(merged)).key == "a"
+        assert list(merged)[1].key == "b"
+
+    def test_later_overrides_shared_key(self):
+        first = VarSet(vars=[IntVar(key="n", label="N", default=1)])
+        second = VarSet(vars=[IntVar(key="n", label="N", default=2)])
+        merged = merge_varsets(first, second)
+        assert len(merged) == 1
+        assert merged["n"].default == 2
+
+    def test_empty(self):
+        assert len(merge_varsets()) == 0
+        assert len(merge_varsets(VarSet())) == 0

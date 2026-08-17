@@ -1,6 +1,7 @@
 # flake8: noqa: E402
 """
-Ruida Client App - A GUI client for controlling a Ruida laser controller/simulator.
+Ruida Client App - A GUI client for controlling a Ruida laser
+controller/simulator.
 
 Sends movement commands to the simulator and displays the current position.
 """
@@ -10,7 +11,6 @@ import asyncio
 import logging
 import threading
 from concurrent.futures import Future
-from typing import Optional
 
 import gi
 
@@ -40,14 +40,14 @@ class RuidaUdpClient:
         self.host = host
         self.port = port
         self.magic = magic
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._thread: Optional[threading.Thread] = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
         self._loop_ready = threading.Event()
-        self._udp: Optional[UdpTransport] = None
-        self._transport: Optional[RuidaTransport] = None
-        self._jog_udp: Optional[UdpTransport] = None
-        self._jog_transport: Optional[RuidaTransport] = None
-        self.client: Optional[RuidaClient] = None
+        self._udp: UdpTransport | None = None
+        self._transport: RuidaTransport | None = None
+        self._jog_udp: UdpTransport | None = None
+        self._jog_transport: RuidaTransport | None = None
+        self.client: RuidaClient | None = None
 
     @property
     def is_connected(self) -> bool:
@@ -100,8 +100,9 @@ class RuidaUdpClient:
             self._start_loop()
 
         assert self._loop is not None
+        loop_running = self._loop.is_running()
         logger.debug(
-            f"_run_async: submitting coroutine, loop running={self._loop.is_running()}"
+            f"_run_async: submitting coroutine, loop running={loop_running}"
         )
         future: Future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result(timeout=timeout)
@@ -134,7 +135,7 @@ class RuidaUdpClient:
         try:
             self._run_async(self.client.send_command(cmd))
             return True
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError) as e:
             logger.error(f"Error sending command: {e}")
             return False
 
@@ -297,7 +298,7 @@ class ClientWindow(Gtk.ApplicationWindow):
 
         self.ref_buttons = {}
         self.ref_point = "MACHINE"
-        for name in REF_POINT_COMMANDS.keys():
+        for name in REF_POINT_COMMANDS:
             btn = Gtk.ToggleButton(label=name)
             btn.connect("toggled", self._on_ref_toggled, name)
             ref_box.append(btn)
@@ -322,7 +323,7 @@ class ClientWindow(Gtk.ApplicationWindow):
             )
             self.connect_btn.set_label("Disconnect")
             self._sync_ref_point_from_controller()
-        except Exception as e:
+        except (OSError, TimeoutError, ValueError) as e:
             self.status_label.set_text(f"● Error: {e}")
 
     def _sync_ref_point_from_controller(self):
@@ -421,7 +422,7 @@ class ClientApp(Gtk.Application):
     def __init__(self, host: str, port: int, magic: int):
         super().__init__(application_id="com.rayforge.RuidaClient")
         self.client = RuidaUdpClient(host, port, magic)
-        self._window: Optional[ClientWindow] = None
+        self._window: ClientWindow | None = None
 
     def do_activate(self):
         self._window = ClientWindow(self)

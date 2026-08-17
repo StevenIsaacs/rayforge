@@ -1,5 +1,5 @@
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Union
 
 from ...core.commands import SetWaypointTypeCommand
 from ...core.entities import Bezier, Entity, Line, Point
@@ -17,8 +17,8 @@ class WaypointSymmetricTool(SketchTool):
 
     def is_available(
         self,
-        target: Optional[Union[Point, Entity, "Constraint"]],
-        target_type: Optional[str],
+        target: Union[Point, Entity, "Constraint"] | None,
+        target_type: str | None,
     ) -> bool:
         pid = self._get_waypoint_pid()
         if pid is None:
@@ -40,7 +40,7 @@ class WaypointSymmetricTool(SketchTool):
         self._set_waypoint_type(WaypointType.SYMMETRIC)
         self.element.set_tool("select")
 
-    def _get_waypoint_pid(self) -> Optional[EntityID]:
+    def _get_waypoint_pid(self) -> EntityID | None:
         sel = self.element.selection
         if sel.junction_pid is not None:
             return sel.junction_pid
@@ -51,17 +51,21 @@ class WaypointSymmetricTool(SketchTool):
     def _is_waypoint_at_bezier(self, pid: EntityID) -> bool:
         sketch = self.element.sketch
         for entity in sketch.registry.entities:
-            if isinstance(entity, Bezier):
-                if pid in (entity.start_idx, entity.end_idx):
-                    return True
+            if isinstance(entity, Bezier) and pid in (
+                entity.start_idx,
+                entity.end_idx,
+            ):
+                return True
         return False
 
     def _is_waypoint_at_line(self, pid: EntityID) -> bool:
         sketch = self.element.sketch
         for entity in sketch.registry.entities:
-            if isinstance(entity, Line):
-                if pid in (entity.p1_idx, entity.p2_idx):
-                    return True
+            if isinstance(entity, Line) and pid in (
+                entity.p1_idx,
+                entity.p2_idx,
+            ):
+                return True
         return False
 
     def _set_waypoint_type(self, new_type: WaypointType):

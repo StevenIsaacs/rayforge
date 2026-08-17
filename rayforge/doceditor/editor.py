@@ -5,7 +5,7 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 from blinker import Signal
 
@@ -13,7 +13,8 @@ from ..core.asset import UnknownAsset
 from ..core.doc import Doc
 from ..core.layer import Layer
 from ..core.vectorization_spec import VectorizationSpec
-from ..pipeline.artifact import JobArtifact, JobArtifactHandle
+from ..pipeline.artifact import JobArtifact
+from ..pipeline.artifact.handle import BaseArtifactHandle
 from ..pipeline.pipeline import Pipeline
 from ..pipeline.view import ViewManager
 from .array_cmd import ArrayCmd
@@ -53,8 +54,8 @@ class DocEditor:
 
     def __init__(
         self,
-        task_manager: "TaskManager",
-        context: "RayforgeContext",
+        task_manager: TaskManager,
+        context: RayforgeContext,
         doc: Doc | None = None,
     ):
         """
@@ -86,35 +87,39 @@ class DocEditor:
             self.task_manager,
             context.artifact_store,
             context.machine,
+            cache_budget_bytes=context.config.cache_budget_bytes,
         )
         self.view_manager = ViewManager(
             self.pipeline,
             context.artifact_store,
             context.machine,
         )
-        self.history_manager: "HistoryManager" = self.doc.history_manager
+        self.history_manager: HistoryManager = self.doc.history_manager
 
         # A set to track temporary artifacts (e.g., for job previews)
         # that don't live in the Pipeline cache.
-        self._transient_artifact_handles: set[JobArtifactHandle] = set()
+        self._transient_artifact_handles: set[BaseArtifactHandle] = set()
 
         # Track the number of active background tasks initiated by editor
         # commands
         self._busy_task_count: int = 0
 
         # Track file path and saved state for the document
-        self._file_path: Optional[Path] = None
+        self._file_path: Path | None = None
         self._is_saved: bool = True
 
         # Signals for monitoring document processing state
         self.processing_state_changed = Signal()
         self.document_settled = Signal()  # Fires when processing finishes
         self.notification_requested = Signal()  # For UI feedback
+        self.assembly_warnings = Signal()  # Non-fatal assembler warnings
         self.saved_state_changed = Signal()  # Fires when saved state changes
         self.document_changed = Signal()  # Fires when a new document is set
         self.pipeline.processing_state_changed.connect(
             self._on_processing_state_changed
         )
+        self.pipeline.pipeline_error.connect(self._on_pipeline_error)
+        self.pipeline.assembly_warnings.connect(self._on_assembly_warnings)
 
         # Connect to history manager to track undo/redo for saved state
         self.history_manager.changed.connect(self._on_history_changed)
@@ -125,9 +130,17 @@ class DocEditor:
 
         if context.machine:
             context.machine.changed.connect(self._on_machine_changed)
+            self.configure_machine()
 
         context.config.changed.connect(self._on_config_changed)
         self.pipeline.auto_pipeline = context.config.auto_pipeline
+
+        # Keep the baseline machine config in sync with the document state.
+        doc = self.doc
+        doc.descendant_updated.connect(self._on_doc_changed)
+        doc.descendant_added.connect(self._on_doc_changed)
+        doc.descendant_removed.connect(self._on_doc_changed)
+        doc.active_layer_changed.connect(self._on_doc_changed)
 
         # Instantiate and link command handlers, passing dependencies.
         self.asset = AssetCmd(self)
@@ -161,9 +174,9 @@ class DocEditor:
         )
 
         if self.pipeline:
-            manager = self.pipeline.artifact_manager
+            store = self.pipeline.artifact_store
             for handle in list(self._transient_artifact_handles):
-                manager.release_handle(handle)
+                store.release(handle)
 
         self._transient_artifact_handles.clear()
 
@@ -188,10 +201,30 @@ class DocEditor:
                 layer.set_rotary_diameter(default_rm.default_diameter)
             else:
                 layer.set_rotary_module_uid(None)
+        self.configure_machine()
+
+    def configure_machine(self):
+        """
+        Configures the machine for the resting document state.
+
+        Uses the first layer of the document as the baseline so that the
+        scene renders a sensible view before a job is compiled.  The
+        OpPlayer overrides this per playback position when a job exists.
+        """
+        machine = self.context.machine
+        if not machine:
+            return
+        first_layer = self.doc.layers[0] if self.doc.layers else None
+        machine.configure_for_layer(first_layer)
+
+    def _on_doc_changed(self, sender, **kwargs):
+        """Re-assert the baseline machine config on document changes."""
+        self.configure_machine()
 
     def _on_config_changed(self, sender, **kwargs):
         config = self.context.config
         self.pipeline.auto_pipeline = config.auto_pipeline
+        self.pipeline.set_cache_budget_bytes(config.cache_budget_bytes)
 
         new_machine = config.machine
         if new_machine and new_machine is not self.pipeline.machine:
@@ -203,12 +236,12 @@ class DocEditor:
             new_machine.changed.connect(self._on_machine_changed)
             self._on_machine_changed(self)
 
-    def add_tab_from_context(self, context: Dict[str, Any]):
+    def add_tab_from_context(self, context: dict[str, Any]):
         """
         Public handler for the 'add_tab' action, using context from the UI.
         """
-        workpiece: "WorkPiece" = context["workpiece"]
-        location: Dict[str, Any] = context["location"]
+        workpiece: WorkPiece = context["workpiece"]
+        location: dict[str, Any] = context["location"]
         segment_index = location["segment_index"]
         pos = location["pos"]
 
@@ -216,19 +249,19 @@ class DocEditor:
             workpiece=workpiece, segment_index=segment_index, pos=pos
         )
 
-    def remove_tab_from_context(self, context: Dict[str, Any]):
+    def remove_tab_from_context(self, context: dict[str, Any]):
         """
         Public handler for the 'remove_tab' action, using context from the UI.
         """
-        workpiece: "WorkPiece" = context["workpiece"]
-        tab_to_remove: "Tab" = context["tab_data"]
+        workpiece: WorkPiece = context["workpiece"]
+        tab_to_remove: Tab = context["tab_data"]
 
         self.tab.remove_single_tab(
             workpiece=workpiece, tab_to_remove=tab_to_remove
         )
 
     @property
-    def machine_dimensions(self) -> Optional[Tuple[float, float]]:
+    def machine_dimensions(self) -> tuple[float, float] | None:
         """Returns the configured machine's axis extents, or None."""
         config = self.context.config
         if config and config.machine:
@@ -331,8 +364,8 @@ class DocEditor:
     async def import_file_from_path(
         self,
         filename: Path,
-        mime_type: Optional[str],
-        vectorization_spec: Optional[VectorizationSpec],
+        mime_type: str | None,
+        vectorization_spec: VectorizationSpec | None,
     ) -> None:
         """
         Imports a file from the specified path and waits for the operation
@@ -353,24 +386,25 @@ class DocEditor:
             import_result.payload, filename, position_mm=None
         )
 
-    async def export_gcode_to_path(self, output_path: "Path") -> None:
+    async def export_gcode_to_path(self, output_path: Path) -> None:
         """
         Exports the current document to a G-code file at the specified path
         and waits for the operation to complete. This awaitable version is
         useful for tests.
         """
         export_future = asyncio.get_running_loop().create_future()
-        artifact_manager = self.pipeline.artifact_manager
+        artifact_store = self.pipeline.artifact_store
 
         def _on_export_assembly_done(
-            handle: Optional[JobArtifactHandle], error: Optional[Exception]
+            handle: BaseArtifactHandle | None,
+            error: Exception | None,
         ):
             try:
                 if error:
                     export_future.set_exception(error)
                     return
 
-                with artifact_manager.checkout_handle(handle) as artifact:
+                with artifact_store.checkout_handle(handle) as artifact:
                     if not artifact:
                         raise ValueError(
                             "Assembly process returned no artifact."
@@ -388,7 +422,7 @@ class DocEditor:
                     logger.info(f"Test export successful to {output_path}")
                     export_future.set_result(True)
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - forward to future
                 if not export_future.done():
                     export_future.set_exception(e)
 
@@ -409,8 +443,14 @@ class DocEditor:
         )
 
         logger.debug("DocEditor is setting a new document.")
+        old_doc = self.doc
+        if old_doc is not new_doc:
+            old_doc.descendant_updated.disconnect(self._on_doc_changed)
+            old_doc.descendant_added.disconnect(self._on_doc_changed)
+            old_doc.descendant_removed.disconnect(self._on_doc_changed)
+            old_doc.active_layer_changed.disconnect(self._on_doc_changed)
         self.doc = new_doc
-        self._reconcile_step_lasers()
+        self._reconcile_step_heads()
         self._reconcile_rotary_modules()
         self.history_manager = self.doc.history_manager
         # The Pipeline's setter handles cleanup and reconnection
@@ -419,6 +459,13 @@ class DocEditor:
         self.pipeline.processing_state_changed.connect(
             self._on_processing_state_changed
         )
+
+        # Keep the baseline machine config in sync with the new document.
+        new_doc.descendant_updated.connect(self._on_doc_changed)
+        new_doc.descendant_added.connect(self._on_doc_changed)
+        new_doc.descendant_removed.connect(self._on_doc_changed)
+        new_doc.active_layer_changed.connect(self._on_doc_changed)
+        self.configure_machine()
 
         # Reconnect to new history manager
         if old_history_manager is not self.history_manager:
@@ -432,33 +479,33 @@ class DocEditor:
         # (unless called from load_project_from_path which will mark as saved)
         self.mark_as_unsaved()
 
-    def _reconcile_step_lasers(self):
+    def _reconcile_step_heads(self):
         """
-        Reconciles step laser UIDs with the current machine.
+        Reconciles step head UIDs with the current machine.
 
-        For each step, checks if its selected_laser_uid exists in the
-        machine's laser heads. If not, updates it to the default laser.
-        This handles the case where a project file references a laser
+        For each step, checks if its selected_head_uid exists in the
+        machine's heads. If not, updates it to the default head.
+        This handles the case where a project file references a head
         that doesn't exist in the current machine profile.
         """
         machine = self.context.machine
         if not machine or not machine.heads:
             return
 
-        valid_laser_uids = {head.uid for head in machine.heads}
-        default_laser_uid = machine.heads[0].uid
+        valid_head_uids = {head.uid for head in machine.heads}
+        default_head_uid = machine.heads[0].uid
 
         for layer in self.doc.layers:
             if not layer.workflow:
                 continue
             for step in layer.workflow.steps:
-                if step.selected_laser_uid not in valid_laser_uids:
+                if step.selected_head_uid not in valid_head_uids:
                     logger.info(
-                        f"Step '{step.name}' references non-existent laser "
-                        f"'{step.selected_laser_uid}', "
-                        f"resetting to default '{default_laser_uid}'"
+                        f"Step '{step.name}' references non-existent head "
+                        f"'{step.selected_head_uid}', "
+                        f"resetting to default '{default_head_uid}'"
                     )
-                    step.selected_laser_uid = default_laser_uid
+                    step.selected_head_uid = default_head_uid
 
     def _reconcile_rotary_modules(self):
         """
@@ -534,6 +581,20 @@ class DocEditor:
         if not effective_state:
             self.document_settled.send(self)
 
+    def _on_pipeline_error(self, sender, *, message: str) -> None:
+        """Show a UI notification on pipeline execution errors."""
+        self.notification_requested.send(self, message=message)
+
+    def _on_assembly_warnings(self, sender, *, warnings) -> None:
+        """Translate non-fatal assembler warnings and show them as toasts."""
+        from rayforge.pipeline.assembly_warnings import (
+            translate_assembly_warning,
+        )
+
+        for w in warnings:
+            message = translate_assembly_warning(w)
+            self.notification_requested.send(self, message=message)
+
     def _on_history_changed(self, sender, command):
         """
         Handles history manager changes (undo/redo/new commands).
@@ -545,7 +606,7 @@ class DocEditor:
             self.saved_state_changed.send(self)
 
     @property
-    def file_path(self) -> Optional[Path]:
+    def file_path(self) -> Path | None:
         """Returns the current file path of the document."""
         return self._file_path
 
@@ -554,7 +615,7 @@ class DocEditor:
         """Returns True if the document has no unsaved changes."""
         return self._is_saved
 
-    def set_file_path(self, path: Optional[Path]):
+    def set_file_path(self, path: Path | None):
         """Sets the file path for the document."""
         self._file_path = path
         self.saved_state_changed.send(self)

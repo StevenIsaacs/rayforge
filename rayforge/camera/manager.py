@@ -1,5 +1,4 @@
 import logging
-from typing import Dict, List, Optional
 
 from blinker import Signal
 
@@ -25,8 +24,8 @@ class CameraManager:
 
     def __init__(self, context: RayforgeContext):
         self._context = context
-        self._controllers: Dict[str, CameraController] = {}
-        self._active_machine: Optional[Machine] = None
+        self._controllers: dict[str, CameraController] = {}
+        self._active_machine: Machine | None = None
 
         # Signals
         self.controller_added = Signal()
@@ -67,7 +66,7 @@ class CameraManager:
         logger.info("All camera controllers shut down.")
 
     @property
-    def controllers(self) -> List[CameraController]:
+    def controllers(self) -> list[CameraController]:
         """Returns a list of all active CameraController instances."""
         return list(self._controllers.values())
 
@@ -134,7 +133,7 @@ class CameraManager:
             return
 
         active_machine = config.machine
-        camera_configs_in_model: Dict[str, Camera] = {}
+        camera_configs_in_model: dict[str, Camera] = {}
         if active_machine:
             camera_configs_in_model = {
                 c.device_id: c for c in active_machine.cameras

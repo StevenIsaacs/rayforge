@@ -4,18 +4,14 @@ import logging
 import mimetypes
 import warnings
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from gettext import gettext as _
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Callable,
-    List,
     Optional,
-    Set,
-    Tuple,
-    Type,
     cast,
 )
 
@@ -25,12 +21,14 @@ with warnings.catch_warnings():
 
 from raygeo.geo import Geometry, Matrix
 from raygeo.geo.types import Point, Rect
+from raygeo.ops.state import CoolantMode
 
 from ..context import get_context
+from ..core.doc import Doc
 from ..core.item import DocItem
 from ..core.layer import Layer
 from ..core.source_asset import SourceAsset
-from ..core.undo import ListItemCommand
+from ..core.undo import ChangePropertyCommand, ListItemCommand
 from ..core.vectorization_spec import (
     LayerImportMode,
     PassthroughSpec,
@@ -49,16 +47,41 @@ from ..image.base_exporter import Exporter
 from ..image.dxf.exporter import GeometryDxfExporter
 from ..image.structures import ImportPayload, ImportResult, ParsingResult
 from ..image.svg.exporter import GeometrySvgExporter
-from ..pipeline.artifact import JobArtifact, JobArtifactHandle
+from ..pipeline.artifact import JobArtifact
+from ..pipeline.artifact.handle import BaseArtifactHandle
 from .layout.align import PositionAtStrategy
 
 if TYPE_CHECKING:
     from ..core.asset import IAsset
     from ..doceditor.editor import DocEditor
+    from ..machine.models.machine import Machine
     from ..shared.tasker.manager import TaskManager
 
 
 logger = logging.getLogger(__name__)
+
+
+_COOLANT_MODE_LABELS = {
+    CoolantMode.FLOOD: _("Flood"),
+    CoolantMode.MIST: _("Mist"),
+}
+
+
+def _unsupported_coolant_labels(
+    doc: "Doc", machine: Optional["Machine"]
+) -> list[str]:
+    """Human-readable labels of coolant methods used by the doc's steps
+    that the current machine does not support."""
+    if machine is None:
+        return []
+    unsupported: set[CoolantMode] = set()
+    for layer in doc.layers:
+        if not layer.workflow:
+            continue
+        for step in layer.workflow.steps:
+            unsupported.update(step.get_unsupported_coolant_methods(machine))
+    ordered = sorted(unsupported, key=lambda m: m.value)
+    return [_COOLANT_MODE_LABELS[m] for m in ordered]
 
 
 @dataclass
@@ -70,11 +93,11 @@ class PreviewResult:
     """
 
     image_bytes: bytes
-    payload: Optional[ImportPayload]
-    parse_result: Optional[ParsingResult]  # Context for rendering
+    payload: ImportPayload | None
+    parse_result: ParsingResult | None  # Context for rendering
     aspect_ratio: float = 1.0
-    warnings: List[str] = field(default_factory=list)
-    content_bounds: Optional[Rect] = None
+    warnings: list[str] = field(default_factory=list)
+    content_bounds: Rect | None = None
 
 
 class ImportAction(Enum):
@@ -97,8 +120,8 @@ class FileCmd:
         self._task_manager = task_manager
 
     def get_importer_info(
-        self, file_path: Path, mime_type: Optional[str]
-    ) -> Tuple[Optional[Type[Importer]], Set[ImporterFeature]]:
+        self, file_path: Path, mime_type: str | None
+    ) -> tuple[type[Importer] | None, set[ImporterFeature]]:
         """
         Finds the importer for a file and returns its class and feature set.
         """
@@ -119,7 +142,7 @@ class FileCmd:
         return None, set()
 
     def analyze_import_target(
-        self, file_path: Path, mime_type: Optional[str] = None
+        self, file_path: Path, mime_type: str | None = None
     ) -> ImportAction:
         """
         Analyzes a file path (and optional mime type) to determine how it
@@ -164,11 +187,10 @@ class FileCmd:
             )
             manifest = importer_instance.scan()
             return manifest
-        except Exception as e:
-            logger.error(
+        except Exception:
+            logger.exception(
                 f"Error scanning file {file_path.name} with "
-                f"{importer_cls.__name__}: {e}",
-                exc_info=True,
+                f"{importer_cls.__name__}"
             )
             return ImportManifest(
                 title=file_path.name,
@@ -184,7 +206,7 @@ class FileCmd:
         mime_type: str,
         spec: VectorizationSpec,
         preview_size_px: int,
-    ) -> Optional[PreviewResult]:
+    ) -> PreviewResult | None:
         """
         Generates a preview image and vector payload for the import dialog.
         Runs the heavy image processing in a background thread.
@@ -205,7 +227,7 @@ class FileCmd:
         mime_type: str,
         spec: VectorizationSpec,
         preview_size_px: int,
-    ) -> Optional[PreviewResult]:
+    ) -> PreviewResult | None:
         """Blocking implementation of preview generation."""
         importer_cls, _ = self.get_importer_info(Path(filename), mime_type)
         if not importer_cls:
@@ -232,10 +254,8 @@ class FileCmd:
                 import_result, file_bytes, spec, preview_size_px
             )
 
-        except Exception as e:
-            logger.error(
-                f"Failed to generate import preview: {e}", exc_info=True
-            )
+        except Exception:
+            logger.exception("Failed to generate import preview")
             return None
 
     def _generate_rich_preview_result(
@@ -244,7 +264,7 @@ class FileCmd:
         original_file_bytes: bytes,
         spec: VectorizationSpec,
         preview_size_px: int,
-    ) -> Optional[PreviewResult]:
+    ) -> PreviewResult | None:
         """
         Generates the final PreviewResult from a rich ImportResult.
         This is the new central logic for creating preview bitmaps.
@@ -337,8 +357,8 @@ class FileCmd:
         )
 
     def _extract_first_workpiece(
-        self, items: List[DocItem]
-    ) -> Optional[WorkPiece]:
+        self, items: list[DocItem]
+    ) -> WorkPiece | None:
         """Recursively extract the first WorkPiece from a list of items."""
         for item in items:
             if isinstance(item, WorkPiece):
@@ -352,9 +372,9 @@ class FileCmd:
     async def _load_file_async(
         self,
         filename: Path,
-        mime_type: Optional[str],
-        vectorization_spec: Optional[VectorizationSpec],
-    ) -> Optional[ImportResult]:
+        mime_type: str | None,
+        vectorization_spec: VectorizationSpec | None,
+    ) -> ImportResult | None:
         """
         Runs the blocking import function in a background thread and returns
         the resulting rich ImportResult.
@@ -369,7 +389,7 @@ class FileCmd:
             importer.get_doc_items, vectorization_spec
         )
 
-    def _get_positionable_content(self, items: List[DocItem]) -> List[DocItem]:
+    def _get_positionable_content(self, items: list[DocItem]) -> list[DocItem]:
         """
         Extracts the actual content (WorkPieces, Groups) from a list of
         imported items, looking inside any top-level Layer containers.
@@ -384,8 +404,8 @@ class FileCmd:
 
     def _position_newly_imported_items(
         self,
-        items: List[DocItem],
-        position_mm: Optional[Point],
+        items: list[DocItem],
+        position_mm: Point | None,
     ):
         """
         Applies transformations to newly imported items, either positioning
@@ -430,7 +450,7 @@ class FileCmd:
             )
 
     @staticmethod
-    def _unwrap_item(item: DocItem) -> List[DocItem]:
+    def _unwrap_item(item: DocItem) -> list[DocItem]:
         """Extract content items from a Layer, or return the item itself."""
         if isinstance(item, Layer):
             return item.get_content_items()
@@ -438,10 +458,10 @@ class FileCmd:
 
     def _resolve_destinations(
         self,
-        items: List[DocItem],
+        items: list[DocItem],
         mode: LayerImportMode,
-        target_layer: Optional[Layer] = None,
-    ) -> List[Tuple[DocItem, DocItem]]:
+        target_layer: Layer | None = None,
+    ) -> list[tuple[DocItem, DocItem]]:
         """
         Resolve each item to a (owner, item) pair based on the import mode.
         Returns a flat list of (destination_owner, item_to_add) tuples.
@@ -451,7 +471,7 @@ class FileCmd:
             target_layer or self._editor.default_workpiece_layer,
         )
         doc = self._editor.doc
-        pairs: List[Tuple[DocItem, DocItem]] = []
+        pairs: list[tuple[DocItem, DocItem]] = []
 
         if mode == LayerImportMode.MAP_TO_EXISTING:
             existing = doc.layers
@@ -477,14 +497,105 @@ class FileCmd:
 
         return pairs
 
+    def _plan_layer_renames(
+        self,
+        items: list[DocItem],
+        mode: LayerImportMode,
+        existing_layers: list[Layer],
+    ) -> list[tuple[Layer, str]]:
+        """
+        Plan renames of default-named destination layers that receive
+        content from imported layers.
+
+        Only applies in ``MAP_TO_EXISTING`` mode: an existing layer is
+        renamed to the imported layer name if it still carries an
+        auto-generated default name.
+
+        Returns a list of (layer, new_name) pairs.
+        """
+        if mode != LayerImportMode.MAP_TO_EXISTING:
+            return []
+        renames: list[tuple[Layer, str]] = []
+        for idx, item in enumerate(items):
+            if idx >= len(existing_layers):
+                break
+            dest = existing_layers[idx]
+            if (
+                isinstance(item, Layer)
+                and Doc.is_default_layer_name(dest.name)
+                and item.name != dest.name
+            ):
+                renames.append((dest, item.name))
+        return renames
+
+    @staticmethod
+    def _layer_import_mode(
+        vectorization_spec: VectorizationSpec | None,
+    ) -> LayerImportMode:
+        """Returns the layer import mode of the given spec."""
+        mode = LayerImportMode.NEW_LAYERS
+        if isinstance(vectorization_spec, PassthroughSpec):
+            mode = vectorization_spec.layer_import_mode
+        return mode
+
+    def _commit_items(
+        self,
+        items: list[DocItem],
+        mode: LayerImportMode,
+        cmd_name: str,
+        target_layer: Layer | None = None,
+    ) -> list[Layer]:
+        """
+        Adds the imported items to the document model using the history
+        manager, resolving destinations and planning layer renames.
+
+        Returns the list of destination layers that received items.
+        """
+        pairs = self._resolve_destinations(items, mode, target_layer)
+        renames = self._plan_layer_renames(
+            items, mode, self._editor.doc.layers
+        )
+
+        with self._editor.history_manager.transaction(cmd_name) as t:
+            for owner, item in pairs:
+                t.execute(
+                    ListItemCommand(
+                        owner_obj=owner,
+                        item=item,
+                        undo_command="remove_child",
+                        redo_command="add_child",
+                    )
+                )
+            for layer, new_name in renames:
+                t.execute(
+                    ChangePropertyCommand(
+                        target=layer,
+                        property_name="name",
+                        new_value=new_name,
+                        setter_method_name="set_name",
+                        name=_("Rename layer"),
+                    )
+                )
+
+        dest_layers = []
+        seen = set()
+        for owner, item in pairs:
+            if isinstance(owner, Layer) and owner.uid not in seen:
+                dest_layers.append(owner)
+                seen.add(owner.uid)
+            elif isinstance(item, Layer) and item.uid not in seen:
+                dest_layers.append(item)
+                seen.add(item.uid)
+        return dest_layers
+
     def _commit_items_to_document(
         self,
-        items: List[DocItem],
-        source: Optional[SourceAsset],
+        items: list[DocItem],
+        source: SourceAsset | None,
         filename: Path,
-        assets: Optional[List["IAsset"]] = None,
-        vectorization_spec: Optional[VectorizationSpec] = None,
-    ) -> List[Layer]:
+        assets: list["IAsset"] | None = None,
+        vectorization_spec: VectorizationSpec | None = None,
+    ) -> list[Layer]:
         """
         Adds the imported items and their source to the document model using
         the history manager.
@@ -499,41 +610,15 @@ class FileCmd:
                 self._editor.doc.add_asset(asset)
 
         cmd_name = _("Import {filename}").format(filename=filename.name)
-
-        mode = LayerImportMode.NEW_LAYERS
-        if isinstance(vectorization_spec, PassthroughSpec):
-            mode = vectorization_spec.layer_import_mode
-
-        pairs = self._resolve_destinations(items, mode)
-
-        with self._editor.history_manager.transaction(cmd_name) as t:
-            for owner, item in pairs:
-                t.execute(
-                    ListItemCommand(
-                        owner_obj=owner,
-                        item=item,
-                        undo_command="remove_child",
-                        redo_command="add_child",
-                    )
-                )
-
-        dest_layers = []
-        seen = set()
-        for owner, _item in pairs:
-            if isinstance(owner, Layer) and owner.uid not in seen:
-                dest_layers.append(owner)
-                seen.add(owner.uid)
-            elif isinstance(_item, Layer) and _item.uid not in seen:
-                dest_layers.append(_item)
-                seen.add(_item.uid)
-        return dest_layers
+        mode = self._layer_import_mode(vectorization_spec)
+        return self._commit_items(items, mode, cmd_name)
 
     def _finalize_import_on_main_thread(
         self,
         payload: ImportPayload,
         filename: Path,
-        position_mm: Optional[Point],
-        vectorization_spec: Optional[VectorizationSpec] = None,
+        position_mm: Point | None,
+        vectorization_spec: VectorizationSpec | None = None,
     ):
         """
         Performs the final steps of an import on the main thread.
@@ -568,9 +653,9 @@ class FileCmd:
     def load_file_from_path(
         self,
         filename: Path,
-        mime_type: Optional[str],
-        vectorization_spec: Optional[VectorizationSpec],
-        position_mm: Optional[Point] = None,
+        mime_type: str | None,
+        vectorization_spec: VectorizationSpec | None,
+        position_mm: Point | None = None,
     ):
         """
         Public, synchronous method to launch a file import in the background.
@@ -645,9 +730,8 @@ class FileCmd:
                                 main_thread_done.set_result, True
                             )
                     except Exception as e:
-                        logger.error(
-                            "Failed import finalization on main thread.",
-                            exc_info=True,
+                        logger.exception(
+                            "Failed import finalization on main thread."
                         )
                         if not main_thread_done.done():
                             loop.call_soon_threadsafe(
@@ -683,9 +767,9 @@ class FileCmd:
 
     def execute_batch_import(
         self,
-        files: List[Path],
+        files: list[Path],
         spec: VectorizationSpec,
-        pos: Optional[Point],
+        pos: Point | None,
     ):
         """
         Imports multiple files using the same vectorization settings.
@@ -699,8 +783,8 @@ class FileCmd:
 
     def _calculate_items_bbox(
         self,
-        items: List[DocItem],
-    ) -> Optional[Rect]:
+        items: list[DocItem],
+    ) -> Rect | None:
         """
         Calculates the world-space bounding box that encloses a list of
         DocItems by taking the union of their individual bboxes.
@@ -760,7 +844,7 @@ class FileCmd:
 
         return min_x, min_y, max_x - min_x, max_y - min_y
 
-    def _scale_to_fit_if_oversized(self, items: List[DocItem]) -> float:
+    def _scale_to_fit_if_oversized(self, items: list[DocItem]) -> float:
         """
         Scales items to fit within machine work area if they are too
         large, preserving aspect ratio.
@@ -823,7 +907,7 @@ class FileCmd:
 
         return scale_factor
 
-    def _position_at_reference_origin(self, items: List[DocItem]):
+    def _position_at_reference_origin(self, items: list[DocItem]):
         """
         Positions items at the reference origin.
 
@@ -850,12 +934,10 @@ class FileCmd:
         machine = config.machine
         # Position at reference origin
         # The reference origin is where the user expects (0,0) to be.
-        # get_reference_position_world returns WORLD coords of the reference
-        # origin. We use world_position_from_origin to handle origin corner
-        # adjustment.
-        ref_x, ref_y = machine.get_reference_position_world()
-        space = machine.get_coordinate_space()
-        target_x, target_y = space.world_position_from_origin(
+        # The panel gives us the reference origin in world coords; we use
+        # world_position_from_origin to handle origin corner adjustment.
+        ref_x, ref_y = machine.panel.reference_position_world
+        target_x, target_y = machine.panel.world_position_from_origin(
             ref_x, ref_y, (bbox_w, bbox_h)
         )
 
@@ -871,7 +953,7 @@ class FileCmd:
                 item.matrix = translation_matrix @ item.matrix
 
     def _show_scale_down_notification(
-        self, content_items: List[DocItem], scale_factor: float
+        self, content_items: list[DocItem], scale_factor: float
     ):
         """
         Shows a persistent notification that the imported item was scaled
@@ -927,7 +1009,7 @@ class FileCmd:
     def assemble_job_in_background(
         self,
         when_done: Callable[
-            [Optional[JobArtifactHandle], Optional[Exception]], None
+            [BaseArtifactHandle | None, Exception | None], None
         ],
     ):
         """
@@ -946,22 +1028,23 @@ class FileCmd:
         Asynchronously generates and exports G-code to a specific path.
         This is a non-blocking, fire-and-forget method for the UI.
         """
-        artifact_manager = self._editor.pipeline.artifact_manager
+        artifact_store = self._editor.pipeline.artifact_store
 
         def _on_export_assembly_done(
-            handle: Optional[JobArtifactHandle], error: Optional[Exception]
+            handle: BaseArtifactHandle | None,
+            error: Exception | None,
         ):
             try:
                 if error:
                     raise error
 
-                with artifact_manager.checkout_handle(handle) as artifact:
+                with artifact_store.checkout_handle(handle) as artifact:
                     if not artifact:
                         raise ValueError(
                             "Assembly process returned no artifact."
                         )
                     if not isinstance(artifact, JobArtifact):
-                        raise ValueError("Expected a JobArtifact for export.")
+                        raise TypeError("Expected a JobArtifact for export.")
                     if artifact.machine_code is None:
                         raise ValueError(
                             "Final artifact is missing G-code data."
@@ -1026,7 +1109,7 @@ class FileCmd:
             raise ValueError(
                 f"No exporter registered for extension {file_path.suffix}"
             )
-        exporter = cast(Type[Exporter], exporter_cls)(workpiece)
+        exporter = cast(type[Exporter], exporter_cls)(workpiece)
         return self._do_export(file_path, exporter)
 
     def _do_export(self, file_path: Path, exporter) -> bool:
@@ -1158,6 +1241,19 @@ class FileCmd:
             self._editor.mark_as_saved()
             self._editor.doc.updated.send(self._editor.doc)
 
+            labels = _unsupported_coolant_labels(
+                new_doc, self._editor.context.machine
+            )
+            if labels:
+                self._editor.notification_requested.send(
+                    self,
+                    message=_(
+                        "This project uses cooling methods not supported by "
+                        "the current machine: {methods}"
+                    ).format(methods=", ".join(labels)),
+                    persistent=True,
+                )
+
             unknown_assets = [
                 asset
                 for asset in new_doc.get_all_assets()
@@ -1196,9 +1292,9 @@ class FileCmd:
         self,
         source_asset: SourceAsset,
         vectorization_spec: VectorizationSpec,
-        position_mm: Optional[Point] = None,
-        target_layer: Optional[Layer] = None,
-    ) -> Optional[ImportResult]:
+        position_mm: Point | None = None,
+        target_layer: Layer | None = None,
+    ) -> ImportResult | None:
         """
         Re-run the import pipeline for an existing SourceAsset, producing
         fresh (or additional) workpieces from the original data.
@@ -1242,10 +1338,10 @@ class FileCmd:
 
     def _finalize_reimport(
         self,
-        items: List[DocItem],
-        position_mm: Optional[Point],
-        vectorization_spec: Optional[VectorizationSpec] = None,
-        target_layer: Optional[Layer] = None,
+        items: list[DocItem],
+        position_mm: Point | None,
+        vectorization_spec: VectorizationSpec | None = None,
+        target_layer: Layer | None = None,
     ):
         """
         Commit reimported items to the document.
@@ -1255,28 +1351,9 @@ class FileCmd:
         """
         self._position_newly_imported_items(items, position_mm)
 
-        mode = LayerImportMode.NEW_LAYERS
-        if isinstance(vectorization_spec, PassthroughSpec):
-            mode = vectorization_spec.layer_import_mode
-        pairs = self._resolve_destinations(items, mode, target_layer)
-
-        cmd_name = _("Re-Import")
-        with self._editor.history_manager.transaction(cmd_name) as t:
-            for owner, item in pairs:
-                t.execute(
-                    ListItemCommand(
-                        owner_obj=owner,
-                        item=item,
-                        undo_command="remove_child",
-                        redo_command="add_child",
-                    )
-                )
-
-        dest_layers = []
-        seen = set()
-        for owner, _item in pairs:
-            if isinstance(owner, Layer) and owner.uid not in seen:
-                dest_layers.append(owner)
-                seen.add(owner.uid)
+        mode = self._layer_import_mode(vectorization_spec)
+        dest_layers = self._commit_items(
+            items, mode, _("Re-Import"), target_layer=target_layer
+        )
         if dest_layers:
             self._editor.step.add_default_steps_for_layers(dest_layers)

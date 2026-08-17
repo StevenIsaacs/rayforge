@@ -1,5 +1,6 @@
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Any, Callable, Dict, Optional
+from typing import Any
 
 from .var import ValidationError, Var
 
@@ -13,17 +14,22 @@ class FloatVar(Var[float]):
         self,
         key: str,
         label: str,
-        description: Optional[str] = None,
-        default: Optional[float] = None,
-        value: Optional[float] = None,
-        min_val: Optional[float] = None,
-        max_val: Optional[float] = None,
-        extra_validator: Optional[Callable[[float], None]] = None,
+        description: str | None = None,
+        default: float | None = None,
+        value: float | None = None,
+        min_val: float | None = None,
+        max_val: float | None = None,
+        extra_validator: Callable[[float], None] | None = None,
+        digits: int | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
+        sensitive_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
         self.min_val = min_val
         self.max_val = max_val
+        self.digits = digits
 
-        def validator(v: Optional[float]):
+        def validator(v: float | None):
             # A None value is valid for an unset optional field.
             if v is None:
                 return
@@ -51,11 +57,15 @@ class FloatVar(Var[float]):
             default=default,
             value=value,
             validator=validator,
+            visible_when=visible_when,
+            sensitive_when=sensitive_when,
         )
 
-    def to_dict(self, include_value: bool = False) -> Dict[str, Any]:
+    def to_dict(self, include_value: bool = False) -> dict[str, Any]:
         data = super().to_dict(include_value=include_value)
         data.update({"min_val": self.min_val, "max_val": self.max_val})
+        if self.digits is not None:
+            data["digits"] = self.digits
         return data
 
 
@@ -73,14 +83,18 @@ class SliderFloatVar(FloatVar):
         self,
         key: str,
         label: str,
-        description: Optional[str] = None,
-        default: Optional[float] = None,
-        value: Optional[float] = None,
-        min_val: Optional[float] = None,
-        max_val: Optional[float] = None,
-        extra_validator: Optional[Callable[[float], None]] = None,
+        description: str | None = None,
+        default: float | None = None,
+        value: float | None = None,
+        min_val: float | None = None,
+        max_val: float | None = None,
+        extra_validator: Callable[[float], None] | None = None,
         show_value: bool = True,
-        format_suffix: Optional[str] = None,
+        format_suffix: str | None = None,
+        digits: int | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
+        sensitive_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
         self.show_value = show_value
         self.format_suffix = format_suffix
@@ -93,9 +107,12 @@ class SliderFloatVar(FloatVar):
             min_val=min_val,
             max_val=max_val,
             extra_validator=extra_validator,
+            digits=digits,
+            visible_when=visible_when,
+            sensitive_when=sensitive_when,
         )
 
-    def to_dict(self, include_value: bool = False) -> Dict[str, Any]:
+    def to_dict(self, include_value: bool = False) -> dict[str, Any]:
         data = super().to_dict(include_value=include_value)
         data.update(
             {

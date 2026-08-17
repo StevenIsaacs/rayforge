@@ -1,5 +1,5 @@
 machine:
-  active_wcs: G54
+  active_wcs: G55
   arc_tolerance: 0.03
   auto_connect: true
   axes:
@@ -37,6 +37,7 @@ machine:
   - 140.0
   - 140.0
   cameras: []
+  capabilities: null
   clear_alarm_on_connect: false
   coordinate_systems:
   - name: G54
@@ -46,9 +47,9 @@ machine:
     - 0.0
   - name: G55
     offset:
-    - 34.99999999999996
-    - 66.50000000000003
-    - 34.00000000000006
+    - 35.0
+    - 65.5
+    - 34.0
   - name: G56
     offset:
     - 0.0
@@ -73,6 +74,7 @@ machine:
   dialect_uid: 9d88d7d1-6853-4e81-a139-cfb4b6abb3cc
   driver: NoDeviceDriver
   driver_args: {}
+  driver_config: {}
   gcode:
     gcode_precision: 3
   heads:
@@ -83,9 +85,15 @@ machine:
     frame_power_percent: 0.0
     frame_repeat_count: 20
     frame_speed: 0
+    laser_type: diode
     max_power: 1000
-    model_path: head.glb
+    max_pulse_width: 500
+    max_pwm_frequency: 5000
+    min_pulse_width: 5
+    model_path: head-co2.glb
     name: Laser Head
+    pulse_width: 50
+    pwm_frequency: 500
     raster_color: '#000000'
     spot_size_mm:
     - 0.1
@@ -97,17 +105,18 @@ machine:
     - 0.0
     - 0.0
     - 0.0
-    - 1.8369701987210297e-14
-    - -300.0
-    - 0.0
-    - -0.0
     - 300.0
-    - 1.8369701987210297e-14
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 300.0
     - 0.0
     - 0.0
     - 0.0
     - 0.0
     - 1.0
+    type: LaserHead
     uid: d9277039-5ccc-456a-b3a6-5054b3c363b0
   home_on_start: false
   hookmacros: {}
@@ -141,6 +150,7 @@ machine:
     shape: rect
     uid: a1b2c3d4-0002-4000-8000-000000000002
   origin: bottom_left
+  panel_orientation: native
   reverse_x_axis: false
   reverse_y_axis: false
   reverse_z_axis: false
@@ -148,9 +158,9 @@ machine:
   rotary_modules:
   - axis: A
     axis_position:
-    - -33.0
-    - -4.0
-    - 25.0
+    - -32.5
+    - -4.5
+    - 23.5
     default_diameter: 25.0
     max_workpiece_length: 60.0
     mode: true_4th_axis
@@ -183,6 +193,8 @@ machine:
     max_travel_speed: 3000
   supports_arcs: true
   supports_curves: false
+  units:
+    unit_system: metric
   wcs_origin_is_workarea_origin: false
   work_margins:
   - 10.0

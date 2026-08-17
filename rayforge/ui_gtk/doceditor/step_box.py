@@ -2,16 +2,15 @@ from gettext import gettext as _
 from typing import TYPE_CHECKING
 
 from blinker import Signal
-from gi.repository import Gtk
+from gi.repository import Gtk, Pango
 
 from ...context import get_context
-from ...core.capability import ENGRAVE
 from ...core.step import Step
 from ...core.undo.property_cmd import ChangePropertyCommand
 from ..icons import get_icon
 from ..shared.number_badge import NumberBadge
 from ..shared.tag import TagWidget
-from .step_settings_dialog import StepSettingsDialog
+from .step_settings.dialog import StepSettingsDialog
 
 if TYPE_CHECKING:
     from ...doceditor.editor import DocEditor
@@ -48,6 +47,9 @@ class StepBox(Gtk.Box):
         content.append(title_row)
 
         self.title_label = Gtk.Label(xalign=0)
+        self.title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.title_label.set_max_width_chars(40)
+        self.title_label.set_hexpand(True)
         title_row.append(self.title_label)
 
         self.mode_tag = TagWidget(active=False)
@@ -58,6 +60,9 @@ class StepBox(Gtk.Box):
         self.subtitle_label = Gtk.Label(xalign=0)
         self.subtitle_label.add_css_class("caption")
         self.subtitle_label.add_css_class("dim-label")
+        self.subtitle_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.subtitle_label.set_max_width_chars(40)
+        self.subtitle_label.set_hexpand(True)
         content.append(self.subtitle_label)
 
         self.visibility_switch = Gtk.Switch()
@@ -118,17 +123,8 @@ class StepBox(Gtk.Box):
         if not machine or not machine.heads:
             self.badge.set_color(None)
             return
-        try:
-            laser = self.step.get_selected_laser(machine)
-        except ValueError:
-            self.badge.set_color(None)
-            return
-
-        if ENGRAVE in self.step.capabilities:
-            color = laser.raster_color
-        else:
-            color = laser.cut_color
-
+        head = self.step.get_selected_head(machine)
+        color = self.step.get_operation_color(head) if head else None
         self.badge.set_color(color)
 
     def on_switch_state_set(self, switch, state):

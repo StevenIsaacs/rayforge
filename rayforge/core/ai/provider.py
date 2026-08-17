@@ -1,15 +1,13 @@
 import json
 from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
 from gettext import gettext as _
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 
 class AIServiceError(Exception):
     """Raised when AI service encounters an error."""
-
-    pass
 
 
 HTTP_STATUS_MESSAGES = {
@@ -24,7 +22,7 @@ HTTP_STATUS_MESSAGES = {
 }
 
 
-def extract_api_error(body: str) -> Optional[str]:
+def extract_api_error(body: str) -> str | None:
     """Extract a human-readable error from a JSON API response body."""
     try:
         data = json.loads(body)
@@ -64,7 +62,7 @@ class AIProviderConfig:
     default_model: str
     enabled: bool = True
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         return {
             "id": self.id,
             "name": self.name,
@@ -76,7 +74,7 @@ class AIProviderConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, object]) -> "AIProviderConfig":
+    def from_dict(cls, data: dict[str, object]) -> "AIProviderConfig":
         return cls(
             id=str(data.get("id", "")),
             name=str(data.get("name", "")),
@@ -93,7 +91,7 @@ class ChatMessage:
     role: str
     content: str
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return {"role": self.role, "content": self.content}
 
 
@@ -101,7 +99,7 @@ class ChatMessage:
 class ChatResponse:
     content: str
     model: str
-    usage: Dict[str, int] = field(default_factory=dict)
+    usage: dict[str, int] = field(default_factory=dict)
 
 
 class AIProvider(ABC):
@@ -110,18 +108,17 @@ class AIProvider(ABC):
     @abstractmethod
     async def chat(
         self,
-        messages: List[ChatMessage],
-        model: Optional[str] = None,
+        messages: list[ChatMessage],
+        model: str | None = None,
         **kwargs,
     ) -> ChatResponse:
         """Send a chat completion request."""
-        pass
 
     @abstractmethod
     def chat_stream(
         self,
-        messages: List[ChatMessage],
-        model: Optional[str] = None,
+        messages: list[ChatMessage],
+        model: str | None = None,
         **kwargs,
     ) -> AsyncGenerator[str, None]:
         """
@@ -129,24 +126,20 @@ class AIProvider(ABC):
 
         This is an async generator that yields content chunks.
         """
-        pass
 
     @abstractmethod
-    async def list_models(self) -> List[str]:
+    async def list_models(self) -> list[str]:
         """List available models."""
-        pass
 
     @abstractmethod
-    async def test_connection(self) -> Tuple[bool, str]:
+    async def test_connection(self) -> tuple[bool, str]:
         """
         Test if the provider is reachable and configured.
 
         Returns:
             Tuple of (success, message) where message describes the result.
         """
-        pass
 
     @abstractmethod
     async def close(self):
         """Close any open connections."""
-        pass

@@ -2,7 +2,6 @@ import inspect
 import logging
 import mimetypes
 from pathlib import Path
-from typing import List, Optional, Type, Union
 
 from ..core.item import DocItem
 from ..core.source_asset import SourceAsset
@@ -78,7 +77,7 @@ for name, obj in list(locals().items()):
 
 
 def _hydrate_workpieces_for_preview(
-    items: List["DocItem"], source: "SourceAsset"
+    items: list["DocItem"], source: "SourceAsset"
 ):
     """
     Recursively finds all WorkPieces in a list of items and attaches the
@@ -100,8 +99,8 @@ def import_file_from_bytes(
     file_data: bytes,
     source_file_name: str,
     mime_type: str,
-    vectorization_spec: Optional[VectorizationSpec] = None,
-) -> Optional[ImportPayload]:
+    vectorization_spec: VectorizationSpec | None = None,
+) -> ImportPayload | None:
     """
     Imports a file from raw byte data. Used for previews and in-memory
     operations where a file path is not available or desirable.
@@ -153,10 +152,10 @@ def import_file_from_bytes(
 
 
 def import_file(
-    source: Union[Path, bytes],
-    mime_type: Optional[str] = None,
-    vectorization_spec: Optional[VectorizationSpec] = None,
-) -> Optional[ImportPayload]:
+    source: Path | bytes,
+    mime_type: str | None = None,
+    vectorization_spec: VectorizationSpec | None = None,
+) -> ImportPayload | None:
     """
     A high-level convenience function to import a file from a path or raw
     data. It automatically determines the correct importer to use.
@@ -180,7 +179,7 @@ def import_file(
         mime_type, _ = mimetypes.guess_type(source)
 
     # 1. Determine importer class
-    importer_class: Optional[Type[Importer]] = None
+    importer_class: type[Importer] | None = None
     if mime_type:
         importer_class = importer_registry.get_by_mime_type(mime_type)
 
@@ -198,7 +197,7 @@ def import_file(
         source_file = source
         try:
             file_data = source.read_bytes()
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Could not read file {source}: {e}")
             return None
     else:  # is bytes
@@ -242,7 +241,7 @@ for renderer in _RENDERERS:
     renderer_registry.register(renderer)
 
 
-def get_renderer_for_asset(asset_type: str) -> Optional[Renderer]:
+def get_renderer_for_asset(asset_type: str) -> Renderer | None:
     """Get the renderer for an asset type."""
     return renderer_registry.get(asset_type)
 
@@ -250,24 +249,24 @@ def get_renderer_for_asset(asset_type: str) -> Optional[Renderer]:
 __all__ = [
     "BmpImporter",
     "DxfImporter",
+    "GeometryDxfExporter",
+    "GeometrySvgExporter",
+    "ImportManifest",
+    "ImportPayload",
+    "ImportResult",
+    "ImporterFeature",
     "JpgImporter",
+    "LayerInfo",
     "LightBurnImporter",
+    "ParsingResult",
     "PdfImporter",
     "PngImporter",
     "RuidaImporter",
     "SvgImporter",
-    "ImporterFeature",
-    "ImportManifest",
-    "ImportPayload",
-    "ImportResult",
-    "ParsingResult",
-    "LayerInfo",
+    "exporter_registry",
+    "get_renderer_for_asset",
     "import_file",
     "import_file_from_bytes",
-    "exporter_registry",
-    "GeometryDxfExporter",
-    "GeometrySvgExporter",
     "importer_registry",
     "renderer_registry",
-    "get_renderer_for_asset",
 ]

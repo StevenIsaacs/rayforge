@@ -1,34 +1,25 @@
 import logging
 import math
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Dict,
-    List,
-    Optional,
-    Sequence,
-    Tuple,
-    cast,
-)
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, cast
 
 from blinker import Signal
 from gi.repository import Gdk, GLib, Graphene, Gtk
 
 from ...camera.controller import CameraController
 from ...context import get_context
-from ...core.color import OPS_COLOR_SPEC, ColorRGBA, ColorSet, hex_to_rgba
+from ...core.color import ColorRGBA, hex_to_rgba
 from ...core.group import Group
 from ...core.item import DocItem
 from ...core.layer import Layer
 from ...core.stock import StockItem
 from ...core.stock_asset import StockAsset
 from ...core.workpiece import WorkPiece
-from ...image.util.srgb import create_lut_from_color
-from ...machine.models.colors import OpsColorSet
 from ...machine.models.machine import Machine
+from ...machine.models.machine_panel import MachinePanel
 from ...pipeline.artifact import RenderContext
+from ...shared.units.formatter import get_preferred_unit_factor
 from ..canvas import Canvas, CanvasElement, WorldSurface
-from ..shared.gtk_color import GtkColorResolver
 from ..shared.keyboard import is_primary_modifier
 from . import context_menu
 from .elements.axis_extent_frame import (
@@ -64,7 +55,7 @@ class WorkSurface(WorldSurface):
         self,
         editor: "DocEditor",
         parent_window: Gtk.Window,
-        machine: Optional[Machine],
+        machine: Machine | None,
         cam_visible: bool = False,
         **kwargs,
     ):
@@ -73,8 +64,12 @@ class WorkSurface(WorldSurface):
         self.machine = None  # will be assigned by set_machine() below
         self._show_travel_moves = False
         self._workpieces_visible = True
-        self._tracked_axis_extents: Tuple[float, float] = (0.0, 0.0)
-        coordinate_space = None
+        self._stock_visible = True
+        self._tracked_axis_extents: tuple[float, float] = (0.0, 0.0)
+        x_axis_right = False
+        y_axis_down = False
+        reverse_x_axis = False
+        reverse_y_axis = False
         if machine:
             self._tracked_axis_extents = machine.axis_extents
             # Canvas shows full machine bed, not just workarea
@@ -82,13 +77,17 @@ class WorkSurface(WorldSurface):
                 float(machine.axis_extents[0]),
                 float(machine.axis_extents[1]),
             )
-            coordinate_space = machine.get_coordinate_space()
+            view = MachinePanel(machine)
+            x_axis_right = view.x_axis_right
+            y_axis_down = view.y_axis_down
+            reverse_x_axis = view.x_axis_negative
+            reverse_y_axis = view.y_axis_negative
         else:
             width_mm, height_mm = 100.0, 100.0
 
         self._cam_visible = cam_visible
-        self._transform_start_states: Dict[CanvasElement, dict] = {}
-        self.right_click_context: Optional[Dict] = None
+        self._transform_start_states: dict[CanvasElement, dict] = {}
+        self.right_click_context: dict | None = None
 
         # Click-to-zero mode state
         self._click_to_zero_mode = False
@@ -97,9 +96,9 @@ class WorkSurface(WorldSurface):
         # During pan/zoom/drag, ops drawing and pipeline context updates
         # are suppressed. They are restored after ~200ms of idle time.
         self._ops_suppressed: bool = False
-        self._ops_restore_timer_id: Optional[int] = None
+        self._ops_restore_timer_id: int | None = None
 
-        self._nogo_zone_elements: Dict[str, NogoZoneElement] = {}
+        self._nogo_zone_elements: dict[str, NogoZoneElement] = {}
         self._nogo_zones_visible = True
         self._projection = CanvasProjection()
 
@@ -107,9 +106,18 @@ class WorkSurface(WorldSurface):
         super().__init__(
             width_mm=width_mm,
             height_mm=height_mm,
-            coordinate_space=coordinate_space,
+            x_axis_right=x_axis_right,
+            y_axis_down=y_axis_down,
+            reverse_x_axis=reverse_x_axis,
+            reverse_y_axis=reverse_y_axis,
             **kwargs,
         )
+
+        # Keep the grid unit labels in sync with the user's unit preference.
+        self._axis_renderer.set_grid_unit_factor(
+            get_preferred_unit_factor("length")
+        )
+        get_context().config.changed.connect(self._on_config_changed)
 
         # Prevent GTK from implicitly grabbing focus on click, which can
         # interfere with popover/menu closing logic.
@@ -198,13 +206,11 @@ class WorkSurface(WorldSurface):
 
         # Drag-drop command will be initialized by MainWindow after
         # construction
-        self.drag_drop_cmd: Optional["DragDropCmd"] = None
+        self.drag_drop_cmd: DragDropCmd | None = None
 
         # Initialize pipeline view context to ensure workpiece artifacts
         # can be rendered immediately when adopted
         self._update_pipeline_view_context()
-
-        get_context().config.changed.connect(self._on_config_changed)
 
     @property
     def doc(self):
@@ -291,19 +297,15 @@ class WorkSurface(WorldSurface):
         self, m_x: float, m_y: float
     ) -> tuple[float, float]:
         """
-        Convert machine-reported coordinates to canvas world coordinates.
+        Convert machine-reported coordinates to canvas PANEL coordinates.
 
         Machine-reported coordinates come from the controller and may be
-        negated based on reverse_x/reverse_y settings. We undo this sign
-        flip before transforming to world coordinates.
+        negated based on reverse_x/reverse_y settings. The panel's
+        machine->panel transform undoes this sign flip and applies the
+        presentation rotation.
         """
         if self.machine:
-            space = self.machine.get_coordinate_space()
-            if space.reverse_x:
-                m_x = -m_x
-            if space.reverse_y:
-                m_y = -m_y
-            return space.transform_point_to_world(m_x, m_y, space.extents)
+            return self.machine.panel.machine_point_to_panel(m_x, m_y)
         return m_x, m_y
 
     def get_global_tab_visibility(self) -> bool:
@@ -416,6 +418,10 @@ class WorkSurface(WorldSurface):
 
     def _on_config_changed(self, sender, **kwargs):
         """Re-renders ops when config settings change."""
+        self._axis_renderer.set_grid_unit_factor(
+            get_preferred_unit_factor("length")
+        )
+        self.queue_draw()
         self._update_pipeline_view_context()
 
     def _on_doc_structure_changed(self, sender, **kwargs):
@@ -454,8 +460,8 @@ class WorkSurface(WorldSurface):
     def _on_any_transform_begin(
         self,
         sender,
-        elements: List[CanvasElement],
-        drag_target: Optional[CanvasElement] = None,
+        elements: list[CanvasElement],
+        drag_target: CanvasElement | None = None,
         **kwargs,
     ):
         """
@@ -512,7 +518,7 @@ class WorkSurface(WorldSurface):
                 "world_size"
             ] = wp.get_world_transform().get_abs_scale()
 
-    def _on_resize_begin(self, sender, elements: List[CanvasElement]):
+    def _on_resize_begin(self, sender, elements: list[CanvasElement]):
         """Handles start of a resize, which may invalidate Ops."""
         logger.debug(
             f"Resize begin for {len(elements)} element(s). Pausing pipeline."
@@ -524,7 +530,7 @@ class WorkSurface(WorldSurface):
         self._on_any_transform_begin(sender, elements)
         self.editor.pipeline.pause()
 
-    def _on_transform_end(self, sender, elements: List[CanvasElement]):
+    def _on_transform_end(self, sender, elements: list[CanvasElement]):
         """
         Finalizes an interactive transform by collecting all matrix changes
         from view elements and creating a single, undoable transaction.
@@ -579,24 +585,28 @@ class WorkSurface(WorldSurface):
         logger.debug("WorkSurface.on_button_press fired")
 
         # Handle click-to-zero mode
-        if self._click_to_zero_mode:
-            if gesture.get_button() == Gdk.BUTTON_PRIMARY and n_press == 1:
-                world_x, world_y = self._get_world_coords(x, y)
-                if self.machine:
-                    space = self.machine.get_coordinate_space()
-                    machine_x, machine_y = space.world_point_to_machine(
-                        world_x, world_y
-                    )
-                else:
-                    machine_x, machine_y = world_x, world_y
-                self.work_zero_requested.send(self, x=machine_x, y=machine_y)
-                return
+        if (
+            self._click_to_zero_mode
+            and gesture.get_button() == Gdk.BUTTON_PRIMARY
+            and n_press == 1
+        ):
+            world_x, world_y = self._get_world_coords(x, y)
+            if self.machine:
+                machine_x, machine_y = (
+                    self.machine.panel.panel_point_to_machine(world_x, world_y)
+                )
+            else:
+                machine_x, machine_y = world_x, world_y
+            self.work_zero_requested.send(self, x=machine_x, y=machine_y)
+            return
 
         # A left-click should clear any lingering right-click context.
-        if gesture.get_button() == Gdk.BUTTON_PRIMARY:
-            if self.right_click_context:
-                self.right_click_context = None
-                self.context_changed.send(self)
+        if (
+            gesture.get_button() == Gdk.BUTTON_PRIMARY
+            and self.right_click_context
+        ):
+            self.right_click_context = None
+            self.context_changed.send(self)
 
         logger.debug(
             f"Button press: n_press={n_press}, pos=({x:.2f}, {y:.2f})"
@@ -654,7 +664,7 @@ class WorkSurface(WorldSurface):
             self.set_cursor(None)
         super().on_motion_leave(controller)
 
-    def set_machine(self, machine: Optional[Machine]):
+    def set_machine(self, machine: Machine | None):
         """
         Updates the WorkSurface to use a new machine instance. This handles
         disconnecting from the old machine's signals, connecting to the new
@@ -694,9 +704,11 @@ class WorkSurface(WorldSurface):
             self.queue_draw()
             return
 
-        space = machine.get_coordinate_space()
+        panel = machine.panel
         if machine.wcs_origin_is_workarea_origin:
-            canvas_x, canvas_y = space.get_workarea_origin_in_machine()
+            canvas_x, canvas_y = panel.machine_point_to_panel(
+                *panel.get_workarea_origin_in_machine()
+            )
         else:
             wcs_x, wcs_y, _ = self._get_active_layer_wcs_offset()
             canvas_x, canvas_y = self._machine_coords_to_canvas(wcs_x, wcs_y)
@@ -773,10 +785,9 @@ class WorkSurface(WorldSurface):
 
         # Get offset for axis labels (where 0,0 should appear)
         if self.machine:
-            space = self.machine.get_coordinate_space()
             wcs_offset = self._get_active_layer_wcs_offset()
             wcs_is_workarea = self.machine.wcs_origin_is_workarea_origin
-            origin_offset_mm = space.get_axis_label_origin(
+            origin_offset_mm = self.machine.panel.get_axis_label_origin(
                 wcs_offset=wcs_offset,
                 wcs_is_workarea_origin=wcs_is_workarea,
             )
@@ -916,80 +927,29 @@ class WorkSurface(WorldSurface):
             )
             return
 
-        color_set_dict = self._get_theme_color_dict()
-        laser_color_dicts = self._get_laser_color_dicts()
-        layer_color_dicts = self._get_layer_color_dicts()
-        ops_color_mode = get_context().config.ops_color_mode
+        theme = get_context().theme
+        theme.set_machine(self.machine)
+        theme.set_doc(self.doc)
+        color_set = theme.color_set
+        if color_set is None:
+            return
 
         context = RenderContext(
             pixels_per_mm=(ppm_x, ppm_y),
             show_travel_moves=self._show_travel_moves,
             margin_px=5,
-            color_set_dict=color_set_dict.to_dict(),
-            laser_color_sets=laser_color_dicts,
-            layer_color_sets=layer_color_dicts,
-            ops_color_mode=ops_color_mode,
+            color_set_dict=color_set.to_dict(),
+            laser_color_sets={
+                uid: cs.to_dict() for uid, cs in theme.laser_color_sets.items()
+            },
+            layer_color_sets={
+                uid: cs.to_dict() for uid, cs in theme.layer_color_sets.items()
+            },
+            ops_color_mode=get_context().config.ops_color_mode,
         )
-
         self.editor.view_manager.update_render_context(context)
 
-    def _get_laser_color_dicts(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Resolve colors for each laser in the machine.
-
-        Returns a dictionary mapping laser UID to its color set dictionary.
-        """
-        if not self.machine:
-            return {}
-
-        theme_colors = self._get_theme_color_dict()
-        laser_colors: Dict[str, Dict[str, Any]] = {}
-
-        for laser in self.machine.heads:
-            laser_color_set = OpsColorSet.from_laser(laser, theme_colors)
-            laser_colors[laser.uid] = laser_color_set.to_color_set().to_dict()
-
-        return laser_colors
-
-    def _get_layer_color_dicts(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Resolve colors for each layer in the document.
-
-        Returns a dictionary mapping layer UID to its color set dictionary.
-        """
-        doc = self.doc
-        if not doc:
-            return {}
-
-        theme_colors = self._get_theme_color_dict()
-        layer_colors: Dict[str, Dict[str, Any]] = {}
-
-        for layer in doc.layers:
-            cut_rgba = hex_to_rgba(layer.color)
-            cut_lut = create_lut_from_color(cut_rgba)
-            data = {
-                "cut": cut_lut,
-                "engrave": cut_lut,
-                "travel": theme_colors.get_rgba("travel"),
-                "zero_power": theme_colors.get_rgba("zero_power"),
-            }
-            color_set = ColorSet(_data=data)
-            layer_colors[layer.uid] = color_set.to_dict()
-
-        return layer_colors
-
-    def _get_theme_color_dict(self) -> ColorSet:
-        """
-        Gets the current theme color set as a dictionary.
-
-        This method extracts the color set from the current GTK style
-        and converts it to a dictionary format suitable for the pipeline.
-        """
-        color_resolver = GtkColorResolver(self)
-
-        return color_resolver.resolve(OPS_COLOR_SPEC)
-
-    def _get_handle_color(self, elem: CanvasElement) -> Optional[ColorRGBA]:
+    def _get_handle_color(self, elem: CanvasElement) -> ColorRGBA | None:
         """Returns the layer color for the element's selection handles."""
         data = getattr(elem, "data", None)
         if data is None:
@@ -1004,12 +964,24 @@ class WorkSurface(WorldSurface):
         logger.debug(f"Adding new LayerElement for '{layer.name}'")
         layer_elem = LayerElement(layer=layer, canvas=self)
         self.root.add(layer_elem)
+        self._apply_layer_panel_transform(layer_elem)
+
+    def _apply_layer_panel_transform(self, layer_elem: CanvasElement) -> None:
+        """Rotate a layer's document (WORLD) content into PANEL space."""
+        if not self.machine:
+            return
+        layer_elem.set_transform(self.machine.panel.get_world_to_panel_2d())
+
+    def _sync_layer_transforms(self) -> None:
+        """Re-apply the PANEL rotation to every layer element."""
+        for layer_elem in self.find_by_type(LayerElement):
+            self._apply_layer_panel_transform(layer_elem)
 
     def _create_and_add_stock_element(self, stock_item: StockItem):
         """Creates a new StockElement and adds it to the canvas root."""
         logger.debug(f"Adding new StockElement for '{stock_item.name}'")
         stock_elem = StockElement(stock_item=stock_item, canvas=self)
-        stock_elem.selectable = stock_elem.visible
+        stock_elem.set_view_visible(self._stock_visible)
         self.root.add(stock_elem)
         child_count = len(self.root.children)
         logger.debug(f"StockElement added, total children: {child_count}")
@@ -1138,13 +1110,25 @@ class WorkSurface(WorldSurface):
             cast(WorkPieceElement, wp_elem).set_base_image_visible(visible)
         self.queue_draw()
 
+    def set_stock_visible(self, visible: bool = True):
+        """
+        Sets the view visibility of all stock elements. Hidden stock is
+        also removed from click and selection-frame hit testing.
+        """
+        if self._stock_visible == visible:
+            return
+        self._stock_visible = visible
+        for elem in self.find_by_type(StockElement):
+            cast(StockElement, elem).set_view_visible(visible)
+        self.queue_draw()
+
     def set_show_nogo_zones(self, visible: bool):
         self._nogo_zones_visible = visible
         for elem in self._nogo_zone_elements.values():
             elem.set_visible(visible and elem.data.enabled)
         self.queue_draw()
 
-    def set_camera_controllers(self, controllers: List[CameraController]):
+    def set_camera_controllers(self, controllers: list[CameraController]):
         """
         Manages camera elements and their subscriptions based on the
         provided list of live controllers.
@@ -1188,7 +1172,14 @@ class WorkSurface(WorldSurface):
             camera_elem.set_visible(visible and camera_elem.camera.enabled)
         self.queue_draw()
 
-    def _on_machine_changed(self, machine: Optional[Machine]):
+    @property
+    def _machine_panel(self) -> MachinePanel:
+        """The machine's live panel, carrying the current orientation.
+        Callers must ensure ``self.machine`` is set."""
+        assert self.machine
+        return self.machine.panel
+
+    def _on_machine_changed(self, machine: Machine | None):
         """
         Handles incremental updates from the currently-assigned machine model.
         """
@@ -1202,15 +1193,14 @@ class WorkSurface(WorldSurface):
 
         extent_w, extent_h = machine.axis_extents
         extent_changed = (extent_w, extent_h) != self._tracked_axis_extents
-        y_axis_changed = machine.y_axis_down != self._axis_renderer.y_axis_down
-        x_axis_changed = (
-            machine.x_axis_right != self._axis_renderer.x_axis_right
-        )
+        view = self._machine_panel
+        y_axis_changed = view.y_axis_down != self._axis_renderer.y_axis_down
+        x_axis_changed = view.x_axis_right != self._axis_renderer.x_axis_right
         x_reverse_changed = (
-            machine.reverse_x_axis != self._axis_renderer.x_axis_negative
+            view.x_axis_negative != self._axis_renderer.x_axis_negative
         )
         y_reverse_changed = (
-            machine.reverse_y_axis != self._axis_renderer.y_axis_negative
+            view.y_axis_negative != self._axis_renderer.y_axis_negative
         )
 
         logger.debug(
@@ -1229,6 +1219,7 @@ class WorkSurface(WorldSurface):
         ):
             self.reset_view()
         else:
+            self._sync_layer_transforms()
             self._update_extent_frame()
             self._sync_camera_elements()
             self._sync_nogo_zone_elements()
@@ -1254,32 +1245,36 @@ class WorkSurface(WorldSurface):
             self._sync_camera_elements()
             return
 
-        # Canvas shows full machine bed
-        width_mm, height_mm = self.machine.axis_extents
+        # Canvas shows full machine bed in PANEL presentation
+        view = self._machine_panel
+        width_mm, height_mm = view.extents
 
         logger.debug(
             f"Resetting view for machine '{self.machine.name}' "
             f"with axis_extents=({width_mm}, {height_mm}), "
-            f"x_right={self.machine.x_axis_right}, "
-            f"y_down={self.machine.y_axis_down}, "
-            f"reverse_x={self.machine.reverse_x_axis}, "
-            f"reverse_y={self.machine.reverse_y_axis}"
+            f"x_right={view.x_axis_right}, "
+            f"y_down={view.y_axis_down}, "
+            f"x_negative={view.x_axis_negative}, "
+            f"y_negative={view.y_axis_negative}"
         )
         self._tracked_axis_extents = self.machine.axis_extents
         self.set_size(float(width_mm), float(height_mm))
-        ml, mt, mr, mb = self.machine.work_margins
+        ml, mt, mr, mb = view.margins
         self._axis_renderer.set_width_mm(float(width_mm))
         self._axis_renderer.set_height_mm(float(height_mm))
         self._axis_renderer.set_margins_mm(
             float(ml), float(mt), float(mr), float(mb)
         )
-        self._axis_renderer.set_x_axis_right(self.machine.x_axis_right)
-        self._axis_renderer.set_y_axis_down(self.machine.y_axis_down)
-        self._axis_renderer.set_x_axis_negative(self.machine.reverse_x_axis)
-        self._axis_renderer.set_y_axis_negative(self.machine.reverse_y_axis)
+        self._axis_renderer.set_x_axis_right(view.x_axis_right)
+        self._axis_renderer.set_y_axis_down(view.y_axis_down)
+        self._axis_renderer.set_x_axis_negative(view.x_axis_negative)
+        self._axis_renderer.set_y_axis_negative(view.y_axis_negative)
 
-        space = self.machine.get_coordinate_space()
-        self._work_origin_element.set_coordinate_space(space)
+        self._work_origin_element.set_axis_direction(
+            view.x_axis_right, view.y_axis_down
+        )
+
+        self._sync_layer_transforms()
 
         self._update_extent_frame()
 
@@ -1321,8 +1316,10 @@ class WorkSurface(WorldSurface):
     def _update_extent_frame_flat(self):
         """Updates extent frame and workarea for flat (non-rotary) mode."""
         assert self.machine
-        extent_w, extent_h = self.machine.axis_extents
-        ml, mt, mr, mb = self.machine.work_margins
+        panel = self.machine.panel
+        extent_w, extent_h = panel.extents
+        ml, mt, mr, mb = panel.margins
+        workarea_w, workarea_h = panel.workarea_size
 
         logger.debug(
             f"_update_extent_frame_flat: extents=({extent_w}, "
@@ -1341,8 +1338,6 @@ class WorkSurface(WorldSurface):
         self._extent_frame_element.set_pos(0.0, 0.0)
         self._extent_frame_element.set_visible(True)
 
-        workarea_w = extent_w - ml - mr
-        workarea_h = extent_h - mt - mb
         self._workarea_bg_element.set_size(
             float(workarea_w), float(workarea_h)
         )
@@ -1365,7 +1360,7 @@ class WorkSurface(WorldSurface):
         if default_rm:
             max_length = min(max_length, default_rm.max_workpiece_length)
 
-        if self.machine.x_axis_right:
+        if self._machine_panel.x_axis_right:
             width = min(origin_x, max_length)
             x = origin_x - width
         else:
@@ -1413,15 +1408,17 @@ class WorkSurface(WorldSurface):
             self._nogo_zone_elements.clear()
             return
 
-        current_uids = set(self.machine.nogo_zones.keys())
+        zones = self.machine.panel.nogo_zones
+        current_uids = set(zones.keys())
         existing_uids = set(self._nogo_zone_elements.keys())
 
         for uid in existing_uids - current_uids:
             self._nogo_zone_elements.pop(uid).remove()
 
-        for uid, zone in self.machine.nogo_zones.items():
+        for uid, zone in zones.items():
             if uid in self._nogo_zone_elements:
                 elem = self._nogo_zone_elements[uid]
+                elem.data = zone
                 elem._update_from_zone()
                 elem.set_visible(self._nogo_zones_visible and zone.enabled)
             else:
@@ -1535,19 +1532,27 @@ class WorkSurface(WorldSurface):
             if not selected_items:
                 return True  # Consume event but do nothing
 
+            # Arrow keys express the visual (PANEL) direction. Nudge
+            # applies the delta to the item's canonical WORLD matrix, so
+            # un-rotate the presented vector when the panel is rotated.
+            if self.machine:
+                move_x, move_y = self.machine.panel.panel_delta_to_world(
+                    move_x, move_y
+                )
+
             self.transform_initiated.send(self)
             self.editor.transform.nudge_items(selected_items, move_x, move_y)
             return True
 
         return False
 
-    def get_active_workpiece(self) -> Optional[WorkPiece]:
+    def get_active_workpiece(self) -> WorkPiece | None:
         active_elem = self.get_active_element()
         if active_elem and isinstance(active_elem.data, WorkPiece):
             return active_elem.data
         return None
 
-    def get_selected_workpieces(self) -> List[WorkPiece]:
+    def get_selected_workpieces(self) -> list[WorkPiece]:
         all_wps = []
         for elem in self.get_selected_elements():
             # Check for the element's direct data
@@ -1559,6 +1564,46 @@ class WorkSurface(WorldSurface):
         # Return a unique list
         return list(dict.fromkeys(all_wps))
 
+    def get_selection_bounds(
+        self,
+    ) -> tuple[float, float, float, float] | None:
+        """
+        Get the bounding box of selected items or workarea bounds.
+
+        Returns:
+            A tuple (min_x, min_y, max_x, max_y) in world coordinates,
+            or None if there is no machine configured.
+        """
+        selected_elements = self.get_selected_elements()
+
+        if selected_elements:
+            workpieces = []
+            for elem in selected_elements:
+                if isinstance(elem.data, WorkPiece):
+                    workpieces.append(elem.data)
+                elif isinstance(elem.data, Group):
+                    workpieces.extend(elem.data.get_descendants(WorkPiece))
+
+            bboxes = []
+            for wp in workpieces:
+                bbox = wp.get_geometry_world_bbox()
+                if bbox is not None:
+                    bboxes.append(bbox)
+
+            if bboxes:
+                min_x = min(b[0] for b in bboxes)
+                min_y = min(b[1] for b in bboxes)
+                max_x = max(b[2] for b in bboxes)
+                max_y = max(b[3] for b in bboxes)
+                return (min_x, min_y, max_x, max_y)
+
+        machine = get_context().machine
+        if not machine:
+            return None
+
+        wx, wy, w, h = machine.panel.get_workarea_world_rect()
+        return (wx, wy, wx + w, wy + h)
+
     def get_selected_items(self) -> Sequence[DocItem]:
         return [
             elem.data
@@ -1566,7 +1611,7 @@ class WorkSurface(WorldSurface):
             if isinstance(elem.data, DocItem)
         ]
 
-    def get_selected_top_level_items(self) -> List[DocItem]:
+    def get_selected_top_level_items(self) -> list[DocItem]:
         """
         Returns a list of the highest-level selected DocItems.
 

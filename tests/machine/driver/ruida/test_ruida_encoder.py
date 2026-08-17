@@ -10,8 +10,6 @@ Tests cover:
 - Serialization of EncodedOutput
 """
 
-import base64
-
 import pytest
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode
@@ -75,8 +73,8 @@ class TestRuidaEncoderBasics:
 
         assert result.driver_data["binary"] == b""
         assert result.text == ""
-        assert result.op_map.op_to_machine_code == {}
-        assert result.op_map.machine_code_to_op == {}
+        assert result.op_map.op_count == 0
+        assert result.op_map.line_count == 0
 
     def test_binary_in_driver_data(self, encoder, mock_machine, doc):
         """Binary output should be stored in driver_data['binary']."""
@@ -103,7 +101,7 @@ class TestRuidaEncoderBasics:
         result2 = encoder.encode(ops2, mock_machine, doc)
 
         assert encoder.power == 0.8
-        assert result2.op_map.op_to_machine_code == {0: [0]}
+        assert result2.op_map.span_for_op(0) == (0, 1)
 
 
 class TestSetPowerCommand:
@@ -174,7 +172,7 @@ class TestSetCutSpeedCommand:
         result = encoder.encode(ops, mock_machine, doc)
 
         binary = result.driver_data["binary"]
-        speed_um = int(100 * 1000)
+        speed_um = 100 * 1000
         assert binary == b"\xc9\x02" + encode35(speed_um)
         assert "SPEED 100.0" in result.text
 
@@ -185,7 +183,7 @@ class TestSetCutSpeedCommand:
         result = encoder.encode(ops, mock_machine, doc)
 
         binary = result.driver_data["binary"]
-        speed_um = int(50 * 1000)
+        speed_um = 50 * 1000
         assert binary == b"\xc9\x02" + encode35(speed_um)
         assert "SPEED 50.0" in result.text
 
@@ -210,7 +208,7 @@ class TestSetTravelSpeedCommand:
         result = encoder.encode(ops, mock_machine, doc)
 
         binary = result.driver_data["binary"]
-        speed_um = int(500 * 1000)
+        speed_um = 500 * 1000
         assert b"\xc9\x02" + encode35(speed_um) in binary
         assert "TRAVEL_SPEED 500.0" in result.text
 
@@ -452,6 +450,21 @@ class TestJobMarkers:
         assert result.driver_data["binary"] == b"\xd8\x10"
         assert "; Job Start - Ref Point: MACHINE" in result.text
 
+    def test_job_start_falls_back_for_named_wcs(
+        self, encoder, mock_machine, doc
+    ):
+        """
+        A named/absolute WCS (the default ``G54``) is not a Ruida ref
+        point; job start must fall back to MACHINE instead of failing.
+        """
+        mock_machine.active_wcs = "G54"
+        ops = Ops()
+        ops.job_start()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        assert result.driver_data["binary"] == b"\xd8\x10"
+        assert "; Job Start - Ref Point: MACHINE" in result.text
+
     def test_job_end(self, encoder, mock_machine, doc):
         """Job end should emit EOF marker."""
         ops = Ops()
@@ -531,9 +544,8 @@ class TestOpMapGeneration:
         ops.set_power(0.5)
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert 0 in result.op_map.op_to_machine_code
-        assert result.op_map.op_to_machine_code[0] == [0]
-        assert result.op_map.machine_code_to_op[0] == 0
+        assert result.op_map.span_for_op(0) == (0, 1)
+        assert result.op_map.op_for_line(0) == 0
 
     def test_multi_line_command_mapping(self, encoder, mock_machine, doc):
         """Command producing multiple lines should map correctly."""
@@ -542,9 +554,9 @@ class TestOpMapGeneration:
         ops.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert 0 in result.op_map.op_to_machine_code
-        assert 1 in result.op_map.op_to_machine_code
-        assert len(result.op_map.op_to_machine_code[0]) >= 1
+        assert result.op_map.op_count == 2
+        assert result.op_map.span_for_op(0)[1] >= 1
+        assert result.op_map.span_for_op(1)[1] >= 1
 
     def test_marker_command_has_text_mapping(self, encoder, mock_machine, doc):
         """Marker commands with text output should map to line."""
@@ -552,8 +564,8 @@ class TestOpMapGeneration:
         ops.job_start()
         result = encoder.encode(ops, mock_machine, doc)
 
-        # Job start produces a text line, so op_map should have [0]
-        assert result.op_map.op_to_machine_code[0] == [0]
+        # Job start produces a text line, so op_map should have (0, 1)
+        assert result.op_map.span_for_op(0) == (0, 1)
 
     def test_sequential_commands_mapping(self, encoder, mock_machine, doc):
         """Sequential commands should have sequential line numbers."""
@@ -563,70 +575,12 @@ class TestOpMapGeneration:
         ops.move_to(0.0, 0.0, 0.0)
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert result.op_map.op_to_machine_code[0] == [0]
-        assert result.op_map.op_to_machine_code[1] == [1]
-        assert result.op_map.op_to_machine_code[2] == [2]
+        assert result.op_map.span_for_op(0) == (0, 1)
+        assert result.op_map.span_for_op(1) == (1, 1)
+        assert result.op_map.span_for_op(2) == (2, 1)
 
         for line_num in range(3):
-            assert result.op_map.machine_code_to_op[line_num] == line_num
-
-
-class TestEncodedOutputSerialization:
-    """Tests for EncodedOutput serialization with binary data."""
-
-    def test_to_dict_contains_base64_binary(self, encoder, mock_machine, doc):
-        """Binary in driver_data should be base64 encoded in to_dict()."""
-        ops = Ops()
-        ops.set_power(0.5)
-        result = encoder.encode(ops, mock_machine, doc)
-
-        data = result.to_dict()
-
-        assert "driver_data" in data
-        assert "binary" in data["driver_data"]
-        binary_entry = data["driver_data"]["binary"]
-        assert binary_entry["__type__"] == "bytes"
-
-        expected_b64 = base64.b64encode(result.driver_data["binary"]).decode(
-            "ascii"
-        )
-        assert binary_entry["data"] == expected_b64
-
-    def test_roundtrip_serialization(self, encoder, mock_machine, doc):
-        """EncodedOutput should survive dict roundtrip."""
-        ops = Ops()
-        ops.set_power(0.75)
-        ops.move_to(100.0, 50.0, 0.0)
-        ops.line_to(150.0, 100.0, 0.0)
-        original = encoder.encode(ops, mock_machine, doc)
-
-        data = original.to_dict()
-        restored = EncodedOutput.from_dict(data)
-
-        assert restored.text == original.text
-        assert restored.driver_data["binary"] == original.driver_data["binary"]
-        assert (
-            restored.op_map.op_to_machine_code
-            == original.op_map.op_to_machine_code
-        )
-        assert (
-            restored.op_map.machine_code_to_op
-            == original.op_map.machine_code_to_op
-        )
-
-    def test_json_roundtrip(self, encoder, mock_machine, doc):
-        """EncodedOutput should survive JSON roundtrip."""
-        ops = Ops()
-        ops.set_power(0.5)
-        ops.set_air_assist(AirAssistMode.ON)
-        ops.move_to(10.0, 20.0, 0.0)
-        original = encoder.encode(ops, mock_machine, doc)
-
-        json_str = original.to_json()
-        restored = EncodedOutput.from_json(json_str)
-
-        assert restored.text == original.text
-        assert restored.driver_data["binary"] == original.driver_data["binary"]
+            assert result.op_map.op_for_line(line_num) == line_num
 
 
 class TestComplexJobs:
@@ -692,10 +646,10 @@ class TestComplexJobs:
         lines = result.text.split("\n")
         assert "AIR_ASSIST ON" in lines[0]
         on_idx = lines.index(
-            [line for line in lines if "AIR_ASSIST ON" in line][0]
+            next(line for line in lines if "AIR_ASSIST ON" in line)
         )
         off_idx = lines.index(
-            [line for line in lines if "AIR_ASSIST OFF" in line][0]
+            next(line for line in lines if "AIR_ASSIST OFF" in line)
         )
         assert on_idx < off_idx
 

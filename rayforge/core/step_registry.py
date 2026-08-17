@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .capability import MachineCapability
     from .step import Step
 
 
@@ -14,11 +16,11 @@ class StepRegistry:
     """
 
     def __init__(self):
-        self._steps: Dict[str, Type["Step"]] = {}
-        self._addon_items: Dict[str, Set[str]] = {}
+        self._steps: dict[str, type[Step]] = {}
+        self._addon_items: dict[str, set[str]] = {}
 
     def register(
-        self, step_class: Type["Step"], addon_name: Optional[str] = None
+        self, step_class: type["Step"], addon_name: str | None = None
     ) -> None:
         """
         Register a step class.
@@ -48,7 +50,7 @@ class StepRegistry:
         """
         if name in self._steps:
             del self._steps[name]
-            for _, items in self._addon_items.items():
+            for items in self._addon_items.values():
                 items.discard(name)
             return True
         return False
@@ -73,7 +75,7 @@ class StepRegistry:
                 count += 1
         return count
 
-    def get(self, name: str) -> Optional[Type["Step"]]:
+    def get(self, name: str) -> type["Step"] | None:
         """
         Look up a step class by name.
 
@@ -83,15 +85,31 @@ class StepRegistry:
         Returns:
             The step class, or None if not found.
         """
-        # Ensure addons are loaded in worker processes so the registry
-        # is populated before we try to look up step classes.
-        from rayforge.worker_init import ensure_addons_loaded
-
-        ensure_addons_loaded()
-
         return self._steps.get(name)
 
-    def get_by_typelabel(self, typelabel: str) -> Optional[Type["Step"]]:
+    def progress_label(self, assembler_name: str) -> str | None:
+        """
+        Look up the UI label for a raygeo assembler progress name.
+
+        The label is the ``TYPELABEL`` of the registered step whose
+        ``ASSEMBLER_NAME`` matches.
+
+        Args:
+            assembler_name: A raygeo assembler name (the prefix of the
+                ``"{name}: assemble"`` batch progress message).
+
+        Returns:
+            The UI label, or None when no registered step declares that
+            assembler name.
+        """
+        for step_class in self._steps.values():
+            if step_class.ASSEMBLER_NAME != assembler_name:
+                continue
+            if step_class.TYPELABEL:
+                return step_class.TYPELABEL
+        return None
+
+    def get_by_typelabel(self, typelabel: str) -> type["Step"] | None:
         """
         Look up a step class by its TYPELABEL attribute.
 
@@ -104,34 +122,42 @@ class StepRegistry:
         Returns:
             The step class, or None if not found.
         """
-        # Ensure addons are loaded in worker processes so the registry
-        # is populated before we try to look up step classes.
-        from rayforge.worker_init import ensure_addons_loaded
-
-        ensure_addons_loaded()
-
         for step_class in self._steps.values():
             class_typelabel = getattr(step_class, "TYPELABEL", None)
             if class_typelabel == typelabel:
                 return step_class
         return None
 
-    def get_factories(self) -> List[Callable]:
+    def get_factories(
+        self,
+        machine_caps: frozenset["MachineCapability"] | None = None,
+    ) -> list[Callable]:
         """
         Return all registered step factory methods.
+
+        Args:
+            machine_caps: Optional set of machine capabilities. When
+                given, only steps whose REQUIRED_MACHINE_CAPS are a
+                subset of the machine capabilities are included.
+                When None, no filtering is applied.
 
         Returns:
             List of callable `create` class methods from registered
             step classes, excluding hidden steps.
         """
-        factories: List[Callable] = []
+        factories: list[Callable] = []
         for cls in self._steps.values():
             if cls.HIDDEN:
+                continue
+            if (
+                machine_caps is not None
+                and not cls.REQUIRED_MACHINE_CAPS.issubset(machine_caps)
+            ):
                 continue
             factories.append(cls.create)
         return factories
 
-    def all_steps(self) -> Dict[str, Type["Step"]]:
+    def all_steps(self) -> dict[str, type["Step"]]:
         """
         Return a copy of all registered steps.
 

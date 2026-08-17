@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 from gi.repository import Gio, GLib, Gtk
 
@@ -23,6 +24,7 @@ from .doceditor.stock_properties_dialog import StockPropertiesDialog
 from .shared.keyboard import PRIMARY_ACCEL
 
 if TYPE_CHECKING:
+    from ..core.doc import Doc
     from .mainwindow import MainWindow
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,7 @@ SHORTCUTS = {
     "win.paste": f"{PRIMARY_ACCEL}v",
     "win.select_all": f"{PRIMARY_ACCEL}a",
     "win.duplicate": f"{PRIMARY_ACCEL}d",
+    "win.rename-item": "F2",
     "win.remove": "Delete",
     "win.clear": f"{PRIMARY_ACCEL}<Shift>Delete",
     "win.settings": f"{PRIMARY_ACCEL}comma",
@@ -102,10 +105,10 @@ class ActionExtensionRegistry:
     """
 
     def __init__(self):
-        self._setup_handlers: List[ActionSetupHandler] = []
-        self._state_update_handlers: List[ActionStateUpdateHandler] = []
-        self._setup_addon_map: Dict[str, str] = {}
-        self._state_update_addon_map: Dict[str, str] = {}
+        self._setup_handlers: list[ActionSetupHandler] = []
+        self._state_update_handlers: list[ActionStateUpdateHandler] = []
+        self._setup_addon_map: dict[str, str] = {}
+        self._state_update_addon_map: dict[str, str] = {}
 
     def register_setup(self, handler: ActionSetupHandler, addon_name: str):
         """Register a handler to be called during action setup."""
@@ -189,10 +192,9 @@ class ActionExtensionRegistry:
         for handler in self._setup_handlers:
             try:
                 handler(action_manager)
-            except Exception as e:
-                logger.error(
-                    f"Error in action setup handler {handler.__name__}: {e}",
-                    exc_info=True,
+            except Exception:
+                logger.exception(
+                    f"Error in action setup handler {handler.__name__}"
                 )
 
     def invoke_state_update_handlers(self, action_manager: "ActionManager"):
@@ -200,11 +202,9 @@ class ActionExtensionRegistry:
         for handler in self._state_update_handlers:
             try:
                 handler(action_manager)
-            except Exception as e:
-                logger.error(
-                    f"Error in action state update handler "
-                    f"{handler.__name__}: {e}",
-                    exc_info=True,
+            except Exception:
+                logger.exception(
+                    f"Error in action state update handler {handler.__name__}"
                 )
 
 
@@ -216,18 +216,42 @@ class ActionManager:
 
     def __init__(self, win: "MainWindow"):
         self.win = win
-        self.actions: Dict[str, Gio.SimpleAction] = {}
-        self._shortcut_controller: Optional[Gtk.ShortcutController] = None
-        self._layout_shortcuts: List[Gtk.Shortcut] = []
+        self.actions: dict[str, Gio.SimpleAction] = {}
+        self._shortcut_controller: Gtk.ShortcutController | None = None
+        self._layout_shortcuts: list[Gtk.Shortcut] = []
         # A convenient alias to the central controller
         self.editor = self.win.doc_editor
         self.doc = self.editor.doc
 
         # Connect to doc signals to update action states
-        self.doc.descendant_added.connect(self.update_action_states)
-        self.doc.descendant_removed.connect(self.update_action_states)
+        self._doc_signal_doc: Doc | None = None
+        self._connect_doc_signals(self.doc)
         self.win.surface.selection_changed.connect(self.update_action_states)
         self.win.surface.context_changed.connect(self.update_action_states)
+
+        # Keep the action states in sync when a new document is loaded.
+        self.editor.document_changed.connect(self._on_document_changed)
+
+    def _connect_doc_signals(self, doc: "Doc"):
+        """Connects doc signal handlers that refresh action states."""
+        self._doc_signal_doc = doc
+        doc.descendant_added.connect(self.update_action_states)
+        doc.descendant_removed.connect(self.update_action_states)
+
+    def _disconnect_doc_signals(self):
+        """Disconnects the doc signal handlers of the previous document."""
+        doc = self._doc_signal_doc
+        if doc is not None:
+            doc.descendant_added.disconnect(self.update_action_states)
+            doc.descendant_removed.disconnect(self.update_action_states)
+            self._doc_signal_doc = None
+
+    def _on_document_changed(self, sender):
+        """Re-targets the current doc when a new document is loaded."""
+        self._disconnect_doc_signals()
+        self.doc = self.editor.doc
+        self._connect_doc_signals(self.doc)
+        self.update_action_states()
 
     def register_actions(self):
         """Creates all Gio.SimpleActions and adds them to the window."""
@@ -292,6 +316,21 @@ class ActionManager:
             self.win.on_show_models_state_change,
             GLib.Variant.new_boolean(cv.show_models),
         )
+        self._add_stateful_action(
+            "show_ops_underlay",
+            self.win.on_show_ops_underlay_state_change,
+            GLib.Variant.new_boolean(cv.show_ops_underlay),
+        )
+        self._add_stateful_action(
+            "show_workpiece_image",
+            self.win.on_show_workpiece_image_state_change,
+            GLib.Variant.new_boolean(cv.show_workpiece_image),
+        )
+        self._add_stateful_action(
+            "show_stock",
+            self.win.on_show_stock_state_change,
+            GLib.Variant.new_boolean(cv.show_stock),
+        )
         config = get_context().config
         self._add_stateful_action(
             "toggle_bottom_panel",
@@ -338,6 +377,7 @@ class ActionManager:
         self._add_action("paste", self.win.on_paste_requested)
         self._add_action("select_all", self.win.on_select_all)
         self._add_action("duplicate", self.win.on_menu_duplicate)
+        self._add_action("rename-item", self.win.on_menu_rename)
         self._add_action("remove", self.win.on_menu_remove)
         self._add_action("clear", self.win.on_clear_clicked)
 
@@ -852,7 +892,7 @@ class ActionManager:
         self,
         name: str,
         callback: Callable,
-        param: Optional[GLib.VariantType] = None,
+        param: GLib.VariantType | None = None,
     ):
         """Helper to create, register, and store a simple Gio.SimpleAction."""
         action = Gio.SimpleAction.new(name, param)

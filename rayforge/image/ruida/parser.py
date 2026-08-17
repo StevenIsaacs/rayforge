@@ -1,5 +1,5 @@
 import struct
-from typing import Callable, Dict, Tuple, Union
+from collections.abc import Callable
 
 from ...machine.driver.ruida.ruida_util import (
     UM_PER_MM,
@@ -14,13 +14,11 @@ from .job import RuidaGeoCommand, RuidaJob, RuidaLayer
 # A type alias for a command handler, defined at the module level for
 # correct type checking. A handler is a tuple of:
 # (payload_length, handler_function).
-HandlerType = Tuple[int, Callable[[RuidaJob, bytes], None]]
+HandlerType = tuple[int, Callable[[RuidaJob, bytes], None]]
 
 
 class RuidaParseError(Exception):
     """Custom exception for errors during Ruida file parsing."""
-
-    pass
 
 
 class RuidaParser:
@@ -50,9 +48,9 @@ class RuidaParser:
 
         # The command table maps a command byte to either a handler
         # or a nested dictionary of sub-command bytes to handlers.
-        self.COMMAND_TABLE: Dict[
-            int, Union[HandlerType, Dict[int, HandlerType]]
-        ] = self._build_command_table()
+        self.COMMAND_TABLE: dict[int, HandlerType | dict[int, HandlerType]] = (
+            self._build_command_table()
+        )
 
     def parse(self) -> RuidaJob:
         """

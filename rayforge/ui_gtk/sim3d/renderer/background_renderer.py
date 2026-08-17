@@ -3,12 +3,13 @@ A renderer for a gradient background that gives a raytraced studio appearance.
 """
 
 import logging
-from typing import Optional
 
 import numpy as np
 from OpenGL import GL
 
-from ..gl_utils import BaseRenderer, RenderContext, Shader
+from ..gl_utils import ShaderSet
+from ..render_context import RenderContext
+from .base import BaseRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -22,23 +23,12 @@ class BackgroundRenderer(BaseRenderer):
         self.vbo: int = 0
         self._bg_color = (0.11, 0.12, 0.14)
         self._bg_color_light = (0.18, 0.20, 0.23)
-        self._shader: Optional[Shader] = None
 
     def set_colors(self, bg_color: tuple, bg_color_light: tuple):
         self._bg_color = bg_color
         self._bg_color_light = bg_color_light
 
     def init_gl(self):
-        from ..shaders import (
-            BACKGROUND_FRAGMENT_SHADER,
-            BACKGROUND_VERTEX_SHADER,
-        )
-
-        self._shader = Shader(
-            BACKGROUND_VERTEX_SHADER, BACKGROUND_FRAGMENT_SHADER
-        )
-        logger.info("Background gradient shader compiled successfully")
-
         vertices = np.array(
             [
                 -1,
@@ -71,23 +61,19 @@ class BackgroundRenderer(BaseRenderer):
         GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
 
-    def _cleanup_self(self):
-        if self._shader:
-            self._shader.cleanup()
-            self._shader = None
+    def prepare(self, ctx: RenderContext) -> None:
+        """No per-frame state to prepare."""
 
-    def render(self, ctx: RenderContext):
-        if not self._shader or not self.vao:
+    def render(self, ctx: RenderContext, shaders: ShaderSet, **kwargs):
+        shader = shaders.background
+        if not shader or not self.vao:
             return
 
-        self._shader.use()
-        self._shader.set_vec3("uBgColor", self._bg_color)
-        self._shader.set_vec3("uBgColorLight", self._bg_color_light)
+        shader.use()
+        shader.set_vec3("uBgColor", self._bg_color)
+        shader.set_vec3("uBgColorLight", self._bg_color_light)
 
         GL.glDisable(GL.GL_DEPTH_TEST)
         GL.glDisable(GL.GL_BLEND)
         GL.glBindVertexArray(self.vao)
         GL.glDrawArrays(GL.GL_TRIANGLE_STRIP, 0, 4)
-        GL.glBindVertexArray(0)
-        GL.glEnable(GL.GL_DEPTH_TEST)
-        GL.glEnable(GL.GL_BLEND)

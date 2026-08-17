@@ -4,7 +4,7 @@ description: "Verwalte Maschinen in Rayforge — füge sie hinzu, konfiguriere, 
 
 # Maschinen
 
-![Maschinen-Einstellungen](/screenshots/application-machines.png)
+![Maschinen-Einstellungen](/screenshots/app-settings-machines.png)
 
 Die Maschinen-Seite in den Anwendungseinstellungen zeigt eine Liste aller
 konfigurierten Maschinen. Jeder Eintrag zeigt den Maschinennamen und hat
@@ -24,9 +24,10 @@ mit einem Häkchen markiert.
 
 Alternativ:
 
-- Klicke auf **Other Device…**, um den
-  [Konfigurations-Assistenten](../machine/config-wizard.md) zu starten, der
-  Einstellungen automatisch von einem verbundenen Gerät erkennt
+- Klicke auf **Device Not Listed**, um den
+  [Konfigurations-Assistenten](../getting-started/first-time-setup.md) zu
+  starten, der dich Schritt für Schritt durch die Konfiguration einer
+  Maschine führt
 - Klicke auf **Import from File…**, um eine Maschine aus einem zuvor
   exportierten Profil oder aus einem LightBurn-Geräteprofil (.lbdev) zu
   importieren. LightBurn-Profile enthalten Kamerakalibrierung und

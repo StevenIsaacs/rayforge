@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from ..entities import Arc, Ellipse, TextBoxEntity
 from .base import SketchChangeCommand
@@ -19,11 +20,11 @@ class AddItemsCommand(SketchChangeCommand):
 
     def __init__(
         self,
-        sketch: "Sketch",
+        sketch: Sketch,
         name: str,
-        points: Optional[Sequence["Point"]] = None,
-        entities: Optional[Sequence["Entity"]] = None,
-        constraints: Optional[Sequence["Constraint"]] = None,
+        points: Sequence[Point] | None = None,
+        entities: Sequence[Entity] | None = None,
+        constraints: Sequence[Constraint] | None = None,
     ):
         super().__init__(sketch, name)
         self.points = list(points) if points else []
@@ -33,7 +34,7 @@ class AddItemsCommand(SketchChangeCommand):
     def _do_execute(self) -> None:
         registry = self.sketch.registry
         new_points = []
-        id_map: Dict[int, int] = {}  # Map old temp IDs to new final IDs
+        id_map: dict[int, int] = {}  # Map old temp IDs to new final IDs
 
         for p in self.points:
             old_id = p.id
@@ -101,11 +102,11 @@ class RemoveItemsCommand(SketchChangeCommand):
 
     def __init__(
         self,
-        sketch: "Sketch",
+        sketch: Sketch,
         name: str,
-        points: Optional[List["Point"]] = None,
-        entities: Optional[Sequence["Entity"]] = None,
-        constraints: Optional[List["Constraint"]] = None,
+        points: list[Point] | None = None,
+        entities: Sequence[Entity] | None = None,
+        constraints: list[Constraint] | None = None,
     ):
         super().__init__(sketch, name)
         self.points = points or []
@@ -115,23 +116,24 @@ class RemoveItemsCommand(SketchChangeCommand):
     @staticmethod
     def calculate_dependencies(
         sketch: Sketch, selection
-    ) -> Tuple[List["Point"], List["Entity"], List["Constraint"]]:
+    ) -> tuple[list[Point], list[Entity], list[Constraint]]:
         """
         Calculates the full set of items to be deleted based on the current
         selection, including dependent items.
         """
-        to_delete_constraints: List[Constraint] = []
+        to_delete_constraints: list[Constraint] = []
         to_delete_entity_ids = set(selection.entity_ids)
         to_delete_point_ids = set(selection.point_ids)
 
         # 1. Selected Constraints
-        if selection.constraint_idx is not None:
-            if sketch.constraints and (
-                0 <= selection.constraint_idx < len(sketch.constraints)
-            ):
-                to_delete_constraints.append(
-                    sketch.constraints[selection.constraint_idx]
-                )
+        if (
+            selection.constraint_idx is not None
+            and sketch.constraints
+            and (0 <= selection.constraint_idx < len(sketch.constraints))
+        ):
+            to_delete_constraints.append(
+                sketch.constraints[selection.constraint_idx]
+            )
 
         # Iteratively find all dependencies until no new items are added
         while True:
@@ -164,7 +166,7 @@ class RemoveItemsCommand(SketchChangeCommand):
             for e in sketch.registry.entities:
                 if e.id in to_delete_entity_ids:
                     continue
-                p_ids: List[int] = e.get_point_ids()
+                p_ids: list[int] = e.get_point_ids()
                 if any(pid in to_delete_point_ids for pid in p_ids):
                     to_delete_entity_ids.add(e.id)
 
@@ -202,22 +204,21 @@ class RemoveItemsCommand(SketchChangeCommand):
                         set1 = {constr.p1, constr.p2}
                         set2 = {constr.p3, constr.p4}
                         target1, target2 = {c, s}, {c, end}
-                        if (set1 == target1 and set2 == target2) or (
-                            set1 == target2 and set2 == target1
-                        ):
-                            if constr not in to_delete_constraints:
-                                to_delete_constraints.append(constr)
+                        if (
+                            (set1 == target1 and set2 == target2)
+                            or (set1 == target2 and set2 == target1)
+                        ) and constr not in to_delete_constraints:
+                            to_delete_constraints.append(constr)
 
         # 4. Cleanup Constraints (Dependencies)
         for constr in sketch.constraints:
             if constr in to_delete_constraints:
                 continue
-            if constr.depends_on_points(
-                to_delete_point_ids
-            ) or constr.depends_on_entities(to_delete_entity_ids):
-                if constr not in to_delete_constraints:
-                    to_delete_constraints.append(constr)
-
+            if (
+                constr.depends_on_points(to_delete_point_ids)
+                or constr.depends_on_entities(to_delete_entity_ids)
+            ) and constr not in to_delete_constraints:
+                to_delete_constraints.append(constr)
         # 5. Get actual objects from IDs
         final_points = [
             p

@@ -144,16 +144,16 @@ class TestAxisRendererLayout:
         """Test that the content area is calculated correctly."""
         # For a 400x300 world in an 800x600 widget, the aspect ratios match.
         # We expect the content area to fill the available space minus padding.
-        x, y, w, h = renderer.get_content_layout(WIDGET_W, WIDGET_H)
+        _x, _y, w, h = renderer.get_content_layout(WIDGET_W, WIDGET_H)
         assert w > 0 and h > 0
         # Aspect ratio should be preserved
         assert np.isclose(w / h, WORLD_W / WORLD_H)
 
     def test_font_size_affects_layout(self, renderer):
         """Test that changing font size affects the layout calculations."""
-        x1, y1, w1, h1 = renderer.get_content_layout(WIDGET_W, WIDGET_H)
+        _x1, _y1, w1, h1 = renderer.get_content_layout(WIDGET_W, WIDGET_H)
         renderer.set_label_font_size(20.0)
-        x2, y2, w2, h2 = renderer.get_content_layout(WIDGET_W, WIDGET_H)
+        _x2, _y2, w2, h2 = renderer.get_content_layout(WIDGET_W, WIDGET_H)
         # Larger font should result in smaller content area
         assert w2 < w1
         assert h2 < h1
@@ -187,6 +187,25 @@ class TestAxisRendererLayout:
         renderer.min_grid_spacing_px = 50.0
         adaptive_size = renderer._get_adaptive_grid_size(pixels_per_mm)
         assert adaptive_size == expected_grid_size
+
+    @pytest.mark.parametrize(
+        "pixels_per_mm, expected_inches",
+        [
+            (0.1, 20.0),  # Zoomed way out, target ~19.7in, nearest 20in
+            (1.0, 2.0),  # Zoomed out, target ~1.97in, nearest 2in
+            (5.0, 0.5),  # Normal view, target ~0.39in, nearest 0.5in
+            (12.0, 0.2),  # Zoomed in, target ~0.16in, nearest 0.2in
+            (80.0, 0.05),  # Zoomed way in, target ~0.025in, nearest 0.05in
+        ],
+    )
+    def test_get_adaptive_grid_size_inches(
+        self, renderer, pixels_per_mm, expected_inches
+    ):
+        """Grid spacing snaps to nice inch values when preferred unit is in."""
+        renderer.min_grid_spacing_px = 50.0
+        renderer.grid_unit_factor = 25.4  # mm per inch
+        adaptive_size = renderer._get_adaptive_grid_size(pixels_per_mm)
+        assert adaptive_size == pytest.approx(expected_inches * 25.4)
 
 
 @pytest.mark.ui
@@ -257,14 +276,12 @@ class TestAxisRendererDrawing:
                 and current_call[1][0] == "20"
                 and i > 0
             ):
-                prev_call = calls[i - 1]
-                if prev_call[0] == "move_to":
-                    # prev_call is ('move_to', (x, y))
-                    if np.isclose(
-                        prev_call[1][0], 20.0 - 5.0
-                    ):  # 20.0 - text_width/2
-                        found_label = True
-                        break
+                prev_call = calls[i - 1]  # prev_call is ('move_to', (x, y))
+                if prev_call[0] == "move_to" and np.isclose(
+                    prev_call[1][0], 20.0 - 5.0
+                ):  # 20.0 - text_width/2
+                    found_label = True
+                    break
         assert found_label, 'Label "20" not found at the correct X position'
 
     def test_draw_labels_with_offset(
@@ -340,8 +357,29 @@ class TestAxisRendererDrawing:
         renderer._draw_axis_and_labels(
             mock_context_with_font_size, transform, 10.0, (0, 0, 0)
         )
-        # Verify custom font size is set
+        # Verify custom font size is applied
         assert mock_context_with_font_size.font_size == 16.0
+
+    def test_draw_labels_in_preferred_unit(self, mock_context_with_font_size):
+        """Labels are shown in the user's preferred length unit."""
+        r = AxisRenderer(width_mm=400.0, height_mm=300.0)
+        r.grid_unit_factor = 25.4  # mm per inch
+        transform = Matrix.identity()
+        r._draw_axis_and_labels(
+            mock_context_with_font_size, transform, 25.4, (0, 0, 0)
+        )
+
+        calls = mock_context_with_font_size.method_calls
+        labels = [
+            c[1][0]
+            for c in calls
+            if c[0] == "show_text" and c[1][0] not in ("0", "0.0")
+        ]
+        # 400mm bed is ~15.7 inches, so the largest inch label is 15.
+        numeric = [int(x) for x in labels if x.lstrip("-").isdigit()]
+        assert "1" in labels  # one inch mark is drawn
+        assert max(numeric) == 15
+        assert all(1 <= v <= 15 for v in numeric)
 
 
 @pytest.mark.ui

@@ -1,6 +1,6 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, ClassVar, Union
 
 from ...core.commands import AddItemsCommand
 from ...core.constraints import VerticalConstraint
@@ -16,12 +16,12 @@ logger = logging.getLogger(__name__)
 class VerticalConstraintTool(SketchTool):
     ICON = "sketch-constrain-vertical-symbolic"
     LABEL = _("Vertical")
-    SHORTCUTS = ["v"]
+    SHORTCUTS: ClassVar[list[str]] = ["v"]
 
     def is_available(
         self,
-        target: Optional[Union[Point, Entity, "Constraint"]],
-        target_type: Optional[str],
+        target: Union[Point, Entity, "Constraint"] | None,
+        target_type: str | None,
     ) -> bool:
         return VerticalConstraint.can_apply_to(
             self.element.selection, self.element.sketch

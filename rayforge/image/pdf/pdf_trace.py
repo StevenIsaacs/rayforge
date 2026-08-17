@@ -3,7 +3,7 @@ import logging
 import warnings
 from gettext import gettext as _
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import ClassVar
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
@@ -44,13 +44,13 @@ class PdfTraceImporter(Importer):
     label = "PDF (Trace Strategy)"
     mime_types = ()
     extensions = ()
-    features = {ImporterFeature.BITMAP_TRACING}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.BITMAP_TRACING}
     _TRACE_PPM = 24.0
     _MAX_RENDER_DIM = 16384
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self._image: Optional[pyvips.Image] = None
+        self._image: pyvips.Image | None = None
 
     def scan(self) -> ImportManifest:
         try:
@@ -73,17 +73,17 @@ class PdfTraceImporter(Importer):
             )
         except PdfReadError as e:
             logger.warning(f"PDF scan failed for {self.source_file.name}: {e}")
-            self.add_error(_(f"Could not read PDF: {e}"))
+            self.add_error(_("Could not read PDF: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
         except Exception as e:
-            logger.error(
-                f"Unexpected error during PDF scan for "
-                f"{self.source_file.name}: {e}",
-                exc_info=True,
+            logger.exception(
+                f"Unexpected error during PDF scan for {self.source_file.name}"
             )
-            self.add_error(_(f"Unexpected error while scanning PDF: {e}"))
+            self.add_error(
+                _("Unexpected error while scanning PDF: {}").format(e)
+            )
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
@@ -137,16 +137,18 @@ class PdfTraceImporter(Importer):
             source_parse_result=parse_result,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         try:
             reader = PdfReader(io.BytesIO(self.raw_data))
             media_box = reader.pages[0].mediabox
             width_pt = float(media_box.width)
             height_pt = float(media_box.height)
             size_mm = (to_mm(width_pt, "pt"), to_mm(height_pt, "pt"))
-        except Exception as e:
+        except (PdfReadError, ValueError, TypeError, KeyError) as e:
             logger.error(f"Failed to read PDF size: {e}")
-            self.add_error(_(f"Failed to read PDF page dimensions: {e}"))
+            self.add_error(
+                _("Failed to read PDF page dimensions: {}").format(e)
+            )
             self._image = None
             return None
 
@@ -176,7 +178,7 @@ class PdfTraceImporter(Importer):
         document_bounds = (0.0, 0.0, float(render_w_px), float(render_h_px))
         native_unit_to_mm = 1.0 / px_per_mm
 
-        x, y, w, h = document_bounds
+        x, _y, w, h = document_bounds
         world_frame = (
             x * native_unit_to_mm,
             0.0,
@@ -214,7 +216,7 @@ class PdfTraceImporter(Importer):
 
     def _calculate_render_resolution(
         self, w_mm: float, h_mm: float
-    ) -> Tuple[int, int]:
+    ) -> tuple[int, int]:
         if w_mm <= 0 or h_mm <= 0:
             return 1, 1
 

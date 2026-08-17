@@ -1,14 +1,12 @@
 import logging
 import re
+from collections.abc import Iterable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Iterable,
     Literal,
     Optional,
-    Tuple,
-    Type,
     cast,
 )
 
@@ -26,6 +24,7 @@ from ...core.varset import (
     get_editable_var_types,
 )
 from ..icons import get_icon
+from ..shared.pref_rows.base import SpinRow
 from ..shared.preferences_group import PreferencesGroupWithButton
 from .adapter import NULL_CHOICE_LABEL, create_row_for_var
 
@@ -36,11 +35,11 @@ logger = logging.getLogger(__name__)
 
 
 def adjust_value(
-    min_val: Optional[float],
-    max_val: Optional[float],
+    min_val: float | None,
+    max_val: float | None,
     value: float,
     keep: Literal["min", "max", "value"],
-) -> Tuple[Optional[float], Optional[float], float]:
+) -> tuple[float | None, float | None, float]:
     """
     Adjusts min, max, and value to be consistent, keeping one value fixed.
     Returns a tuple of (final_min, final_max, final_value).
@@ -54,14 +53,12 @@ def adjust_value(
         if min_val is not None:
             if max_val is not None and min_val > max_val:
                 max_val = min_val
-            if value < min_val:
-                value = min_val
+            value = max(value, min_val)
     elif keep == "max":
         if max_val is not None:
             if min_val is not None and max_val < min_val:
                 min_val = max_val
-            if value > max_val:
-                value = max_val
+            value = min(value, max_val)
     return min_val, max_val, value
 
 
@@ -204,7 +201,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
             self.min_val_row, __ = create_row_for_var(
                 bound_var_instance, "min_val"
             )
-            if isinstance(self.min_val_row, Adw.SpinRow):
+            if isinstance(self.min_val_row, SpinRow):
                 self.min_val_row.set_title(
                     _("Start Value") if is_slider else _("Minimum Value")
                 )
@@ -236,7 +233,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
             self.max_val_row, __ = create_row_for_var(
                 bound_var_instance, "max_val"
             )
-            if isinstance(self.max_val_row, Adw.SpinRow):
+            if isinstance(self.max_val_row, SpinRow):
                 self.max_val_row.set_title(
                     _("End Value") if is_slider else _("Maximum Value")
                 )
@@ -257,7 +254,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
                         min_val_from_ui = (
                             self.min_val_row.get_value()
                             if hasattr(self, "min_val_row")
-                            and isinstance(self.min_val_row, Adw.SpinRow)
+                            and isinstance(self.min_val_row, SpinRow)
                             and self.min_val_row.get_editable()
                             else default_val
                         )
@@ -278,9 +275,9 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
         )()
         widget = widget or self.default_row
 
-        if isinstance(self.default_row, Adw.SpinRow):
-            self.default_row.connect(
-                "notify::value", self._on_default_changed_spinrow
+        if isinstance(self.default_row, SpinRow):
+            self.default_row.value_changed.connect(
+                self._on_default_changed_spinrow
             )
         elif isinstance(self.default_row, Adw.EntryRow):
             self.default_row.connect("changed", self._on_default_changed_entry)
@@ -294,9 +291,11 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
             widget.connect("value-changed", self._on_default_changed_scale)
 
     def _wire_up_bound_row(self, row: Adw.PreferencesRow, property_name: str):
-        if isinstance(row, Adw.SpinRow):
-            row.connect(
-                "notify::value", self._on_bound_changed_spinrow, property_name
+        if isinstance(row, SpinRow):
+            row.value_changed.connect(
+                lambda r, pn=property_name: self._on_bound_changed_spinrow(
+                    r, pn
+                )
             )
 
     def _sync_prop(self, row, prop_name, sync_header=False):
@@ -306,9 +305,9 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
         if sync_header:
             self._update_header()
 
-    def _sync_bound(self, row, toggle: Optional[Gtk.Switch], prop_name):
+    def _sync_bound(self, row, toggle: Gtk.Switch | None, prop_name):
         if not isinstance(self.var, (IntVar, FloatVar)) or not isinstance(
-            row, Adw.SpinRow
+            row, SpinRow
         ):
             return
         self._in_update = True
@@ -336,7 +335,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
         # Prevent signal recursion during sync
         self._in_update = True
         try:
-            if isinstance(row, Adw.SpinRow):
+            if isinstance(row, SpinRow):
                 if row.get_value() != val:
                     row.set_value(val if val is not None else 0)
             elif isinstance(row, Adw.EntryRow):
@@ -454,7 +453,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
         self,
         switch: Gtk.Switch,
         state: bool,
-        spin_row: Adw.SpinRow,
+        spin_row: SpinRow,
         prop_name: str,
     ):
         if self._in_update:
@@ -463,14 +462,14 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
         new_val = spin_row.get_value() if state else None
         self._commit_property_change(prop_name, new_val)
         if state:
-            self._on_bound_changed_spinrow(spin_row, None, prop_name)
+            self._on_bound_changed_spinrow(spin_row, prop_name)
         return False
 
     def _commit_numeric_changes(
         self,
-        default: Optional[float],
-        min_val: Optional[float],
-        max_val: Optional[float],
+        default: float | None,
+        min_val: float | None,
+        max_val: float | None,
         keep: Literal["min", "max", "value"],
     ):
         if (
@@ -490,7 +489,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
             if self.var.max_val != final_max:
                 self._commit_property_change("max_val", final_max)
 
-    def _on_bound_changed_spinrow(self, spin_row, _pspec, prop_name):
+    def _on_bound_changed_spinrow(self, spin_row, prop_name):
         if self._in_update:
             return
         self._in_update = True
@@ -504,20 +503,20 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
             else:
                 default_val = (
                     self.default_row.get_value()
-                    if isinstance(self.default_row, Adw.SpinRow)
+                    if isinstance(self.default_row, SpinRow)
                     else 0.0
                 )
                 min_val = (
                     self.min_val_row.get_value()
                     if hasattr(self, "min_val_row")
-                    and isinstance(self.min_val_row, Adw.SpinRow)
+                    and isinstance(self.min_val_row, SpinRow)
                     and self.min_val_row.get_editable()
                     else None
                 )
                 max_val = (
                     self.max_val_row.get_value()
                     if hasattr(self, "max_val_row")
-                    and isinstance(self.max_val_row, Adw.SpinRow)
+                    and isinstance(self.max_val_row, SpinRow)
                     and self.max_val_row.get_editable()
                     else None
                 )
@@ -575,7 +574,7 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
         else:
             apply()
 
-    def _on_default_changed_spinrow(self, spin_row: Adw.SpinRow, _pspec):
+    def _on_default_changed_spinrow(self, spin_row: SpinRow):
         if self._in_update:
             return
         self._in_update = True
@@ -584,14 +583,14 @@ class VarDefinitionRowWidget(Adw.ExpanderRow):
             min_val = (
                 self.min_val_row.get_value()
                 if hasattr(self, "min_val_row")
-                and isinstance(self.min_val_row, Adw.SpinRow)
+                and isinstance(self.min_val_row, SpinRow)
                 and self.min_val_row.get_editable()
                 else None
             )
             max_val = (
                 self.max_val_row.get_value()
                 if hasattr(self, "max_val_row")
-                and isinstance(self.max_val_row, Adw.SpinRow)
+                and isinstance(self.max_val_row, SpinRow)
                 and self.max_val_row.get_editable()
                 else None
             )
@@ -644,7 +643,7 @@ class VarSetEditorWidget(PreferencesGroupWithButton):
 
     def __init__(
         self,
-        vartypes: Optional[Iterable[Type[Var]]] = None,
+        vartypes: Iterable[type[Var]] | None = None,
         undo_manager: Optional["HistoryManager"] = None,
         **kwargs,
     ):
@@ -763,7 +762,7 @@ class VarSetEditorWidget(PreferencesGroupWithButton):
                 widget.set_expanded(True)
                 label_row = widget.label_row
 
-                def _grab_focus():
+                def _grab_focus(label_row=label_row):
                     label_row.grab_focus()
                     return GLib.SOURCE_REMOVE
 
@@ -795,7 +794,7 @@ class VarSetEditorWidget(PreferencesGroupWithButton):
             if target_index != -1:
                 self._var_set.move_var(source_key, target_index)
                 self.populate(self._var_set)
-        except Exception as e:
+        except (KeyError, ValueError) as e:
             logger.error(f"Failed to reorder vars: {e}")
 
     def populate(self, var_set: VarSet):

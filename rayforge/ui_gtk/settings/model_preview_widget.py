@@ -2,19 +2,20 @@
 
 import logging
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 from gi.repository import Gtk
 from OpenGL import GL
+from OpenGL.GL.shaders import (
+    ShaderCompilationError,
+    ShaderLinkError,
+)
 
 from ..sim3d.camera import Camera
-from ..sim3d.gl_utils import BaseRenderer, Shader
+from ..sim3d.gl_state import render_pass
+from ..sim3d.renderer.base import BaseRenderer
 from ..sim3d.renderer.model_renderer import _load_mesh_data
-from ..sim3d.shaders import (
-    SIMPLE_FRAGMENT_SHADER,
-    SIMPLE_VERTEX_SHADER,
-)
+from ..sim3d.shader import Shader, SimpleShader
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +27,12 @@ class ModelPreviewWidget(Gtk.GLArea):
         super().__init__(**kwargs)
         self.set_has_depth_buffer(True)
         self.set_size_request(512, 288)
-        self._camera: Optional[Camera] = None
-        self._shader: Optional[Shader] = None
-        self._renderer: Optional[_SimpleModelRenderer] = None
+        self._camera: Camera | None = None
+        self._shader: Shader | None = None
+        self._renderer: _SimpleModelRenderer | None = None
         self._mesh_data = None
-        self._drag_start: Optional[tuple] = None
-        self._last_offset: Optional[tuple] = None
+        self._drag_start: tuple | None = None
+        self._last_offset: tuple | None = None
         self.connect("realize", self._on_realize)
         self.connect("render", self._on_render)
         self.connect("resize", self._on_resize)
@@ -59,8 +60,8 @@ class ModelPreviewWidget(Gtk.GLArea):
         GL.glEnable(GL.GL_DEPTH_TEST)
         GL.glClearColor(0.12, 0.12, 0.14, 1.0)
         try:
-            self._shader = Shader(SIMPLE_VERTEX_SHADER, SIMPLE_FRAGMENT_SHADER)
-        except Exception as e:
+            self._shader = SimpleShader()
+        except (ShaderCompilationError, ShaderLinkError) as e:
             logger.error(f"Shader compilation failed: {e}")
             return
         if self._mesh_data:
@@ -94,10 +95,12 @@ class ModelPreviewWidget(Gtk.GLArea):
         GL.glClear(color_bit | depth_bit)
         proj = self._camera.get_projection_matrix()
         view = self._camera.get_view_matrix()
-        mvp = (proj @ view).T
-        self._renderer.render(
-            self._shader, mvp, camera_position=self._camera.position
-        )
+        mvp = proj @ view
+        self._shader.reset_uniforms()
+        with render_pass(self._shader):
+            self._renderer.draw(
+                self._shader, mvp, camera_position=self._camera.position
+            )
         return True
 
     def _on_resize(self, area, w, h):
@@ -212,11 +215,25 @@ class _SimpleModelRenderer(BaseRenderer):
         GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
 
-    def render(
+    def prepare(self, ctx) -> None:
+        """No per-frame scene state to prepare."""
+
+    def render(self, ctx, shaders, **kwargs) -> None:
+        """
+        Not used — the preview widget drives :meth:`draw` directly.
+
+        This renderer is not part of the scene render registry, so the
+        uniform ``render`` entry point has no meaning here.
+        """
+        raise NotImplementedError(
+            "_SimpleModelRenderer is driven via draw(), not render()."
+        )
+
+    def draw(
         self,
         shader: Shader,
         mvp_matrix: np.ndarray,
-        camera_position: Optional[np.ndarray] = None,
+        camera_position: np.ndarray | None = None,
     ):
         if not self._vao:
             return

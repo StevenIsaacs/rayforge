@@ -1,7 +1,7 @@
 import logging
 import webbrowser
 from gettext import gettext as _
-from typing import Optional, cast
+from typing import cast
 
 from gi.repository import Adw, GLib, Gtk
 
@@ -183,13 +183,13 @@ class LicenseSettingsPage(TrackedPreferencesPage):
                     "Set RAYFORGE_PATREON_CLIENT_ID environment variable."
                 )
                 return
-            port, thread = result
+            _port, _thread = result
             oauth_url = validator.get_patreon_oauth_url()
             if oauth_url:
                 logger.info("Opening Patreon OAuth URL")
                 webbrowser.open(oauth_url)
-        except Exception as e:
-            logger.error(f"Failed to start Patreon OAuth: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Failed to start Patreon OAuth")
 
     def _on_unlink_patreon(self, btn):
         validator = get_context().license_validator
@@ -199,7 +199,7 @@ class LicenseSettingsPage(TrackedPreferencesPage):
     def _on_remove_license(self, btn, product_id):
         dialog = Adw.MessageDialog(
             transient_for=cast(
-                Optional[Gtk.Window], self.get_ancestor(Gtk.Window)
+                Gtk.Window | None, self.get_ancestor(Gtk.Window)
             ),
             modal=True,
             heading=_("Remove License?"),

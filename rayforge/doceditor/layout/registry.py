@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Type
+from typing import TYPE_CHECKING
 
 from blinker import Signal
 
@@ -16,15 +16,15 @@ class LayoutStrategyRegistry:
     """
 
     def __init__(self):
-        self._strategies: Dict[str, Type["LayoutStrategy"]] = {}
-        self._addon_items: Dict[str, Set[str]] = {}
+        self._strategies: dict[str, type[LayoutStrategy]] = {}
+        self._addon_items: dict[str, set[str]] = {}
         self.changed = Signal()
 
     def register(
         self,
-        strategy_class: Type["LayoutStrategy"],
+        strategy_class: type["LayoutStrategy"],
         name: str,
-        addon_name: Optional[str] = None,
+        addon_name: str | None = None,
     ) -> None:
         """
         Register a layout strategy class.
@@ -34,13 +34,12 @@ class LayoutStrategyRegistry:
             name: Unique name for this strategy.
             addon_name: Optional name of the addon registering this strategy.
         """
-        if name in self._strategies:
-            if addon_name:
-                old_info = self._strategies.get(name)
-                if old_info and name in self._addon_items:
-                    for addon in list(self._addon_items.keys()):
-                        if name in self._addon_items.get(addon, set()):
-                            self._addon_items[addon].discard(name)
+        if name in self._strategies and addon_name:
+            old_info = self._strategies.get(name)
+            if old_info and name in self._addon_items:
+                for addon in list(self._addon_items.keys()):
+                    if name in self._addon_items.get(addon, set()):
+                        self._addon_items[addon].discard(name)
 
         self._strategies[name] = strategy_class
 
@@ -94,7 +93,7 @@ class LayoutStrategyRegistry:
             self.changed.send(self)
         return count
 
-    def get(self, name: str) -> Optional[Type["LayoutStrategy"]]:
+    def get(self, name: str) -> type["LayoutStrategy"] | None:
         """
         Look up a strategy class by name.
 
@@ -106,7 +105,7 @@ class LayoutStrategyRegistry:
         """
         return self._strategies.get(name)
 
-    def list_all(self) -> List[Type["LayoutStrategy"]]:
+    def list_all(self) -> list[type["LayoutStrategy"]]:
         """
         Return a list of all registered strategy classes.
 
@@ -115,7 +114,7 @@ class LayoutStrategyRegistry:
         """
         return list(self._strategies.values())
 
-    def list_names(self) -> List[str]:
+    def list_names(self) -> list[str]:
         """
         Return a list of all registered strategy names.
 

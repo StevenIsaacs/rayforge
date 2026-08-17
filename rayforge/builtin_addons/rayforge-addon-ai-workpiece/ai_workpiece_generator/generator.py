@@ -1,7 +1,6 @@
 import logging
 import re
 from gettext import gettext as _
-from typing import Optional, Tuple
 
 from rayforge.context import get_context
 from rayforge.core.ai import AIServiceError
@@ -31,7 +30,7 @@ Example output for a 50x50mm square:
 </svg>"""
 
 
-def extract_svg_from_response(content: str) -> Optional[str]:
+def extract_svg_from_response(content: str) -> str | None:
     """Extract SVG code from AI response, handling various formats."""
     content = content.strip()
 
@@ -55,7 +54,7 @@ def extract_svg_from_response(content: str) -> Optional[str]:
     return None
 
 
-async def generate_svg(prompt: str) -> Tuple[Optional[str], Optional[str]]:
+async def generate_svg(prompt: str) -> tuple[str | None, str | None]:
     """
     Generate SVG from a text prompt using the configured AI provider.
 
@@ -100,5 +99,5 @@ async def generate_svg(prompt: str) -> Tuple[Optional[str], Optional[str]]:
         logger.error("AI service error generating SVG: %s", e)
         return None, str(e)
     except Exception as e:
-        logger.error("Error generating SVG: %s", e, exc_info=True)
+        logger.exception("Error generating SVG")
         return None, str(e)

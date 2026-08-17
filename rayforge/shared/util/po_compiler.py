@@ -7,10 +7,9 @@ to .mo files without requiring the external msgfmt utility.
 
 import struct
 from pathlib import Path
-from typing import List, Tuple
 
 
-def parse_po_file(po_path: Path) -> List[Tuple[str, str]]:
+def parse_po_file(po_path: Path) -> list[tuple[str, str]]:
     """
     Parse a .po file and return list of (msgid, msgstr) tuples.
 
@@ -73,7 +72,7 @@ def parse_po_file(po_path: Path) -> List[Tuple[str, str]]:
     return entries
 
 
-def _join_po_lines(lines: List[str]) -> str:
+def _join_po_lines(lines: list[str]) -> str:
     """
     Join quoted .po file lines into a single string.
 
@@ -84,7 +83,7 @@ def _join_po_lines(lines: List[str]) -> str:
     return "".join(s.strip('"') for s in lines).replace("\\n", "\n")
 
 
-def write_mo_file(mo_path: Path, entries: List[Tuple[str, str]]) -> None:
+def write_mo_file(mo_path: Path, entries: list[tuple[str, str]]) -> None:
     """
     Write entries to a .mo file.
 
@@ -158,12 +157,16 @@ def write_mo_file(mo_path: Path, entries: List[Tuple[str, str]]) -> None:
         f.write(struct.pack("<I", 0))
 
         # Original strings table
-        for length, offset in orig_strings:
-            f.write(struct.pack("<II", length, orig_strings_offset + offset))
+        f.writelines(
+            struct.pack("<II", length, orig_strings_offset + offset)
+            for length, offset in orig_strings
+        )
 
         # Translated strings table
-        for length, offset in trans_strings:
-            f.write(struct.pack("<II", length, trans_strings_offset + offset))
+        f.writelines(
+            struct.pack("<II", length, trans_strings_offset + offset)
+            for length, offset in trans_strings
+        )
 
         # Original strings data
         f.write(orig_data)
@@ -194,6 +197,11 @@ def compile_po_to_mo(po_path: Path, mo_path: Path) -> bool:
     """
     Compile a .po file to a .mo file.
 
+    Entries with an empty msgstr (i.e. untranslated strings) are skipped,
+    matching the behavior of GNU ``msgfmt``. Including them would make
+    ``gettext`` resolve the message to an empty string instead of falling
+    back to the msgid, which breaks UI text (see issue #315).
+
     Args:
         po_path: Path to the source .po file.
         mo_path: Path to write the destination .mo file.
@@ -205,7 +213,14 @@ def compile_po_to_mo(po_path: Path, mo_path: Path) -> bool:
         entries = parse_po_file(po_path)
         if not entries:
             return False
-        write_mo_file(mo_path, entries)
+        translated = [
+            (msgid, msgstr)
+            for msgid, msgstr in entries
+            if msgstr or msgid == ""
+        ]
+        if not translated:
+            return False
+        write_mo_file(mo_path, translated)
         return True
-    except Exception:
+    except (OSError, ValueError, UnicodeError):
         return False

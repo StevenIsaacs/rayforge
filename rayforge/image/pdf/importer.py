@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import ClassVar
 
 from ...core.source_asset import SourceAsset
 from ...core.vectorization_spec import (
@@ -33,20 +33,20 @@ class PdfImporter(Importer):
     label = "PDF files"
     mime_types = ("application/pdf",)
     extensions = (".pdf",)
-    features = {
+    features: ClassVar[set[ImporterFeature]] = {
         ImporterFeature.DIRECT_VECTOR,
         ImporterFeature.BITMAP_TRACING,
     }
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
 
     def scan(self) -> ImportManifest:
         return PdfVectorImporter(self.raw_data, self.source_file).scan()
 
     def get_doc_items(
-        self, vectorization_spec: Optional[VectorizationSpec] = None
-    ) -> Optional[ImportResult]:
+        self, vectorization_spec: VectorizationSpec | None = None
+    ) -> ImportResult | None:
         spec_to_use = vectorization_spec
         if spec_to_use is None:
             spec_to_use = PassthroughSpec()
@@ -73,7 +73,7 @@ class PdfImporter(Importer):
 
         return import_result
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         raise NotImplementedError(
             "PdfImporter is a facade; parse is delegated via get_doc_items"
         )
@@ -94,7 +94,7 @@ class PdfImporter(Importer):
         self,
         existing_source_asset: SourceAsset,
         vectorization_spec: VectorizationSpec,
-    ) -> Optional[ImportResult]:
+    ) -> ImportResult | None:
         if isinstance(vectorization_spec, TraceSpec):
             delegate = PdfTraceImporter(self.raw_data, self.source_file)
         else:

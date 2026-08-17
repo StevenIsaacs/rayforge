@@ -2,16 +2,11 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Generator
 from enum import Enum, auto
 from typing import (
     TYPE_CHECKING,
     Any,
-    Generator,
-    List,
-    Optional,
-    Set,
-    Tuple,
-    Union,
 )
 
 import cairo
@@ -81,29 +76,29 @@ class Canvas(Gtk.DrawingArea):
         self.view_transform: Matrix = Matrix.identity()
         # The primary element within the current selection, which receives
         # keyboard focus. This is a persistent state.
-        self._active_elem: Optional[CanvasElement] = None
+        self._active_elem: CanvasElement | None = None
 
         # Stores the state of an element or group at the start of a transform
-        self._active_origin: Optional[Rect] = None  # Group bbox (x,y,w,h)
+        self._active_origin: Rect | None = None  # Group bbox (x,y,w,h)
         # Stores the initial transform of a single element being transformed
-        self._initial_transform: Optional[Matrix] = None
-        self._initial_world_transform: Optional[Matrix] = None
+        self._initial_transform: Matrix | None = None
+        self._initial_world_transform: Matrix | None = None
 
         self._setup_interactions()
 
         # --- Interaction State ---
-        self._hovered_elem: Optional[CanvasElement] = None
+        self._hovered_elem: CanvasElement | None = None
         self._hovered_region: ElementRegion = ElementRegion.NONE
         self._active_region: ElementRegion = ElementRegion.NONE
         # The element being actively manipulated. This is a transient state,
         # lasting only for the duration of an interaction.
-        self._drag_target: Optional[CanvasElement] = None
+        self._drag_target: CanvasElement | None = None
         self._selection_mode: SelectionMode = SelectionMode.NONE
         self._selection_just_changed: bool = False
-        self._selection_group: Optional[MultiSelectionGroup] = None
+        self._selection_group: MultiSelectionGroup | None = None
         self._framing_selection: bool = False
-        self._selection_frame_rect: Optional[Rect] = None
-        self._selection_before_framing: Set[CanvasElement] = set()
+        self._selection_frame_rect: Rect | None = None
+        self._selection_before_framing: set[CanvasElement] = set()
         self._group_hovered: bool = False
         self._last_mouse_x: float = 0.0
         self._last_mouse_y: float = 0.0
@@ -113,12 +108,12 @@ class Canvas(Gtk.DrawingArea):
         self._shearing: bool = False
         self._was_dragging: bool = False
         self._edit_dragging: bool = False
-        self._transforming_elements: List[CanvasElement] = []
-        self.edit_context: Optional[CanvasElement] = None
+        self._transforming_elements: list[CanvasElement] = []
+        self.edit_context: CanvasElement | None = None
 
         # --- Rotation State ---
         self._drag_start_angle: float = 0.0
-        self._rotation_pivot: Optional[Point] = None
+        self._rotation_pivot: Point | None = None
 
         # --- Signals ---
         self.move_begin = Signal()
@@ -155,7 +150,7 @@ class Canvas(Gtk.DrawingArea):
         """Removes a top-level element from the canvas."""
         self.root.remove_child(elem)
 
-    def find_by_data(self, data: Any) -> Optional[CanvasElement]:
+    def find_by_data(self, data: Any) -> CanvasElement | None:
         """
         Finds the first element with matching data in the canvas.
         """
@@ -169,7 +164,7 @@ class Canvas(Gtk.DrawingArea):
         """
         return self.root.find_by_type(thetype)
 
-    def size(self) -> Tuple[float, float]:
+    def size(self) -> tuple[float, float]:
         """Gets the (width, height) of the canvas."""
         return self.root.size()
 
@@ -313,7 +308,7 @@ class Canvas(Gtk.DrawingArea):
         screen_transform = self.view_transform @ elem.get_world_transform()
         render_selection_frame(ctx, elem, screen_transform)
 
-    def _get_handle_color(self, elem: CanvasElement) -> Optional[ColorRGBA]:
+    def _get_handle_color(self, elem: CanvasElement) -> ColorRGBA | None:
         """Returns an optional color for selection handles.
 
         Override in subclasses to provide element-specific handle colors.
@@ -401,14 +396,14 @@ class Canvas(Gtk.DrawingArea):
 
         # Priority 1: Check for a valid handle hit on the current selection.
         # We build a set of candidate regions based on the current mode.
-        handle_candidates: Optional[Set[ElementRegion]] = None
+        handle_candidates: set[ElementRegion] | None = None
         if self._selection_mode == SelectionMode.RESIZE:
             handle_candidates = RESIZE_HANDLES | MOVE_HANDLES
         elif self._selection_mode == SelectionMode.ROTATE_SHEAR:
             handle_candidates = ROTATE_SHEAR_HANDLES | MOVE_HANDLES
 
         if handle_candidates:
-            target: Optional[Union[CanvasElement, MultiSelectionGroup]] = None
+            target: CanvasElement | MultiSelectionGroup | None = None
             if is_multi_select:
                 target = self._selection_group
             elif selected_elems:
@@ -1025,26 +1020,25 @@ class Canvas(Gtk.DrawingArea):
                         drag_start_angle=self._drag_start_angle,
                     )
                     self.queue_draw()
-            elif self._shearing:
-                if (
-                    self._drag_target
-                    and self._initial_transform
-                    and self._initial_world_transform
-                ):
-                    transform.shear_element(
-                        element=self._drag_target,
-                        world_dx=world_dx,
-                        world_dy=world_dy,
-                        initial_local_transform=self._initial_transform,
-                        initial_world_transform=self._initial_world_transform,
-                        active_region=self._active_region,
-                        view_transform=self.view_transform,
-                    )
-                    self.queue_draw()
+            elif self._shearing and (
+                self._drag_target
+                and self._initial_transform
+                and self._initial_world_transform
+            ):
+                transform.shear_element(
+                    element=self._drag_target,
+                    world_dx=world_dx,
+                    world_dy=world_dy,
+                    initial_local_transform=self._initial_transform,
+                    initial_world_transform=self._initial_world_transform,
+                    active_region=self._active_region,
+                    view_transform=self.view_transform,
+                )
+                self.queue_draw()
 
     def _start_rotation(
         self,
-        target: Union[CanvasElement, MultiSelectionGroup],
+        target: CanvasElement | MultiSelectionGroup,
         x: float,
         y: float,
     ):
@@ -1269,15 +1263,6 @@ class Canvas(Gtk.DrawingArea):
         if len(selected) > 0:
             self._selection_mode = SelectionMode.RESIZE
 
-    def _get_element_world_corners(self, elem: CanvasElement) -> List[Point]:
-        """
-        Calculates the four corners of an element in world coordinates.
-        """
-        world_transform = elem.get_world_transform()
-        w, h = elem.width, elem.height
-        local_corners = [(0, 0), (w, 0), (w, h), (0, h)]
-        return [world_transform.transform_point(p) for p in local_corners]
-
     def _update_framing_selection(self):
         """
         Updates element selection based on the rubber-band frame.
@@ -1304,7 +1289,13 @@ class Canvas(Gtk.DrawingArea):
 
         for elem in self.root.get_all_children_recursive():
             if elem.selectable:
-                elem_corners = self._get_element_world_corners(elem)
+                x, y, w, h = elem.get_world_bounding_box()
+                elem_corners = [
+                    (x, y),
+                    (x + w, y),
+                    (x + w, y + h),
+                    (x, y + h),
+                ]
                 intersects = obb_intersects_aabb(elem_corners, selection_rect)
 
                 # Select if it intersects or was part of the initial set
@@ -1333,9 +1324,8 @@ class Canvas(Gtk.DrawingArea):
             self._ctrl_pressed = True
             # Allow propagation for accelerators
         elif keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace):
-            if self.edit_context:
-                if self.edit_context.handle_edit_key(keyval):
-                    return True
+            if self.edit_context and self.edit_context.handle_edit_key(keyval):
+                return True
             selected_elements = list(self.root.get_selected())
             if selected_elements:
                 self.elements_deleted.send(self, elements=selected_elements)
@@ -1353,7 +1343,7 @@ class Canvas(Gtk.DrawingArea):
         elif is_primary_keyval(keyval):
             self._ctrl_pressed = False
 
-    def get_active_element(self) -> Optional[CanvasElement]:
+    def get_active_element(self) -> CanvasElement | None:
         """
         Returns the element that is the primary focus of the current
         selection. This element receives keyboard events and determines
@@ -1361,7 +1351,7 @@ class Canvas(Gtk.DrawingArea):
         """
         return self._active_elem
 
-    def get_selected_elements(self) -> List[CanvasElement]:
+    def get_selected_elements(self) -> list[CanvasElement]:
         """Returns a list of all currently selected elements."""
         return list(self.root.get_selected())
 

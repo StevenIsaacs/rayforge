@@ -37,7 +37,7 @@ Les préréglages sont des points de départ - tu peux ajuster tous les paramèt
 
 Ajuste les paramètres de la grille de test dans la boîte de dialogue des paramètres :
 
-![Paramètres Grille de Test de Matériau](/screenshots/material-test-grid.png)
+![Paramètres Grille de Test de Matériau](/screenshots/material-test.png)
 
 #### Type de Test
 
@@ -241,6 +241,6 @@ Exécute la même configuration de grille sur différents matériaux pour constr
 
 ## Sujets Connexes
 
-- **[Aperçu 3D](../ui/3d-preview)** - Prévisualiser l'exécution du test avant de l'exécuter
+- **[Aperçu 3D](../../ui/3d-preview.md)** - Prévisualiser l'exécution du test avant de l'exécuter
 - **[Gravure](engrave)** - Comprendre les opérations de gravure
 - **[Coupe de Contour](contour)** - Comprendre les opérations de coupe

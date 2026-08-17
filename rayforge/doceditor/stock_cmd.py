@@ -27,7 +27,7 @@ class _AddStockCommand(Command):
 
     def __init__(
         self,
-        doc: "Doc",
+        doc: Doc,
         name: str,
         geometry: Geometry,
         pos: tuple[float, float],
@@ -56,7 +56,7 @@ class _AddStockCommand(Command):
 class RemoveStockAssetCommand(Command):
     """Command to remove a StockAsset from the document."""
 
-    def __init__(self, doc: "Doc", asset_uid: str):
+    def __init__(self, doc: Doc, asset_uid: str):
         super().__init__(name=_("Remove Stock Asset"))
         self.doc = doc
         self.asset_uid = asset_uid
@@ -77,11 +77,11 @@ class ConvertToStockCommand(Command):
     Command to convert a WorkPiece to a StockItem with its own StockAsset.
     """
 
-    def __init__(self, doc: "Doc", workpiece: WorkPiece):
+    def __init__(self, doc: Doc, workpiece: WorkPiece):
         super().__init__(name=_("Convert to Stock"))
         self.doc = doc
         self.workpiece = workpiece
-        self.original_parent: "DocItem | None" = workpiece.parent
+        self.original_parent: DocItem | None = workpiece.parent
         self.original_index = 0
 
         geometry = workpiece.get_world_geometry()
@@ -121,7 +121,7 @@ class ConvertToStockCommand(Command):
 class StockCmd:
     """Handles commands related to stock material."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
 
     def add_stock(self):
@@ -133,13 +133,12 @@ class StockCmd:
         machine = self._editor.context.config.machine
         if machine:
             __, __, wa_w, wa_h = machine.work_area
-            ref_x, ref_y = machine.get_reference_position_world()
+            ref_x, ref_y = machine.panel.reference_position_world
             stock_x = ref_x
             stock_y = ref_y
             stock_w = wa_w * 0.8
             stock_h = wa_h * 0.8
-            space = machine.get_coordinate_space()
-            stock_x, stock_y = space.world_position_from_origin(
+            stock_x, stock_y = machine.panel.world_position_from_origin(
                 ref_x, ref_y, (stock_w, stock_h)
             )
             logger.debug(
@@ -247,6 +246,26 @@ class StockCmd:
         )
         self._editor.doc.history_manager.execute(command)
         stock_item.updated.send(stock_item)
+
+    def set_stock_color(self, stock_item: StockItem, new_color: str | None):
+        """
+        Sets the per-instance color override of a stock item with an
+        undoable command.
+
+        ``None`` reverts to the material's default color (inherit);
+        ``""`` explicitly marks the item as having no color.
+        """
+        if new_color == stock_item.color:
+            return
+
+        command = ChangePropertyCommand(
+            target=stock_item,
+            property_name="color",
+            new_value=new_color,
+            setter_method_name="set_color",
+            name=_("Change stock color"),
+        )
+        self._editor.doc.history_manager.execute(command)
 
     def convert_to_stock(self, workpiece: WorkPiece) -> StockItem:
         """

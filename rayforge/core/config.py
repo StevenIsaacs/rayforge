@@ -1,9 +1,9 @@
 import logging
 from dataclasses import dataclass, fields
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import yaml
 from blinker import Signal
@@ -33,19 +33,22 @@ class CanvasViewState:
     """Persistent view toggle states for the 2D/3D canvases."""
 
     show_workpieces: bool = True
+    show_workpiece_image: bool = True
     show_camera: bool = True
     show_travel_lines: bool = False
     show_nogo_zones: bool = True
     show_grid: bool = True
     show_models: bool = True
     show_tabs: bool = True
+    show_ops_underlay: bool = True
+    show_stock: bool = True
     perspective_mode: bool = False
 
-    def to_dict(self) -> Dict[str, bool]:
+    def to_dict(self) -> dict[str, bool]:
         return {f.name: getattr(self, f.name) for f in fields(self)}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CanvasViewState":
+    def from_dict(cls, data: dict[str, Any]) -> "CanvasViewState":
         valid_keys = {f.name for f in fields(cls)}
         filtered = {k: v for k, v in data.items() if k in valid_keys}
         return cls(**filtered)
@@ -53,11 +56,11 @@ class CanvasViewState:
 
 class Config:
     def __init__(self):
-        self.machine: Optional[Machine] = None
+        self.machine: Machine | None = None
         self.theme: str = "system"
         # Default user preferences for units. Key is quantity, value is
         # unit name.
-        self.unit_preferences: Dict[str, str] = {
+        self.unit_preferences: dict[str, str] = {
             "length": "mm",
             "speed": "mm/min",
             "acceleration": "mm/s²",
@@ -66,11 +69,11 @@ class Config:
         self.startup_behavior: str = StartupBehavior.NONE.value
         # Path to the specific project to open on startup (when
         # startup_behavior is SPECIFIC_PROJECT)
-        self.startup_project_path: Optional[Path] = None
+        self.startup_project_path: Path | None = None
         # Track the last opened project path
-        self.last_opened_project: Optional[Path] = None
+        self.last_opened_project: Path | None = None
         # UI visibility states
-        self.bottom_panel: Optional[Dict[str, Any]] = None
+        self.bottom_panel: dict[str, Any] | None = None
         self.right_panel_visible: bool = True
         self.canvas_view: CanvasViewState = CanvasViewState()
         self.auto_pipeline: bool = True
@@ -78,14 +81,16 @@ class Config:
         self.check_for_app_updates: bool = True
         # Usage tracking consent date: None = not asked, "" = declined,
         # ISO date string = consent given on that date
-        self.usage_consent_date: Optional[str] = None
+        self.usage_consent_date: str | None = None
         # Default DPI for unitless SVG imports
         self.import_dpi: float = 96.0
+        # Cache budget for the raygeo pipeline (default 2 GiB)
+        self.cache_budget_bytes: int = 2 * 1024 * 1024 * 1024
         # Language preference: None = system default, or a code like "de"
-        self.language: Optional[str] = None
+        self.language: str | None = None
         self.changed = Signal()
 
-    def set_machine(self, machine: Optional[Machine]):
+    def set_machine(self, machine: Machine | None):
         if self.machine == machine:
             return
         if self.machine:
@@ -117,21 +122,21 @@ class Config:
         self.startup_behavior = behavior_value
         self.changed.send(self)
 
-    def set_startup_project_path(self, path: Optional[Path]):
+    def set_startup_project_path(self, path: Path | None):
         """Sets the specific project path to open on startup."""
         if self.startup_project_path == path:
             return
         self.startup_project_path = path
         self.changed.send(self)
 
-    def set_last_opened_project(self, path: Optional[Path]):
+    def set_last_opened_project(self, path: Path | None):
         """Sets the last opened project path."""
         if self.last_opened_project == path:
             return
         self.last_opened_project = path
         self.changed.send(self)
 
-    def set_bottom_panel(self, data: Optional[Dict[str, Any]]):
+    def set_bottom_panel(self, data: dict[str, Any] | None):
         if self.bottom_panel == data:
             return
         self.bottom_panel = data
@@ -149,6 +154,13 @@ class Config:
         if self.import_dpi == dpi:
             return
         self.import_dpi = dpi
+        self.changed.send(self)
+
+    def set_cache_budget_bytes(self, budget: int):
+        """Sets the pipeline cache budget in bytes."""
+        if self.cache_budget_bytes == budget:
+            return
+        self.cache_budget_bytes = budget
         self.changed.send(self)
 
     def set_auto_pipeline(self, enabled: bool):
@@ -172,7 +184,7 @@ class Config:
         self.ops_color_mode = mode
         self.changed.send(self)
 
-    def set_language(self, language: Optional[str]):
+    def set_language(self, language: str | None):
         """Sets the UI language preference.
 
         Args:
@@ -187,7 +199,7 @@ class Config:
         """Sets the usage tracking consent preference."""
         new_value = ""
         if consent:
-            new_value = datetime.now().isoformat()
+            new_value = datetime.now(tz=timezone.utc).isoformat()
         if self.usage_consent_date == new_value:
             return
         self.usage_consent_date = new_value
@@ -201,7 +213,7 @@ class Config:
             return False
         try:
             consent_date = datetime.fromisoformat(self.usage_consent_date)
-            policy_date = datetime(2026, 2, 24)
+            policy_date = datetime(2026, 2, 24, tzinfo=timezone.utc)
             return consent_date >= policy_date
         except (ValueError, TypeError):
             return False
@@ -211,7 +223,7 @@ class Config:
         """Returns True if user has explicitly declined usage tracking."""
         return self.usage_consent_date == ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "machine": self.machine.id if self.machine else None,
             "theme": self.theme,
@@ -235,11 +247,12 @@ class Config:
             "ops_color_mode": self.ops_color_mode.value,
             "usage_consent_date": self.usage_consent_date,
             "import_dpi": self.import_dpi,
+            "cache_budget_bytes": self.cache_budget_bytes,
             "language": self.language,
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], get_machine_by_id) -> "Config":
+    def from_dict(cls, data: dict[str, Any], get_machine_by_id) -> "Config":
         config = cls()
         config.theme = data.get("theme", "system")
 
@@ -300,6 +313,11 @@ class Config:
         # Load import DPI
         config.import_dpi = data.get("import_dpi", 96.0)
 
+        # Load cache budget
+        config.cache_budget_bytes = data.get(
+            "cache_budget_bytes", 2 * 1024 * 1024 * 1024
+        )
+
         # Load language preference (None = system default)
         config.language = data.get("language", None)
 
@@ -344,11 +362,9 @@ class ConfigManager:
             # If there are other machines available, select the first one
             if self.machine_mgr.machines:
                 # Sort by ID for deterministic selection
-                first_machine = list(
-                    sorted(
-                        self.machine_mgr.machines.values(), key=lambda m: m.id
-                    )
-                )[0]
+                first_machine = min(
+                    self.machine_mgr.machines.values(), key=lambda m: m.id
+                )
                 self.config.set_machine(first_machine)
                 logger.info(f"Selected new machine {first_machine.id}")
 
@@ -389,7 +405,7 @@ class ConfigManager:
                         )
                     else:
                         logger.info("Config loaded but no machine set.")
-        except (IOError, yaml.YAMLError) as e:
+        except (OSError, yaml.YAMLError) as e:
             logger.error(
                 f"Failed to load config file: {e}. Creating a default config."
             )

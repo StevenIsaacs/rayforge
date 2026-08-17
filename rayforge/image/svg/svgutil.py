@@ -1,6 +1,6 @@
 import logging
 import warnings
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 from xml.etree import ElementTree as ET
 
 with warnings.catch_warnings():
@@ -8,7 +8,10 @@ with warnings.catch_warnings():
     import pyvips
 
 from raygeo.geo.types import Rect
-from raygeo.svg import extract_svg_metadata, parse_svg_length, svg_length_to_mm
+from raygeo.svg import svg_string_to_geometries_by_color
+from raygeo.svg.color import ColorAttr
+from raygeo.svg.length import parse_svg_length, svg_length_to_mm
+from raygeo.svg.metadata import extract_svg_metadata
 
 from .svg_fallback import (
     SVG_LOAD_AVAILABLE,
@@ -24,6 +27,10 @@ PPI: float = 96.0
 
 MM_PER_PX: float = 25.4 / PPI
 """Conversion factor for pixels to millimeters, based on 96 PPI."""
+
+# Raygeo bucket key for shapes whose chosen color attribute is `none` or
+# unset. These shapes have no color but still contain real geometry.
+NO_COLOR_KEY: str = "_no_color"
 
 INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -50,7 +57,7 @@ try:
         "sodipodi", "http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
     )
     ET.register_namespace("xlink", "http://www.w3.org/1999/xlink")
-except Exception:
+except ValueError:
     pass  # Best effort registration
 
 
@@ -73,8 +80,8 @@ def _get_margins_from_data(
         if not w_str or not h_str:
             return 0.0, 0.0, 0.0, 0.0  # Cannot determine aspect ratio.
 
-        orig_w, w_unit = parse_svg_length(w_str)
-        orig_h, h_unit = parse_svg_length(h_str)
+        orig_w, _w_unit = parse_svg_length(w_str)
+        orig_h, _h_unit = parse_svg_length(h_str)
         # Normalise to numeric values (unit suffix is handled separately)
         orig_w = float(orig_w)
         orig_h = float(orig_h)
@@ -237,7 +244,7 @@ def is_unitless_svg(data: bytes) -> bool:
 
 def get_natural_size(
     data: bytes, ppi: float = PPI
-) -> Optional[Tuple[float, float]]:
+) -> tuple[float, float] | None:
     """
     Analyzes raw SVG data to extract its natural, untrimmed dimensions in mm.
 
@@ -272,7 +279,62 @@ def _get_local_tag_name(element: ET.Element) -> str:
     return element.tag.rsplit("}", 1)[-1]
 
 
-def extract_layer_manifest(data: bytes) -> List[Dict[str, Any]]:
+def hex_color_to_rgb(color: str) -> tuple[float, float, float]:
+    """
+    Converts a "#rrggbb" hex color string to an RGB tuple in the 0-1 range.
+    """
+    value = color.lstrip("#")
+    r = int(value[0:2], 16) / 255.0
+    g = int(value[2:4], 16) / 255.0
+    b = int(value[4:6], 16) / 255.0
+    return r, g, b
+
+
+def extract_color_manifest(
+    data: bytes, color_attr: ColorAttr = ColorAttr.ANY
+) -> list[dict[str, Any]]:
+    """
+    Parses the SVG to find distinct colors, treating each as a layer.
+
+    Buckets shapes by their resolved color attribute (`fill`, `stroke`,
+    `fill_else_stroke`, or `any`) using raygeo, and counts the number of
+    geometric elements per color. In `any` mode a shape whose fill differs
+    from its stroke lands in two buckets, one per color.
+
+    Args:
+        data: Raw SVG data in bytes.
+        color_attr: The color attribute to bucket by.
+
+    Returns:
+        A list of layer dicts with keys "id", "name", "count" and "color".
+    """
+    if not data:
+        return []
+
+    try:
+        buckets = svg_string_to_geometries_by_color(
+            data.decode("utf-8"), 1.0, 1.0, color_attr
+        )
+    except (ValueError, ET.ParseError):
+        return []
+
+    layers = []
+    for color_key, geos in buckets:
+        count = len(geos)
+        color = None if color_key == NO_COLOR_KEY else color_key
+        layers.append(
+            {
+                "id": color_key,
+                "name": f"Color {color_key}",
+                "count": count,
+                "color": color,
+            }
+        )
+        logger.debug(f"Found color layer: ID='{color_key}', Count={count}")
+    return layers
+
+
+def extract_layer_manifest(data: bytes) -> list[dict[str, Any]]:
     """
     Parses the SVG to find top-level groups with IDs, treating them as layers.
     Also counts the number of geometric elements in each layer.
@@ -315,7 +377,7 @@ def extract_layer_manifest(data: bytes) -> List[Dict[str, Any]]:
     return layers
 
 
-def filter_svg_layers(data: bytes, visible_layer_ids: List[str]) -> bytes:
+def filter_svg_layers(data: bytes, visible_layer_ids: list[str]) -> bytes:
     """
     Returns a modified SVG with only specified top-level groups visible.
     """

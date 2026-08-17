@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .core.addon_config import AddonConfig
     from .core.ai.ai_service import AIService
     from .core.ai.config import AIConfigManager
+    from .core.color_preset import ColorPresetManager
     from .core.config import Config, ConfigManager
     from .core.library_manager import LibraryManager
     from .core.model_manager import ModelManager
@@ -51,21 +52,38 @@ class RayforgeContext:
         self.exit_pending = False
         self._headless: bool = False
 
-        self._dialect_mgr: Optional["DialectManager"] = None
-        self._plugin_mgr: Optional["pluggy.PluginManager"] = None
-        self._addon_config: Optional["AddonConfig"] = None
-        self._license_validator: Optional["LicenseValidator"] = None
-        self._addon_mgr: Optional["AddonManager"] = None
-        self._ai_service: Optional["AIService"] = None
-        self._ai_config_mgr: Optional["AIConfigManager"] = None
-        self._machine_mgr: Optional["MachineManager"] = None
-        self._config_mgr: Optional["ConfigManager"] = None
-        self._config: Optional["Config"] = None
-        self._camera_mgr: Optional["CameraManager"] = None
-        self._material_mgr: Optional["LibraryManager"] = None
-        self._model_mgr: Optional["ModelManager"] = None
-        self._recipe_mgr: Optional["RecipeManager"] = None
-        self._device_profile_mgr: Optional["DeviceProfileManager"] = None
+        self._dialect_mgr: DialectManager | None = None
+        self._plugin_mgr: pluggy.PluginManager | None = None
+        self._addon_config: AddonConfig | None = None
+        self._license_validator: LicenseValidator | None = None
+        self._addon_mgr: AddonManager | None = None
+        self._ai_service: AIService | None = None
+        self._ai_config_mgr: AIConfigManager | None = None
+        self._machine_mgr: MachineManager | None = None
+        self._config_mgr: ConfigManager | None = None
+        self._config: Config | None = None
+        self._camera_mgr: CameraManager | None = None
+        self._material_mgr: LibraryManager | None = None
+        self._model_mgr: ModelManager | None = None
+        self._recipe_mgr: RecipeManager | None = None
+        self._device_profile_mgr: DeviceProfileManager | None = None
+        self._color_preset_mgr: ColorPresetManager | None = None
+        self._theme_service = None
+
+    @property
+    def theme(self):
+        """
+        Returns the shared theme colour service.
+
+        The service is created lazily on first access (deferred import so
+        GTK is never imported eagerly in headless/worker processes) and
+        bound to a widget by the main window on realize.
+        """
+        if self._theme_service is None:
+            from .ui_gtk.shared.theme_service import ThemeColorService
+
+            self._theme_service = ThemeColorService()
+        return self._theme_service
 
     @property
     def machine(self) -> Optional["Machine"]:
@@ -222,11 +240,9 @@ class RayforgeContext:
             self._config_mgr = CoreConfigManager(CONFIG_FILE, self.machine_mgr)
             self._config = self._config_mgr.config
             if not self._config.machine:
-                machine = list(
-                    sorted(
-                        self.machine_mgr.machines.values(), key=lambda m: m.id
-                    )
-                )[0]
+                machine = min(
+                    self.machine_mgr.machines.values(), key=lambda m: m.id
+                )
                 self._config.set_machine(machine)
             # Sync the context language with the configured preference.
             # This overrides the system-detected language if the user has
@@ -300,6 +316,16 @@ class RayforgeContext:
         return self._recipe_mgr
 
     @property
+    def color_preset_mgr(self) -> "ColorPresetManager":
+        """Returns the color preset manager."""
+        if self._color_preset_mgr is None:
+            from .core.color_preset import get_color_preset_mgr
+
+            logger.info("Lazy loading color preset manager")
+            self._color_preset_mgr = get_color_preset_mgr()
+        return self._color_preset_mgr
+
+    @property
     def device_profile_mgr(self) -> "DeviceProfileManager":
         """Returns the device profile manager."""
         if self._device_profile_mgr is None:
@@ -363,9 +389,9 @@ class RayforgeContext:
         self._config_mgr = CoreConfigManager(config_file, self._machine_mgr)
         self._config = self._config_mgr.config
         if not self._config.machine:
-            machine = list(
-                sorted(self._machine_mgr.machines.values(), key=lambda m: m.id)
-            )[0]
+            machine = min(
+                self._machine_mgr.machines.values(), key=lambda m: m.id
+            )
             self._config.set_machine(machine)
 
     async def shutdown(self):

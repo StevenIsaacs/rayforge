@@ -1,99 +1,121 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, cast
 
-from rayforge.core.capability import CUT, Capability
-from rayforge.core.step import Step
-from rayforge.pipeline.assembler.registry import assembler_registry
+from raygeo.cnc.execution.specs import ComputePayload
+from raygeo.ops.assembly import Assembler
+from raygeo.ops.assembly.wavefront import AdaptiveWavefrontSpec
+from raygeo.ops.part import Part
+
+from rayforge.core.capability import MachineCapability
+from rayforge.core.step import legacy_producer_params
+from rayforge.core.varset import LengthVar, VarSet
+from rayforge.machine.models.laser import LaserHead
 from rayforge.pipeline.stage.assembler_helpers import (
-    MachineDefaults,
-    build_part_vector,
-    make_artifact,
-    wrap_assembler_result,
+    build_part_vector_with_raster_fallback,
 )
 from rayforge.pipeline.transformer.registry import transformer_registry
-from raygeo.ops import Ops
 
+from .laser_step import LaserStep
 
 if TYPE_CHECKING:
     from rayforge.context import RayforgeContext
     from rayforge.core.workpiece import WorkPiece
-    from rayforge.machine.models.laser import Laser
-    from rayforge.pipeline.artifact import WorkPieceArtifact
+    from rayforge.machine.models.machine import Machine
 
 
-class WavefrontStep(Step):
+class WavefrontStep(LaserStep):
     TYPELABEL = _("Wavefront")
-    ICON = "step-contour-symbolic"
-    CAPABILITIES: Tuple[Capability, ...] = (CUT,)
+    ICON = "step-wavefront-symbolic"
+    REQUIRED_MACHINE_CAPS = frozenset({MachineCapability.LASER})
     ASSEMBLER_NAME = "wavefront"
-    NORMALIZE_WINDINGS = True
 
-    def __init__(
-        self, name: Optional[str] = None, typelabel: Optional[str] = None
-    ):
+    @classmethod
+    def recipe_varset(cls) -> VarSet:
+        return VarSet(
+            vars=[
+                *LaserStep.recipe_varset().vars,
+                LengthVar(
+                    key="step_over_mm",
+                    label=_("Step Over"),
+                    description=_(
+                        "Lateral step-over between wavefront passes"
+                    ),
+                    default=None,
+                    min_val=0.0,
+                    max_val=50.0,
+                ),
+                LengthVar(
+                    key="offset_mm",
+                    label=_("Offset"),
+                    description=_("Extra offset from walls"),
+                    default=0.0,
+                    min_val=0.0,
+                    max_val=20.0,
+                ),
+            ]
+        )
+
+    def __init__(self, name: str | None = None, typelabel: str | None = None):
         super().__init__(typelabel=typelabel or self.TYPELABEL, name=name)
-        self.step_over_mm: Optional[float] = None
+        self.power = 0.8
+        self.step_over_mm: float | None = None
         self.offset_mm = 0.0
         self.area_tolerance = 0.01
 
     def get_assembler_kwargs(
         self,
-        machine_defaults: MachineDefaults,
-        workpiece: "WorkPiece",
+        machine: Machine,
+        workpiece: WorkPiece,
     ) -> dict:
+        spot_x, _spot_y = LaserHead.get_spot_size(
+            self.get_selected_laser(machine)
+        )
         kwargs: dict = {}
         kwargs["offset_mm"] = self.offset_mm
         kwargs["area_tolerance"] = self.area_tolerance
         kwargs["step_over"] = (
-            self.step_over_mm
-            if self.step_over_mm is not None
-            else machine_defaults.step_over
+            self.step_over_mm if self.step_over_mm is not None else spot_x
         )
-        kwargs["precision"] = machine_defaults.arc_tolerance
-        kwargs["cut_feed_rate"] = machine_defaults.cut_speed
-        kwargs["cut_power"] = machine_defaults.step_power
+        kwargs["precision"] = machine.arc_tolerance
+        kwargs["cut_feed_rate"] = self.cut_speed
+        kwargs["cut_power"] = self.power
         return kwargs
 
-    def assemble_on_surface(
+    def build_compute_payload(
         self,
-        workpiece: "WorkPiece",
-        laser: "Laser",
-        generation_id: int,
-        surface: Any = None,
-        pixels_per_mm: Optional[Tuple[float, float]] = None,
-        *,
-        machine_defaults: "MachineDefaults",
-        y_offset_mm: float = 0.0,
-        computed_auto_levels: Optional[Tuple[int, int]] = None,
-    ) -> "WorkPieceArtifact":
-        use_surface = surface is not None and (
-            not workpiece.boundaries or workpiece.boundaries.is_empty()
-        )
-        part = build_part_vector(
+        machine: Machine,
+        workpiece: WorkPiece,
+    ) -> tuple[Part, ComputePayload]:
+        """Build a :class:`Part` with normalised-winding vector
+        geometry and a :class:`ComputePayload` carrying an
+        :class:`AdaptiveWavefrontSpec`.
+
+        When the workpiece has no vector boundaries (e.g. an SVG with
+        empty ``pristine_geometry``), the source is rendered to pixels
+        and traced into geometry before assembling.
+        """
+        part = build_part_vector_with_raster_fallback(
             workpiece,
-            surface=surface if use_surface else None,
-            normalize_windings=self.NORMALIZE_WINDINGS,
+            self.pixels_per_mm,
+            normalize_windings=True,
         )
-        if part is None or not part.has_geometry():
-            return make_artifact(
-                Ops(), workpiece, generation_id, is_vector=self.IS_VECTOR
-            )
-        kwargs = self.get_assembler_kwargs(machine_defaults, workpiece)
-        result = assembler_registry.assemble(
-            self.ASSEMBLER_NAME, part, **kwargs
+        kwargs = self.get_assembler_kwargs(machine, workpiece)
+        spec = AdaptiveWavefrontSpec(
+            kwargs["step_over"],
+            0.0,
+            kwargs["area_tolerance"],
+            kwargs["precision"],
         )
-        set_power = machine_defaults.step_power if self.SET_POWER else None
-        return wrap_assembler_result(
-            result,
-            workpiece,
-            laser,
-            generation_id,
-            split_contours=self.SPLIT_CONTOURS,
-            set_power=set_power,
-            is_vector=self.IS_VECTOR,
-        )
+        return part, ComputePayload(assembler=Assembler(spec))
+
+    def assembler_token_params(
+        self,
+        machine: Machine,
+        workpiece: WorkPiece,
+    ) -> dict | None:
+        return self.get_assembler_kwargs(machine, workpiece)
 
     def to_dict(self) -> dict:
         result = super().to_dict()
@@ -103,15 +125,24 @@ class WavefrontStep(Step):
         return result
 
     @classmethod
-    def from_dict(cls, data: dict) -> "WavefrontStep":
+    def from_dict(cls, data: dict) -> WavefrontStep:
         step = cast("WavefrontStep", super().from_dict(data))
-        step.step_over_mm = data.get("step_over_mm", None)
-        step.offset_mm = data.get("offset_mm", 0.0)
-        step.area_tolerance = data.get("area_tolerance", 0.01)
+        # Projects saved before the raygeo-pipeline refactor stored the
+        # producer parameters inside ``opsproducer_dict.params``.  Migrate
+        # them so the saved step-over survives loading instead of falling
+        # back to the laser spot size.
+        legacy = legacy_producer_params(data)
+        step.step_over_mm = data.get(
+            "step_over_mm", legacy.get("step_over_mm", None)
+        )
+        step.offset_mm = data.get("offset_mm", legacy.get("offset_mm", 0.0))
+        step.area_tolerance = data.get(
+            "area_tolerance", legacy.get("area_tolerance", 0.01)
+        )
         return step
 
     @classmethod
-    def get_default_transformers_dicts(cls) -> Tuple[List, List]:
+    def get_default_transformers_dicts(cls) -> tuple[list, list]:
         CropTransformer = transformer_registry.get("CropTransformer")
         Optimize = transformer_registry.get("Optimize")
         MultiPassTransformer = transformer_registry.get("MultiPassTransformer")
@@ -130,23 +161,29 @@ class WavefrontStep(Step):
     @classmethod
     def create(
         cls,
-        context: "RayforgeContext",
-        name: Optional[str] = None,
+        context: RayforgeContext,
+        name: str | None = None,
         **kwargs,
-    ) -> "WavefrontStep":
+    ) -> WavefrontStep:
         machine = context.machine
         assert machine is not None
-        default_head = machine.get_default_head()
+        default_head = machine.get_default_laser_head()
+        if default_head is None:
+            raise ValueError("Machine has no laser heads configured.")
 
         step = cls(name=name)
         per_wp, per_step = cls.get_default_transformers_dicts()
         step.per_workpiece_transformers_dicts = per_wp
         step.per_step_transformers_dicts = per_step
-        step.selected_laser_uid = default_head.uid
-        step.kerf_mm = default_head.spot_size_mm[0]
+        step.selected_head_uid = default_head.uid
         step.max_cut_speed = machine.max_cut_speed
         step.max_travel_speed = machine.max_travel_speed
-        for cap in machine.get_laser_capabilities(default_head):
-            for var in cap.varset:
-                setattr(step, var.key, var.default)
+        # Operating feed defaults are machine-derived: the machine only
+        # exposes its ceiling, so the default is that ceiling, bounded by
+        # the operation's typical feed rate.
+        step.cut_speed = min(machine.max_cut_speed, 500)
+        params = machine.get_pwm_params(default_head)
+        if params is not None:
+            step.frequency = params.frequency
+            step.pulse_width = params.pulse_width
         return step

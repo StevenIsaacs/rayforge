@@ -1,6 +1,6 @@
 # Ajustes
 
-![Ajustes Generales](/screenshots/application-general.png)
+![Ajustes Generales](/screenshots/app-settings-general.png)
 
 Personaliza Rayforge para que coincida con tu flujo de trabajo y preferencias.
 Abre los ajustes vía **Editar → Ajustes** o presiona <kbd>ctrl+coma</kbd>.
@@ -57,6 +57,8 @@ la aplicación. Cada una tiene su propia documentación:
   bibliotecas de materiales
 - [Recetas](../application-settings/recipes.md) — gestionar las recetas de
   operaciones guardadas
+- [Reglas de color](../application-settings/color-rules.md) — asignar los
+  colores SVG a tipos de paso
 - [Proveedores de IA](../application-settings/ai-provider.md) — configurar
   proveedores de IA para uso de los addons
 - [Addons](../application-settings/addons.md) — instalar, actualizar y eliminar

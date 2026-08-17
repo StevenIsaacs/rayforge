@@ -5,7 +5,12 @@ import pytest
 
 from rayforge.core.color import ColorSet
 from rayforge.machine.models.machine import Origin
-from rayforge.ui_gtk.sim3d.gl_utils import RenderContext
+from rayforge.ui_gtk.sim3d.gl_utils import ShaderSet
+from rayforge.ui_gtk.sim3d.render_context import (
+    CameraContext,
+    RenderContext,
+    ViewportContext,
+)
 from rayforge.ui_gtk.sim3d.renderer.axis_renderer_3d import AxisRenderer3D
 
 # Test scenarios for axis label expectations, mirrored from the 2D canvas tests
@@ -130,37 +135,34 @@ def test_axis_label_rendering(
 
     # Dummy matrices are sufficient as we only test label text, not position
     dummy_mvp = np.identity(4, dtype=np.float32)
-    dummy_view = np.identity(4, dtype=np.float32)
 
     # 4. Call the private method containing the label generation logic
     ctx = RenderContext(
-        proj_matrix=np.eye(4, dtype=np.float32),
-        view_matrix=dummy_view,
-        mvp_ui=dummy_mvp,
-        mvp_scene=dummy_mvp,
-        margin_shift=np.eye(4, dtype=np.float32),
-        model_matrix=model_matrix,
-        viewport_height=800,
-        camera_position=np.zeros(3),
-        color_set=ColorSet(),
+        camera=CameraContext(
+            mvp_ui=dummy_mvp,
+            viewport_height=800,
+            camera_position=np.zeros(3),
+            color_set=ColorSet(),
+        ),
+        viewport=ViewportContext(
+            model_matrix=model_matrix,
+            wcs_offset_mm=wcs_offset,
+            x_right=x_right,
+            x_negative=x_negative,
+            y_negative=y_negative,
+        ),
     )
     axis_renderer._render_axis_labels(
         ctx=ctx,
-        text_shader=MagicMock(),
-        text_mvp_matrix=dummy_mvp,
-        origin_offset_mm=wcs_offset,
-        x_right=x_right,
-        y_down=y_down,
-        x_negative=x_negative,
-        y_negative=y_negative,
+        shaders=ShaderSet(text=MagicMock()),
     )
 
     # 5. Collect and verify the results against expectations
     rendered_labels = []
-    if mock_text_renderer.render_text.called:
-        for call_args in mock_text_renderer.render_text.call_args_list:
-            # The label text is the second positional argument (index 1)
-            label_text = call_args.args[2]
+    if mock_text_renderer.render.called:
+        for call_args in mock_text_renderer.render.call_args_list:
+            # The label text is passed as a keyword argument
+            label_text = call_args.kwargs["text"]
             if label_text:
                 rendered_labels.append(int(label_text))
 
@@ -179,3 +181,64 @@ def test_axis_label_rendering(
         f"Failed for origin={origin.name}, negative={negative}, "
         f"wcs_offset={wcs_offset}"
     )
+
+
+@pytest.mark.ui
+def test_axis_labels_in_preferred_unit():
+    """Axis labels are displayed in the user's preferred length unit."""
+    width_mm, height_mm = 120.0, 120.0
+    axis_renderer = AxisRenderer3D(
+        width_mm=width_mm,
+        height_mm=height_mm,
+        grid_size_mm=25.4,  # 1 inch
+        grid_unit_factor=25.4,
+    )
+    mock_text_renderer = MagicMock()
+    axis_renderer.text_renderer = mock_text_renderer
+
+    dummy_mvp = np.identity(4, dtype=np.float32)
+    ctx = RenderContext(
+        camera=CameraContext(
+            mvp_ui=dummy_mvp,
+            viewport_height=800,
+            camera_position=np.zeros(3),
+            color_set=ColorSet(),
+        ),
+        viewport=ViewportContext(
+            model_matrix=np.eye(4, dtype=np.float32),
+            wcs_offset_mm=(0.0, 0.0, 0.0),
+        ),
+    )
+    axis_renderer._render_axis_labels(
+        ctx=ctx,
+        shaders=ShaderSet(text=MagicMock()),
+    )
+
+    rendered_labels = set()
+    if mock_text_renderer.render.called:
+        for call_args in mock_text_renderer.render.call_args_list:
+            label_text = call_args.kwargs["text"]
+            if label_text:
+                rendered_labels.add(int(label_text))
+
+    # A 120mm bed is ~4.7 inches; labels are whole inches 0..4.
+    assert rendered_labels == {0, 1, 2, 3, 4}
+
+
+def test_grid_renders_over_stock_plane():
+    """
+    Depth layering: the grid sits on the bed (z=0), above the
+    background plane and below the WCS marker and extent frame.
+    Stock top faces are at z=+thickness, physically above the grid.
+    """
+    from rayforge.ui_gtk.sim3d.renderer.axis_renderer_3d import (
+        BACKGROUND_Z,
+        EXTENT_FRAME_Z,
+        GRID_Z,
+        WCS_MARKER_Z,
+    )
+
+    assert GRID_Z > 0.0  # above the bed background
+    assert BACKGROUND_Z < 0.0  # bed plane below the grid
+    assert WCS_MARKER_Z > GRID_Z  # marker above grid
+    assert EXTENT_FRAME_Z > WCS_MARKER_Z  # extent frame on top

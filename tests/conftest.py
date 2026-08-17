@@ -13,6 +13,8 @@ try:
     import gi
 
     gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("Graphene", "1.0")
     gi.require_version("Adw", "1")
     gi.require_version("Pango", "1.0")
     gi.require_version("PangoCairo", "1.0")
@@ -22,8 +24,9 @@ except ValueError:
 import asyncio
 import gc
 import logging
+from collections.abc import AsyncGenerator
 from functools import partial
-from typing import TYPE_CHECKING, AsyncGenerator
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -105,18 +108,20 @@ def _test_worker_initializer(shared_state: dict):
 
     # This patch runs *inside the new worker process*
     # after it starts, but before the application's real initializer runs.
-    with patch(
-        "gi.repository.GLib.idle_add",
-        side_effect=lambda *args, **kwargs: pytest.fail(fail_msg),
-    ):
-        with patch(
+    with (
+        patch(
+            "gi.repository.GLib.idle_add",
+            side_effect=lambda *args, **kwargs: pytest.fail(fail_msg),
+        ),
+        patch(
             "rayforge.shared.util.glib.idle_add",
             side_effect=lambda *args, **kwargs: pytest.fail(
                 "GLib.idle_add called from within a worker process."
             ),
-        ):
-            # Now call the application's real initializer.
-            initialize_worker(shared_state)
+        ),
+    ):
+        # Now call the application's real initializer.
+        initialize_worker(shared_state)
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -146,16 +151,18 @@ def block_glib_event_loop(request):
     )
 
     # Using `patch` as a context manager. It will be active during the `yield`.
-    with patch(
-        "gi.repository.GLib.idle_add",
-        side_effect=lambda *args, **kwargs: pytest.fail(fail_msg),
-    ):
-        with patch(
+    with (
+        patch(
+            "gi.repository.GLib.idle_add",
+            side_effect=lambda *args, **kwargs: pytest.fail(fail_msg),
+        ),
+        patch(
             "rayforge.shared.util.glib.idle_add",
             side_effect=lambda *args, **kwargs: pytest.fail(fail_msg),
-        ):
-            # The test session runs here, with the patches active.
-            yield
+        ),
+    ):
+        # The test session runs here, with the patches active.
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -200,11 +207,6 @@ def clean_context_singleton():
     # Finally, reset the global singleton variable so the next test
     # starts with a completely fresh context.
     rayforge_context._context_instance = None
-
-    # Also reset the lazy loader to prevent pollution of sys.meta_path across tests
-    from rayforge.addon_mgr.lazy_loader import reset_addon_finder
-
-    reset_addon_finder()
 
     gc.collect()
 
@@ -253,6 +255,8 @@ async def context_initializer(tmp_path, task_mgr, monkeypatch):
     monkeypatch.setattr(config, "DIALECT_DIR", temp_dialect_dir)
     monkeypatch.setattr(config, "MACHINE_DIR", temp_machine_dir)
     monkeypatch.setattr(config, "ADDONS_DIR", temp_addons_dir)
+    monkeypatch.setattr(config, "CONFIG_FILE", temp_config_dir / "config.yaml")
+    monkeypatch.setattr(config, "AI_CONFIG_FILE", temp_config_dir / "ai.yaml")
 
     # 2. Patch the global task_mgr proxy to use our test-isolated instance.
     monkeypatch.setattr(tasker.task_mgr, "_instance", task_mgr)
@@ -261,9 +265,7 @@ async def context_initializer(tmp_path, task_mgr, monkeypatch):
     context = get_context()
     context._headless = True
 
-    # 4. Access addon_mgr to trigger lazy loading (worker_only=True).
-    # task_mgr is already passed to AddonManager at construction time,
-    # so the manifest is built and pushed to shared_state automatically.
+    # 4. Access addon_mgr to trigger lazy loading.
     _ = context.addon_mgr
 
     yield context
@@ -386,11 +388,15 @@ def isolated_context():
     """
     from unittest.mock import MagicMock
 
+    driver = MagicMock()
+    driver.supports_pwm.return_value = False
+    driver.get_pwm_params.return_value = None
+
     context = MagicMock()
     context.dialect_mgr = MockDialectManager()
     context.machine_mgr = MagicMock()
     context.machine_mgr.get_controller = MagicMock(
-        return_value=MagicMock(driver=MagicMock())
+        return_value=MagicMock(driver=driver)
     )
     yield context
 
@@ -471,6 +477,8 @@ def ui_context_initializer(tmp_path, monkeypatch, ui_task_mgr):
     monkeypatch.setattr(config, "DIALECT_DIR", temp_dialect_dir)
     monkeypatch.setattr(config, "MACHINE_DIR", temp_machine_dir)
     monkeypatch.setattr(config, "ADDONS_DIR", temp_addons_dir)
+    monkeypatch.setattr(config, "CONFIG_FILE", temp_config_dir / "config.yaml")
+    monkeypatch.setattr(config, "AI_CONFIG_FILE", temp_config_dir / "ai.yaml")
     monkeypatch.setattr(tasker.task_mgr, "_instance", ui_task_mgr)
 
     context = get_context()
@@ -583,6 +591,11 @@ def mock_task_mgr():
         future.cancel = MagicMock()
         return future
 
+    def run_thread_impl(func, *args, key=None, when_done=None, **kwargs):
+        func(*args, **kwargs)
+        if when_done:
+            when_done(None)
+
     def has_tasks_impl():
         return len(created_tasks) > 0
 
@@ -596,6 +609,7 @@ def mock_task_mgr():
     mock_mgr.schedule_delayed_on_main_thread = MagicMock(
         side_effect=schedule_delayed_impl
     )
+    mock_mgr.run_thread = MagicMock(side_effect=run_thread_impl)
     mock_mgr.has_tasks = MagicMock(side_effect=has_tasks_impl)
     mock_mgr.created_tasks = created_tasks
     return mock_mgr
@@ -611,9 +625,9 @@ def zero_debounce_delay(monkeypatch):
         def _zero_debounce_delay(zero_debounce_delay):
             pass
     """
-    from rayforge.pipeline.pipeline import Pipeline
-
-    monkeypatch.setattr(Pipeline, "RECONCILIATION_DELAY_MS", 0)
+    monkeypatch.setattr(
+        "rayforge.pipeline.intent_controller.REBUILD_DEBOUNCE_MS", 0
+    )
 
 
 @pytest_asyncio.fixture
@@ -643,7 +657,7 @@ def mock_progress_context():
             self.message_calls: list[str] = []
             self._is_cancelled = False
             self._total = 1.0
-            self._sub_contexts: list["_SimpleMockProgressContext"] = []
+            self._sub_contexts: list[_SimpleMockProgressContext] = []
 
         def is_cancelled(self) -> bool:
             return self._is_cancelled
@@ -749,7 +763,6 @@ class MockProgressContext(ProgressContext):
 
     def _report_normalized_progress(self, progress: float) -> None:
         """Report a normalized progress value."""
-        pass
 
     def _create_sub_context(
         self,
@@ -812,7 +825,7 @@ class _MockProgressContextImpl:
         self.message_calls: list[str] = []
         self.total_calls: list[float] = []
         self.flush_calls: int = 0
-        self.sub_contexts: list["_MockProgressContextImpl"] = []
+        self.sub_contexts: list[_MockProgressContextImpl] = []
 
     def is_cancelled(self) -> bool:
         """Check if the operation has been cancelled."""
@@ -896,11 +909,9 @@ class _InnerMockProgressContext:
 
     def set_message(self, message: str) -> None:
         """Set a descriptive status message."""
-        pass
 
     def flush(self) -> None:
         """Immediately send any pending updates."""
-        pass
 
     def set_total(self, total: float) -> None:
         """Set the total value for progress normalization."""
@@ -920,7 +931,6 @@ class _InnerMockProgressContext:
 
     def _report_normalized_progress(self, progress: float) -> None:
         """Report a normalized progress value."""
-        pass
 
     def _create_sub_context(
         self,
@@ -939,31 +949,13 @@ class _InnerMockProgressContext:
 @pytest.fixture
 def adopting_mock_proxy():
     """
-    Creates a mock ExecutionContextProxy that adopts artifacts when
-    send_event_and_wait is called.
-
-    On Windows, shared memory is destroyed when all handles are closed.
-    When tests run runner functions in-process (not in a real subprocess),
-    the runner calls forget() after send_event_and_wait returns, which
-    closes the only handle. This mock simulates the main process adopting
-    the artifact before the runner forgets it.
+    Creates a mock ExecutionContextProxy that returns True for
+    send_event_and_wait.
     """
     from unittest.mock import MagicMock
 
-    from rayforge.context import get_context
-    from rayforge.pipeline.artifact import create_handle_from_dict
-
-    artifact_store = get_context().artifact_store
-
-    def mock_send_event_and_wait(event_name, data, logger=None):
-        handle_dict = data.get("handle_dict")
-        if handle_dict:
-            handle = create_handle_from_dict(handle_dict)
-            artifact_store.adopt(handle)
-        return True
-
     proxy = MagicMock()
-    proxy.send_event_and_wait.side_effect = mock_send_event_and_wait
+    proxy.send_event_and_wait.return_value = True
     return proxy
 
 

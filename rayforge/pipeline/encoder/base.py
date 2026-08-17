@@ -1,134 +1,141 @@
-import base64
-import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+import numpy as np
 from raygeo.ops import Ops
 
 
-def _jsonify(value: Any) -> Any:
-    """Recursively convert tuples to lists for JSON-safe serialization."""
-    if isinstance(value, tuple):
-        return [_jsonify(item) for item in value]
-    if isinstance(value, list):
-        return [_jsonify(item) for item in value]
-    return value
-
-
-@dataclass
 class MachineCodeOpMap:
     """
-    A container for a bidirectional mapping between Ops command indices and
-    Machine language (e.g. G-code) line numbers.
+    A bidirectional mapping between Ops command indices and Machine
+    language (e.g. G-code) line numbers.
 
-    Attributes:
-        op_to_machine_code: Maps an Ops command index to a list of G-code line
-                     numbers it generated. An empty list means the command
-                     produced no G-code.
-        machine_code_to_op: Maps a G-code line number back to the Ops command
-                     index that generated it.
+    Data is stored as compact numpy ``int32`` arrays (4 bytes/element)
+    instead of Python lists of ints/tuples (~28-56 bytes/element).  When
+    constructed from raygeo's ``bytearray`` getters, the arrays are
+    zero-copy ``np.frombuffer`` views over the bytearray, so no
+    per-element Python objects are ever materialized
+    (1.6 M ops: 196 MB list-of-tuples → 13 MB).
+
+    Access is through the :meth:`span_for_op` and :meth:`op_for_line`
+    methods (plus :attr:`op_count` / :attr:`line_count`) rather than
+    raw list indexing.
     """
 
-    op_to_machine_code: Dict[int, List[int]] = field(default_factory=dict)
-    machine_code_to_op: Dict[int, int] = field(default_factory=dict)
+    def __init__(
+        self,
+        op_to_machine_code: bytearray | None = None,
+        machine_code_to_op: bytearray | None = None,
+    ) -> None:
+        self._spans: np.ndarray = np.empty((0, 2), dtype=np.int32)
+        self._line_to_op: np.ndarray = np.empty(0, dtype=np.int32)
+        self._spans_bytes: bytearray | None = None
+        self._line_to_op_bytes: bytearray | None = None
+        if op_to_machine_code is not None:
+            self._set_spans(op_to_machine_code)
+        if machine_code_to_op is not None:
+            self._set_line_to_op(machine_code_to_op)
+
+    @classmethod
+    def from_lists(
+        cls,
+        op_to_machine_code: list[tuple[int, int]],
+        machine_code_to_op: list[int],
+    ) -> "MachineCodeOpMap":
+        """Build a map from the legacy list-of-tuples / list-of-ints
+        representation (used by encoders that construct the spans
+        incrementally, e.g. the Ruida encoder)."""
+        spans_bytes = bytearray()
+        for start, count in op_to_machine_code:
+            spans_bytes.extend(start.to_bytes(4, "little", signed=True))
+            spans_bytes.extend(count.to_bytes(4, "little", signed=True))
+        line_to_op_bytes = bytearray()
+        for v in machine_code_to_op:
+            line_to_op_bytes.extend(v.to_bytes(4, "little", signed=True))
+        return cls(
+            op_to_machine_code=spans_bytes,
+            machine_code_to_op=line_to_op_bytes,
+        )
+
+    def _set_spans(self, value: bytearray) -> None:
+        if len(value) % 8 != 0:
+            raise ValueError(
+                "op_to_machine_code bytearray length must be a multiple of 8"
+            )
+        self._spans = np.frombuffer(value, dtype=np.int32).reshape(-1, 2)
+        self._spans_bytes = value
+
+    def _set_line_to_op(self, value: bytearray) -> None:
+        if len(value) % 4 != 0:
+            raise ValueError(
+                "machine_code_to_op bytearray length must be a multiple of 4"
+            )
+        self._line_to_op = np.frombuffer(value, dtype=np.int32)
+        self._line_to_op_bytes = value
+
+    @property
+    def op_count(self) -> int:
+        """Number of Ops commands in the map."""
+        return self._spans.shape[0]
+
+    @property
+    def line_count(self) -> int:
+        """Number of G-code lines in the map."""
+        return len(self._line_to_op)
+
+    def span_for_op(self, op_index: int) -> tuple[int, int]:
+        """Return ``(start_line, line_count)`` for *op_index*.
+
+        A ``line_count`` of zero means the op produced no G-code.
+        Raises :class:`IndexError` when *op_index* is out of range.
+        """
+        if not 0 <= op_index < self._spans.shape[0]:
+            raise IndexError(f"op index out of range: {op_index}")
+        start, count = self._spans[op_index]
+        return (int(start), int(count))
+
+    def op_for_line(self, line_idx: int) -> int | None:
+        """Op index for a machine-code line, or ``None`` if the line is
+        out of range or has no owning op."""
+        if 0 <= line_idx < len(self._line_to_op):
+            mapped = self._line_to_op[line_idx]
+            if mapped != -1:
+                return int(mapped)
+        return None
+
+    @property
+    def op_to_machine_code_bytes(self) -> bytearray:
+        """The interleaved ``(start, count)`` i32 payload as a
+        bytearray, for passing directly to raygeo's
+        ``EncodeOutput.MachineCode`` constructor."""
+        if self._spans_bytes is None:
+            self._spans_bytes = bytearray(self._spans.tobytes())
+        return self._spans_bytes
+
+    @property
+    def machine_code_to_op_bytes(self) -> bytearray:
+        """The line→op i32 payload as a bytearray, for passing directly
+        to raygeo's ``EncodeOutput.MachineCode`` constructor."""
+        if self._line_to_op_bytes is None:
+            self._line_to_op_bytes = bytearray(self._line_to_op.tobytes())
+        return self._line_to_op_bytes
 
 
 @dataclass
 class EncodedOutput:
     """
-    Base class for encoder output. Must be JSON-serializable
-    via to_dict/from_dict.
-
-    This provides a unified interface for all encoder outputs,
-    allowing the UI
-    to work with any encoder type without needing to know the specifics.
+    Base class for encoder output.
 
     Attributes:
         text: Human-readable machine code representation for UI display.
         op_map: Bidirectional mapping between ops indices and line numbers.
         driver_data: Optional driver-specific data (e.g., binary for Ruida).
-                     Bytes values are stored as base64-encoded strings.
-        rpa_plan: Optional recorded GlueScript call plan
-                  (``[method_name, args]`` pairs) for server-side
-                  re-staging of a ruidarpa job. ``None`` when the
-                  encoder produced no plan.
     """
 
     text: str
     op_map: MachineCodeOpMap
-    driver_data: Dict[str, Any] = field(default_factory=dict)
-    rpa_plan: Optional[List[Any]] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Serialize to a JSON-compatible dictionary.
-        Bytes values in driver_data are converted to base64 strings.
-        """
-        serialized_driver_data = {}
-        for key, value in self.driver_data.items():
-            if isinstance(value, bytes):
-                serialized_driver_data[key] = {
-                    "__type__": "bytes",
-                    "data": base64.b64encode(value).decode("ascii"),
-                }
-            else:
-                serialized_driver_data[key] = value
-
-        return {
-            "text": self.text,
-            "op_map": {
-                "op_to_machine_code": {
-                    str(k): v
-                    for k, v in self.op_map.op_to_machine_code.items()
-                },
-                "machine_code_to_op": {
-                    str(k): v
-                    for k, v in self.op_map.machine_code_to_op.items()
-                },
-            },
-            "driver_data": serialized_driver_data,
-            "rpa_plan": _jsonify(self.rpa_plan),
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EncodedOutput":
-        """
-        Deserialize from a dictionary.
-        Base64-encoded bytes in driver_data are converted back to bytes.
-        """
-        op_map_data = data["op_map"]
-        op_map = MachineCodeOpMap(
-            op_to_machine_code={
-                int(k): v for k, v in op_map_data["op_to_machine_code"].items()
-            },
-            machine_code_to_op={
-                int(k): v for k, v in op_map_data["machine_code_to_op"].items()
-            },
-        )
-
-        deserialized_driver_data = {}
-        for key, value in data.get("driver_data", {}).items():
-            if isinstance(value, dict) and value.get("__type__") == "bytes":
-                deserialized_driver_data[key] = base64.b64decode(value["data"])
-            else:
-                deserialized_driver_data[key] = value
-
-        return cls(
-            text=data["text"],
-            op_map=op_map,
-            driver_data=deserialized_driver_data,
-            rpa_plan=data.get("rpa_plan"),
-        )
-
-    def to_json(self) -> str:
-        """Serialize to a JSON string."""
-        return json.dumps(self.to_dict())
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "EncodedOutput":
-        """Deserialize from a JSON string."""
-        return cls.from_dict(json.loads(json_str))
+    driver_data: dict[str, Any] = field(default_factory=dict)
 
 
 class OpsEncoder(ABC):

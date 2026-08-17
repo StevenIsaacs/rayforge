@@ -1,7 +1,8 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Optional, Protocol, cast
 
 from raygeo.geo import Geometry
 from raygeo.svg import svg_string_to_geometry
@@ -38,9 +39,9 @@ class GenerationResult:
     """Result of AI generation with optional sketch conversion."""
 
     sketch: Optional["IGeometryProvider"] = None
-    svg_content: Optional[str] = None
-    geometry: Optional[Geometry] = None
-    error: Optional[str] = None
+    svg_content: str | None = None
+    geometry: Geometry | None = None
+    error: str | None = None
 
 
 class AISvgGeneratorController:
@@ -101,7 +102,7 @@ class AISvgGeneratorController:
                             "Successfully converted AI-generated SVG to "
                             "editable sketch"
                         )
-                except Exception as e:
+                except (ValueError, TypeError) as e:
                     logger.warning(
                         "Failed to convert SVG to sketch: %s", e, exc_info=True
                     )
@@ -112,7 +113,7 @@ class AISvgGeneratorController:
                 task_mgr.schedule_on_main_thread(on_success, result)
 
             except Exception as e:
-                logger.error("Error in generation task: %s", e, exc_info=True)
+                logger.exception("Error in generation task")
                 if not self._cancelled:
                     task_mgr.schedule_on_main_thread(on_error, str(e))
 
@@ -121,7 +122,7 @@ class AISvgGeneratorController:
         def on_done(f):
             try:
                 f.result()
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - future callback boundary
                 logger.error("Generation future error: %s", e)
                 if not self._cancelled:
                     task_mgr.schedule_on_main_thread(on_error, str(e))

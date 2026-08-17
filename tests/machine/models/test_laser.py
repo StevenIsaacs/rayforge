@@ -1,7 +1,15 @@
 from unittest.mock import MagicMock
 
-from rayforge.core.capability import PWMCapability
-from rayforge.machine.models.laser import Laser, LaserType
+from rayforge.core.capability import MachineCapability
+from rayforge.machine.driver.driver import PWMParams
+from rayforge.machine.models.head import Head
+from rayforge.machine.models.laser import (
+    DEFAULT_FOCAL_DISTANCE_MM,
+    Laser,
+    LaserHead,
+    LaserType,
+    effective_focal_distance,
+)
 
 
 def test_laser_initialization():
@@ -15,6 +23,23 @@ def test_laser_initialization():
     assert laser.focus_power_percent == 0
     assert laser.spot_size_mm == (0.1, 0.1)
     assert laser.uid is not None
+
+
+def test_effective_focal_distance_uses_configured_value():
+    laser = LaserHead()
+    laser.focal_distance = 30.0
+    assert effective_focal_distance(laser) == 30.0
+
+
+def test_effective_focal_distance_defaults_for_laser_head():
+    laser = LaserHead()
+    laser.focal_distance = 0.0
+    assert effective_focal_distance(laser) == DEFAULT_FOCAL_DISTANCE_MM
+
+
+def test_effective_focal_distance_zero_for_non_laser():
+    assert effective_focal_distance(Head()) == 0.0
+    assert effective_focal_distance(None) == 0.0
 
 
 def test_set_focus_power():
@@ -406,38 +431,50 @@ def test_pwm_missing_fields_use_init_defaults():
     assert laser.max_pulse_width == 500
 
 
-def test_base_driver_returns_empty_tuple(isolated_machine):
-    """Driver base class returns () for get_laser_capabilities."""
-    laser = Laser()
+def test_supports_pwm_delegates_to_driver(isolated_machine):
+    """Machine.supports_pwm delegates to the driver."""
+    head = LaserHead()
+    isolated_machine.heads = [head]
     mock_driver = isolated_machine.driver
-    mock_driver.get_laser_capabilities = MagicMock(return_value=())
+    mock_driver.supports_pwm = MagicMock(return_value=False)
 
-    result = isolated_machine.get_laser_capabilities(laser)
-    assert result == ()
+    assert isolated_machine.supports_pwm(head) is False
+    mock_driver.supports_pwm.assert_called_once_with(head)
 
 
-def test_machine_delegates_to_driver(isolated_machine):
-    """Machine.get_laser_capabilities delegates to driver."""
-    laser = Laser()
+def test_get_capabilities_includes_pwm_when_driver_supports_it(
+    isolated_machine,
+):
+    """A PWM machine capability is inferred from driver support."""
+    head = LaserHead()
+    isolated_machine.heads = [head]
     mock_driver = isolated_machine.driver
-    mock_driver.get_laser_capabilities = MagicMock(return_value=())
+    mock_driver.supports_pwm = MagicMock(return_value=False)
 
-    isolated_machine.get_laser_capabilities(laser)
+    assert MachineCapability.PWM not in isolated_machine.get_capabilities()
 
-    mock_driver.get_laser_capabilities.assert_called_once_with(laser)
+    mock_driver.supports_pwm = MagicMock(return_value=True)
+    assert MachineCapability.PWM in isolated_machine.get_capabilities()
 
 
-def test_machine_returns_driver_capabilities(isolated_machine):
-    """Machine returns whatever the driver's get_laser_capabilities returns."""
-    laser = Laser()
-    pwm_cap = PWMCapability(1000, 5000, 50, 1, 100)
+def test_get_pwm_params_returns_driver_params(isolated_machine):
+    """Machine.get_pwm_params returns the driver-reported params."""
+    head = LaserHead()
+    isolated_machine.heads = [head]
     mock_driver = isolated_machine.driver
-    mock_driver.get_laser_capabilities = MagicMock(return_value=(pwm_cap,))
+    params = PWMParams(1000, 5000, 50, 5, 500)
+    mock_driver.get_pwm_params = MagicMock(return_value=params)
 
-    result = isolated_machine.get_laser_capabilities(laser)
+    assert isolated_machine.get_pwm_params(head) is params
 
-    assert len(result) == 1
-    assert result[0] is pwm_cap
+
+def test_get_pwm_settings_none_without_pwm(isolated_machine):
+    head = LaserHead()
+    isolated_machine.heads = [head]
+    mock_driver = isolated_machine.driver
+    mock_driver.get_pwm_params = MagicMock(return_value=None)
+
+    assert isolated_machine.get_pwm_settings(head) is None
 
 
 def test_laser_type_default():

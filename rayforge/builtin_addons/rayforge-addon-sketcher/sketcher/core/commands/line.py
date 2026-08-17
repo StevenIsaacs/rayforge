@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Set
+from typing import TYPE_CHECKING
 
 from raygeo.geo.types import Point as GeoPoint
 
@@ -32,9 +32,9 @@ class LinePreviewState(PreviewState):
         self.start_temp = start_temp
         self.end_id = end_id
         self.entity_id = entity_id
-        self.locked_length: Optional[float] = None
+        self.locked_length: float | None = None
 
-    def get_preview_point_ids(self) -> Set[EntityID]:
+    def get_preview_point_ids(self) -> set[EntityID]:
         """
         Returns IDs of temporary preview points that shouldn't be snapped to.
 
@@ -42,7 +42,7 @@ class LinePreviewState(PreviewState):
         """
         return {self.end_id}
 
-    def set_length(self, registry: "EntityRegistry", length: float) -> None:
+    def set_length(self, registry: EntityRegistry, length: float) -> None:
         """
         Sets the line length from numeric input.
 
@@ -70,9 +70,7 @@ class LinePreviewState(PreviewState):
         end_p.x = start_p.x + dx * scale
         end_p.y = start_p.y + dy * scale
 
-    def get_dimensions(
-        self, registry: "EntityRegistry"
-    ) -> List["DimensionData"]:
+    def get_dimensions(self, registry: EntityRegistry) -> list[DimensionData]:
         """
         Returns the line length dimension for preview.
 
@@ -106,9 +104,9 @@ class LineCommand(SketchChangeCommand):
         sketch: Sketch,
         start_id: EntityID,
         end_pos: GeoPoint,
-        end_pid: Optional[EntityID] = None,
+        end_pid: EntityID | None = None,
         is_start_temp: bool = False,
-        fixed_length: Optional[float] = None,
+        fixed_length: float | None = None,
     ):
         super().__init__(sketch, _("Add Line"))
         self.start_id = start_id
@@ -116,11 +114,11 @@ class LineCommand(SketchChangeCommand):
         self.end_pid = end_pid
         self.is_start_temp = is_start_temp
         self.fixed_length = fixed_length
-        self.add_cmd: Optional[AddItemsCommand] = None
-        self._committed_end_id: Optional[EntityID] = None
+        self.add_cmd: AddItemsCommand | None = None
+        self._committed_end_id: EntityID | None = None
 
     @property
-    def committed_end_id(self) -> Optional[EntityID]:
+    def committed_end_id(self) -> EntityID | None:
         """
         The final end point ID after execute(), or None if not applicable.
         """
@@ -131,7 +129,7 @@ class LineCommand(SketchChangeCommand):
         registry: EntityRegistry,
         x: float,
         y: float,
-        snapped_pid: Optional[EntityID] = None,
+        snapped_pid: EntityID | None = None,
         **kwargs,
     ) -> LinePreviewState:
         """
@@ -178,10 +176,10 @@ class LineCommand(SketchChangeCommand):
             x, y: The new cursor coordinates.
 
         Raises:
-            AttributeError: If preview_state is not a LinePreviewState.
+            TypeError: If preview_state is not a LinePreviewState.
         """
         if not isinstance(preview_state, LinePreviewState):
-            raise AttributeError("Expected LinePreviewState")
+            raise TypeError("Expected LinePreviewState")
 
         if preview_state.locked_length is not None:
             return
@@ -208,10 +206,10 @@ class LineCommand(SketchChangeCommand):
             preview_state: The preview state from start_preview.
 
         Raises:
-            AttributeError: If preview_state is not a LinePreviewState.
+            TypeError: If preview_state is not a LinePreviewState.
         """
         if not isinstance(preview_state, LinePreviewState):
-            raise AttributeError("Expected LinePreviewState")
+            raise TypeError("Expected LinePreviewState")
 
         if preview_state.entity_id is not None:
             registry.entities = [
@@ -263,7 +261,7 @@ class LineCommand(SketchChangeCommand):
         temp_line_id = registry._id_counter + (1 if new_point else 0)
         new_line = Line(temp_line_id, self.start_id, end_pid)
 
-        points_to_add: List[Point] = [new_point] if new_point else []
+        points_to_add: list[Point] = [new_point] if new_point else []
 
         if self.is_start_temp:
             try:

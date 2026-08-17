@@ -1,6 +1,5 @@
 import logging
 from gettext import gettext as _
-from typing import Dict, Optional, Tuple, Type
 
 from gi.repository import Adw
 
@@ -8,32 +7,37 @@ from ....core.varset import Var
 
 # Trigger @register_adapter decorators. Every adapter module must be
 # imported here so that its class registers itself in _ADAPTER_REGISTRY.
+from .angle import AngleRowAdapter
 from .appkey import AppKeyAdapter
 from .base import _ADAPTER_REGISTRY, RowAdapter, escape_title
 from .combo import BaudRateAdapter, ComboAdapter, SerialPortAdapter
 from .entry import EntryAdapter, HostnameAdapter
+from .length import LengthRowAdapter
 from .oauth import OAuthFlowAdapter
-from .slider import SliderAdapter
+from .slider import SliderFloatAdapter, SliderIntAdapter
 from .speed import SpeedRowAdapter
 from .spin_row import SpinRowAdapter
 from .switch import SwitchAdapter
 from .textarea import TextAreaAdapter
 
 _ALL_ADAPTERS = (
+    AngleRowAdapter,
     AppKeyAdapter,
     BaudRateAdapter,
     ComboAdapter,
     SerialPortAdapter,
     HostnameAdapter,
+    LengthRowAdapter,
     OAuthFlowAdapter,
-    SliderAdapter,
+    SliderFloatAdapter,
+    SliderIntAdapter,
     SpeedRowAdapter,
     TextAreaAdapter,
 )
 
 logger = logging.getLogger(__name__)
 
-_FALLBACK_MAP: Dict[type, Type[RowAdapter]] = {
+_FALLBACK_MAP: dict[type, type[RowAdapter]] = {
     int: SpinRowAdapter,
     float: SpinRowAdapter,
     bool: SwitchAdapter,
@@ -43,7 +47,7 @@ _FALLBACK_MAP: Dict[type, Type[RowAdapter]] = {
 
 def create_row_for_var(
     var: Var, target_property: str = "value"
-) -> Tuple[Adw.PreferencesRow, Optional[RowAdapter]]:
+) -> tuple[Adw.PreferencesRow, RowAdapter | None]:
     """
     Creates a PreferencesRow and RowAdapter for the given Var.
 
@@ -51,7 +55,7 @@ def create_row_for_var(
     Falls back to var.var_type if no adapter is registered for any
     class in the hierarchy.
     """
-    adapter_cls: Optional[Type[RowAdapter]] = None
+    adapter_cls: type[RowAdapter] | None = None
 
     for cls in type(var).__mro__:
         if cls in _ADAPTER_REGISTRY:

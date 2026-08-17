@@ -1,12 +1,9 @@
-import uuid
 from enum import Enum
 from gettext import gettext as _
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Optional
 
-import numpy as np
-from blinker import Signal
-
-from ...core.matrix import euler_rotation_matrix
+from ...core.capability import MachineCapability
+from .head import _HEAD_SERIALIZED_KEYS, Head
 
 
 class LaserType(Enum):
@@ -19,22 +16,49 @@ class LaserType(Enum):
         return self in (LaserType.CO2, LaserType.FIBER)
 
 
-class Laser:
+# Minimum sane laser spot size in mm. Guards against unconfigured
+# (zero) spot data reaching the raster resolution code, which divides
+# by the spot size.
+MIN_SPOT_SIZE_MM = 0.1
+
+# Default focal distance in mm used for 3D visuals when a laser head
+# has no positive focal distance configured.  The beam renderer and the
+# head-model placement must agree on this value so the beam spans
+# exactly from the workpiece to the head's nozzle.
+DEFAULT_FOCAL_DISTANCE_MM = 50.0
+
+
+def effective_focal_distance(head: Head | None) -> float:
+    """The focal distance used for 3D visuals for a laser head.
+
+    Returns the head's configured focal distance when positive, the
+    shared default otherwise.  Non-laser heads (e.g. spindles) have no
+    focal distance and yield ``0.0``.
+    """
+    if not isinstance(head, LaserHead):
+        return 0.0
+    if head.focal_distance and head.focal_distance > 0:
+        return head.focal_distance
+    return DEFAULT_FOCAL_DISTANCE_MM
+
+
+class LaserHead(Head):
+    """A laser head, implying the LASER machine capability."""
+
+    HEAD_TYPE: str = "LaserHead"
+
     def __init__(self):
-        self.uid: str = str(uuid.uuid4())
+        super().__init__()
         self.name: str = _("Laser Head")
-        self.tool_number: int = 0
         self.max_power: int = 1000  # Max power (0-1000 for GRBL)
         self.frame_power_percent: float = 0  # in percent (0-1.0)
         self.focus_power_percent: float = 0  # in percent (0-1.0)
         self.frame_speed: int = 0  # mm/min, 0 = use machine max travel speed
         self.frame_repeat_count: int = 20
         self.frame_corner_pause: float = 0  # seconds
-        self.spot_size_mm: Tuple[float, float] = 0.1, 0.1  # millimeters
+        self.spot_size_mm: tuple[float, float] = 0.1, 0.1  # millimeters
         self.cut_color: str = "#ff00ff"  # Magenta for cut
         self.raster_color: str = "#000000"  # Black for raster
-        self.model_path: Optional[str] = None
-        self.transform: np.ndarray = np.eye(4, dtype=np.float64)
         self.focal_distance: float = 0.0
         self.laser_type: LaserType = LaserType.DIODE
         self.pwm_frequency: int = 500
@@ -42,16 +66,38 @@ class Laser:
         self.pulse_width: int = 50
         self.min_pulse_width: int = 5
         self.max_pulse_width: int = 500
-        self.changed = Signal()
-        self.extra: Dict[str, Any] = {}
 
-    def set_name(self, name: str):
-        self.name = name
-        self.changed.send(self)
+    @property
+    def machine_capability(self) -> MachineCapability:
+        return MachineCapability.LASER
 
-    def set_tool_number(self, tool_number: int):
-        self.tool_number = tool_number
-        self.changed.send(self)
+    @property
+    def kerf_mm(self) -> float:
+        """The kerf-compensation displacement for this head, in mm.
+
+        Derived from the beam spot size: the path is shifted by half
+        the spot width so the cut part comes out dimensionally
+        accurate. Read-only; change ``spot_size_mm`` to alter it.
+        """
+        spot_x = self.spot_size_mm[0]
+        return spot_x / 2.0
+
+    @staticmethod
+    def get_spot_size(head: Optional["LaserHead"]) -> tuple[float, float]:
+        """The effective spot size ``(x, y)`` in mm for a laser head.
+
+        Falls back to a sane minimum when no laser head is available.
+        A missing or zero spot size (an unconfigured head) is clamped so
+        raster resolution code never divides by zero.
+        """
+        if head is None:
+            return MIN_SPOT_SIZE_MM, MIN_SPOT_SIZE_MM
+        spot_x, spot_y = head.spot_size_mm
+        if not spot_x or spot_x <= 0:
+            spot_x = MIN_SPOT_SIZE_MM
+        if not spot_y or spot_y <= 0:
+            spot_y = MIN_SPOT_SIZE_MM
+        return spot_x, spot_y
 
     def set_max_power(self, power):
         self.max_power = power
@@ -87,7 +133,7 @@ class Laser:
 
     def _percent_to_gcode(self, percent):
         """Convert percentage (0-100) to gcode power value (0-max_power)."""
-        return int(round((percent / 100) * self.max_power))
+        return round((percent / 100) * self.max_power)
 
     def set_spot_size(self, spot_size_x_mm, spot_size_y_mm):
         self.spot_size_mm = spot_size_x_mm, spot_size_y_mm
@@ -99,46 +145,6 @@ class Laser:
 
     def set_raster_color(self, color: str):
         self.raster_color = color
-        self.changed.send(self)
-
-    def set_model_path(self, model_path: Optional[str]):
-        if self.model_path == model_path:
-            return
-        self.model_path = model_path
-        self.changed.send(self)
-
-    def get_rotation(self):
-        t = self.transform
-        sx = float(np.linalg.norm(t[0, :3]))
-        sy = float(np.linalg.norm(t[1, :3]))
-        sz = float(np.linalg.norm(t[2, :3]))
-        rx = np.degrees(np.arctan2(t[2, 1] / sy, t[2, 2] / sz))
-        ry = np.degrees(
-            np.arctan2(-t[2, 0] / sx, np.sqrt(t[2, 1] ** 2 + t[2, 2] ** 2))
-        )
-        rz = np.degrees(np.arctan2(t[1, 0] / sx, t[0, 0] / sx))
-        return rx, ry, rz
-
-    def set_rotation(self, rx: float, ry: float, rz: float):
-        cur = self.get_rotation()
-        if cur[0] == rx and cur[1] == ry and cur[2] == rz:
-            return
-        pos = self.transform[:3, 3].copy()
-        scale = self.get_scale()
-        self.transform[:3, :3] = euler_rotation_matrix(rx, ry, rz) * scale
-        self.transform[:3, 3] = pos
-        self.changed.send(self)
-
-    def get_scale(self) -> float:
-        return float(np.linalg.norm(self.transform[0, :3]))
-
-    def set_scale(self, scale: float):
-        if self.get_scale() == scale:
-            return
-        pos = self.transform[:3, 3].copy()
-        rx, ry, rz = self.get_rotation()
-        self.transform[:3, :3] = euler_rotation_matrix(rx, ry, rz) * scale
-        self.transform[:3, 3] = pos
         self.changed.send(self)
 
     def set_focal_distance(self, distance: float):
@@ -165,8 +171,7 @@ class Laser:
         if self.max_pwm_frequency == max_frequency:
             return
         self.max_pwm_frequency = max_frequency
-        if self.pwm_frequency > max_frequency:
-            self.pwm_frequency = max_frequency
+        self.pwm_frequency = min(self.pwm_frequency, max_frequency)
         self.changed.send(self)
 
     def set_pulse_width(self, width: int):
@@ -181,10 +186,8 @@ class Laser:
         if self.min_pulse_width == min_width:
             return
         self.min_pulse_width = min_width
-        if min_width > self.max_pulse_width:
-            self.max_pulse_width = min_width
-        if self.pulse_width < min_width:
-            self.pulse_width = min_width
+        self.max_pulse_width = max(self.max_pulse_width, min_width)
+        self.pulse_width = max(self.pulse_width, min_width)
         self.changed.send(self)
 
     def set_max_pulse_width(self, max_width: int):
@@ -192,45 +195,38 @@ class Laser:
         if self.max_pulse_width == max_width:
             return
         self.max_pulse_width = max_width
-        if max_width < self.min_pulse_width:
-            self.min_pulse_width = max_width
-        if self.pulse_width > max_width:
-            self.pulse_width = max_width
+        self.min_pulse_width = min(self.min_pulse_width, max_width)
+        self.pulse_width = min(self.pulse_width, max_width)
         self.changed.send(self)
 
-    def to_dict(self) -> Dict[str, Any]:
-        result = {
-            "uid": self.uid,
-            "name": self.name,
-            "tool_number": self.tool_number,
-            "max_power": self.max_power,
-            "frame_power_percent": self.frame_power_percent * 100,
-            "focus_power_percent": self.focus_power_percent * 100,
-            "frame_speed": self.frame_speed,
-            "frame_repeat_count": self.frame_repeat_count,
-            "frame_corner_pause": self.frame_corner_pause,
-            "spot_size_mm": self.spot_size_mm,
-            "cut_color": self.cut_color,
-            "raster_color": self.raster_color,
-            "model_path": self.model_path,
-            "transform": self.transform.flatten().tolist(),
-            "focal_distance": self.focal_distance,
-            "laser_type": self.laser_type.value,
-            "pwm_frequency": self.pwm_frequency,
-            "max_pwm_frequency": self.max_pwm_frequency,
-            "pulse_width": self.pulse_width,
-            "min_pulse_width": self.min_pulse_width,
-            "max_pulse_width": self.max_pulse_width,
-        }
+    def to_dict(self) -> dict[str, Any]:
+        result = super().to_dict()
+        result.update(
+            {
+                "max_power": self.max_power,
+                "frame_power_percent": self.frame_power_percent * 100,
+                "focus_power_percent": self.focus_power_percent * 100,
+                "frame_speed": self.frame_speed,
+                "frame_repeat_count": self.frame_repeat_count,
+                "frame_corner_pause": self.frame_corner_pause,
+                "spot_size_mm": self.spot_size_mm,
+                "cut_color": self.cut_color,
+                "raster_color": self.raster_color,
+                "focal_distance": self.focal_distance,
+                "laser_type": self.laser_type.value,
+                "pwm_frequency": self.pwm_frequency,
+                "max_pwm_frequency": self.max_pwm_frequency,
+                "pulse_width": self.pulse_width,
+                "min_pulse_width": self.min_pulse_width,
+                "max_pulse_width": self.max_pulse_width,
+            }
+        )
         result.update(self.extra)
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Laser":
-        known_keys = {
-            "uid",
-            "name",
-            "tool_number",
+    def from_dict(cls, data: dict[str, Any]) -> "LaserHead":
+        known_keys = _HEAD_SERIALIZED_KEYS | {
             "max_power",
             "frame_power_percent",
             "focus_power_percent",
@@ -242,8 +238,6 @@ class Laser:
             "spot_size_mm",
             "cut_color",
             "raster_color",
-            "model_path",
-            "transform",
             "focal_distance",
             "laser_type",
             "pwm_frequency",
@@ -254,10 +248,7 @@ class Laser:
         }
         extra = {k: v for k, v in data.items() if k not in known_keys}
 
-        lh = cls()
-        lh.uid = data.get("uid", str(uuid.uuid4()))
-        lh.name = data.get("name", _("Laser Head"))
-        lh.tool_number = data.get("tool_number", lh.tool_number)
+        lh = super().from_dict(data)
         lh.max_power = data.get("max_power", lh.max_power)
 
         # Handle backward compatibility for frame power
@@ -286,12 +277,6 @@ class Laser:
         lh.frame_corner_pause = data.get(
             "frame_corner_pause", lh.frame_corner_pause
         )
-        lh.model_path = data.get("model_path")
-        raw_transform = data.get("transform")
-        if raw_transform is not None:
-            lh.transform = np.array(raw_transform, dtype=np.float64).reshape(
-                4, 4
-            )
         lh.focal_distance = data.get("focal_distance", 0.0)
         lh.laser_type = LaserType(
             data.get("laser_type", LaserType.DIODE.value)
@@ -306,15 +291,6 @@ class Laser:
         lh.extra = extra
         return lh
 
-    def __getstate__(self):
-        """Prepare the object for pickling. Removes unpickleable Signal."""
-        state = self.__dict__.copy()
-        # The 'changed' signal is not pickleable, so we remove it.
-        state.pop("changed", None)
-        return state
 
-    def __setstate__(self, state):
-        """Restore the object after unpickling. Recreates the Signal."""
-        self.__dict__.update(state)
-        # Re-create the 'changed' signal that was removed during pickling.
-        self.changed = Signal()
+# Backward-compatible alias for code that still imports `Laser`.
+Laser = LaserHead

@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import logging
 import uuid
+import weakref
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable
 from typing import (
     TYPE_CHECKING,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Tuple,
-    Type,
+    Any,
     TypeVar,
     overload,
 )
@@ -32,6 +29,36 @@ T = TypeVar("T", bound="DocItem")
 T_Desc = TypeVar("T_Desc", bound="DocItem")
 
 
+class _RevisionSignal(Signal):
+    """
+    A :class:`~blinker.Signal` subclass that bumps a revision counter on
+    its owning :class:`DocItem` every time :meth:`send` is invoked.
+
+    The bump happens *before* receivers fire, so any handler that reads
+    ``owner.geometry_revision`` / ``owner.transform_revision`` sees the
+    post-bump value.
+
+    The owner is held via a :class:`weakref.ref` so the signal never
+    keeps a DocItem alive. ``send`` is a no-op for the bump when the
+    owner has been garbage-collected.
+    """
+
+    def __init__(
+        self,
+        owner_ref: weakref.ref,
+        bump: Callable[[DocItem], None],
+    ):
+        super().__init__()
+        self._owner_ref = owner_ref
+        self._bump = bump
+
+    def send(self, sender: Any = None, *, _async_wrapper=None, **kwargs):
+        owner = self._owner_ref()
+        if owner is not None:
+            self._bump(owner)
+        return super().send(sender, _async_wrapper=_async_wrapper, **kwargs)
+
+
 class DocItem(ABC):
     """
     An abstract base class for any item that can exist in a document's
@@ -42,15 +69,31 @@ class DocItem(ABC):
     def __init__(self, name: str = ""):
         self.uid: str = str(uuid.uuid4())
         self._name: str = name
-        self._parent: Optional[DocItem] = None
-        self.children: List[DocItem] = []
+        self._parent: DocItem | None = None
+        self.children: list[DocItem] = []
         self._matrix: Matrix = Matrix.identity()
 
-        # Signals
-        # Fired when this item's own data (not transform or children) changes.
-        self.updated = Signal()
-        # Fired when this item's own transform changes.
-        self.transform_changed = Signal()
+        # Monotonic revision counters bumped whenever the corresponding
+        # signal fires.  Callers that cache derived data (e.g. raygeo's
+        # NodeRequest version_token) read these to detect changes.
+        # ``geometry_revision`` tracks ``updated`` emissions (geometry,
+        # step parameters, etc.); ``transform_revision`` tracks
+        # ``transform_changed`` emissions (matrix edits).
+        self._geometry_revision: int = 0
+        self._transform_revision: int = 0
+
+        # Signals — wrapped so each ``send`` bumps the matching
+        # revision counter before notifying receivers.  Subclasses and
+        # external code continue to use ``self.updated.send(self)`` and
+        # ``self.transform_changed.send(self, ...)`` exactly as before;
+        # the bump is transparent.
+        owner_ref = weakref.ref(self)
+        self.updated = _RevisionSignal(
+            owner_ref, lambda o: o._bump_geometry_revision()
+        )
+        self.transform_changed = _RevisionSignal(
+            owner_ref, lambda o: o._bump_transform_revision()
+        )
 
         # Bubbled Signals
         # Fired when a descendant is added anywhere in the subtree.
@@ -62,7 +105,41 @@ class DocItem(ABC):
         # Fired when a descendant's `transform_changed` signal is fired.
         self.descendant_transform_changed = Signal()
 
-        self._natural_size: Tuple[float, float] = (0.0, 0.0)
+        self._natural_size: tuple[float, float] = (0.0, 0.0)
+
+    # -- Revision counters ------------------------------------------------
+
+    def _bump_geometry_revision(self) -> None:
+        """Increment ``geometry_revision`` (called by the signal)."""
+        self._geometry_revision += 1
+
+    def _bump_transform_revision(self) -> None:
+        """Increment ``transform_revision`` (called by the signal)."""
+        self._transform_revision += 1
+
+    @property
+    def geometry_revision(self) -> int:
+        """
+        Monotonic counter bumped every time ``updated`` is sent.
+
+        Starts at ``0`` for a freshly constructed item and increments by
+        one on each emission.  Used by the pipeline to build stable
+        ``version_token`` values for raygeo :class:`NodeRequest` objects
+        without hashing geometry payloads.
+        """
+        return self._geometry_revision
+
+    @property
+    def transform_revision(self) -> int:
+        """
+        Monotonic counter bumped every time ``transform_changed`` is
+        sent.
+
+        Folded into a workpiece compute token only when the owning step
+        declares a position-sensitive transformer (e.g. ``CropSpec``);
+        otherwise the token omits this revision entirely.
+        """
+        return self._transform_revision
 
     @property
     def name(self) -> str:
@@ -76,7 +153,7 @@ class DocItem(ABC):
             self._name = new_name
             self.updated.send(self)
 
-    def depends_on_asset(self, asset: "IAsset") -> bool:
+    def depends_on_asset(self, asset: IAsset) -> bool:
         """
         Checks if this item has a direct dependency on the given asset.
         Subclasses should override this to check their specific asset links.
@@ -94,18 +171,18 @@ class DocItem(ABC):
         return x, y, w, h
 
     @abstractmethod
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serializes the item to a dictionary."""
         raise NotImplementedError
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, data: Dict) -> "DocItem":
+    def from_dict(cls, data: dict) -> DocItem:
         """Deserializes the item from a dictionary."""
         raise NotImplementedError
 
     @staticmethod
-    def create_from_dict(data: Dict) -> "DocItem":
+    def create_from_dict(data: dict) -> DocItem:
         """
         Factory method that deserializes a dictionary into the appropriate
         DocItem subclass based on the 'type' field.
@@ -127,7 +204,7 @@ class DocItem(ABC):
         else:
             raise ValueError(f"Unknown item type: {item_type}")
 
-    def duplicate(self) -> "DocItem":
+    def duplicate(self) -> DocItem:
         """
         Creates a deep copy of this item with new UIDs.
 
@@ -138,7 +215,7 @@ class DocItem(ABC):
         item_dict = self.to_dict()
         new_item = self.__class__.from_dict(item_dict)
 
-        def assign_new_uids(item: "DocItem"):
+        def assign_new_uids(item: DocItem):
             item.uid = str(uuid.uuid4())
             for child in item.children:
                 assign_new_uids(child)
@@ -153,12 +230,12 @@ class DocItem(ABC):
         return iter(self.children)
 
     @property
-    def parent(self) -> Optional[DocItem]:
+    def parent(self) -> DocItem | None:
         """The parent DocItem in the hierarchy."""
         return self._parent
 
     @parent.setter
-    def parent(self, new_parent: Optional[DocItem]):
+    def parent(self, new_parent: DocItem | None):
         """
         Sets the parent of this item. This is typically managed by the
         parent's add/remove_child methods and should not be set directly.
@@ -166,7 +243,7 @@ class DocItem(ABC):
         self._parent = new_parent
 
     @property
-    def doc(self) -> Optional["Doc"]:
+    def doc(self) -> Doc | None:
         """The root Doc object, accessed via the parent hierarchy."""
         if self.parent:
             return self.parent.doc
@@ -217,7 +294,7 @@ class DocItem(ABC):
         self.matrix = new_local_matrix
 
     @property
-    def size(self) -> Tuple[float, float]:
+    def size(self) -> tuple[float, float]:
         """
         The world-space size (width, height) in mm, as absolute values,
         decomposed from the world transformation matrix.
@@ -292,7 +369,7 @@ class DocItem(ABC):
         self.matrix = new_local_matrix
 
     @property
-    def natural_size(self) -> Tuple[float, float]:
+    def natural_size(self) -> tuple[float, float]:
         """
         Returns the natural size (untransformed width and height) of this item.
 
@@ -306,7 +383,7 @@ class DocItem(ABC):
         """
         return self._natural_size
 
-    def get_local_bbox(self) -> Optional[Rect]:
+    def get_local_bbox(self) -> Rect | None:
         """
         Returns the bounding box of the item in its own local coordinate space
         (before the local matrix is applied).
@@ -350,21 +427,17 @@ class DocItem(ABC):
 
             has_valid_children = True
             for x, y in transformed_corners:
-                if x < min_x:
-                    min_x = x
-                if x > max_x:
-                    max_x = x
-                if y < min_y:
-                    min_y = y
-                if y > max_y:
-                    max_y = y
+                min_x = min(min_x, x)
+                max_x = max(max_x, x)
+                min_y = min(min_y, y)
+                max_y = max(max_y, y)
 
         if has_valid_children:
             self._natural_size = (max_x - min_x, max_y - min_y)
         else:
             self._natural_size = (0.0, 0.0)
 
-    def get_current_aspect_ratio(self) -> Optional[float]:
+    def get_current_aspect_ratio(self) -> float | None:
         w, h = self.size
         return w / h if h else None
 
@@ -496,7 +569,7 @@ class DocItem(ABC):
 
         self.matrix = final_local_matrix
 
-    def add_child(self, child: T, index: Optional[int] = None) -> T:
+    def add_child(self, child: T, index: int | None = None) -> T:
         if child in self.children:
             return child
 
@@ -525,7 +598,7 @@ class DocItem(ABC):
         self._recalculate_natural_size()
 
     def add_children(
-        self, children_to_add: Iterable[DocItem], index: Optional[int] = None
+        self, children_to_add: Iterable[DocItem], index: int | None = None
     ):
         """
         Adds multiple children in a bulk operation to improve performance,
@@ -651,17 +724,17 @@ class DocItem(ABC):
         return depth
 
     @overload
-    def get_descendants(self) -> List["DocItem"]: ...
+    def get_descendants(self) -> list[DocItem]: ...
 
     @overload
-    def get_descendants(self, of_type: Type[T_Desc]) -> List[T_Desc]: ...
+    def get_descendants(self, of_type: type[T_Desc]) -> list[T_Desc]: ...
 
-    def get_descendants(self, of_type: Optional[Type[T_Desc]] = None) -> List:
+    def get_descendants(self, of_type: type[T_Desc] | None = None) -> list:
         """
         Recursively finds and returns a flattened list of all descendant
         DocItems, optionally filtered by type.
         """
-        all_descendants: List[DocItem] = []
+        all_descendants: list[DocItem] = []
         for child in self.children:
             all_descendants.append(child)
             # This recursive call unambiguously matches the first overload.
@@ -675,7 +748,7 @@ class DocItem(ABC):
 
         return all_descendants
 
-    def get_child_by_uid(self, uid: str) -> Optional["DocItem"]:
+    def get_child_by_uid(self, uid: str) -> DocItem | None:
         """
         Finds a direct child of this item by its unique identifier.
 
@@ -690,7 +763,7 @@ class DocItem(ABC):
                 return child
         return None
 
-    def find_descendant_by_uid(self, uid: str) -> Optional[DocItem]:
+    def find_descendant_by_uid(self, uid: str) -> DocItem | None:
         """
         Recursively searches the subtree for a descendant with a matching UID.
 
@@ -734,7 +807,7 @@ class DocItem(ABC):
         )
 
     def _on_child_transform_changed(
-        self, sender: DocItem, *, old_matrix: Optional["Matrix"] = None
+        self, sender: DocItem, *, old_matrix: Matrix | None = None
     ):
         self.descendant_transform_changed.send(
             self, origin=sender, parent_of_origin=self, old_matrix=old_matrix
@@ -767,7 +840,7 @@ class DocItem(ABC):
         *,
         origin: DocItem,
         parent_of_origin: DocItem,
-        old_matrix: Optional["Matrix"] = None,
+        old_matrix: Matrix | None = None,
     ):
         self.descendant_transform_changed.send(
             self,
@@ -777,19 +850,19 @@ class DocItem(ABC):
         )
 
     @property
-    def matrix(self) -> "Matrix":
+    def matrix(self) -> Matrix:
         """The 3x3 local transformation matrix for this item."""
         return self._matrix
 
     @matrix.setter
-    def matrix(self, value: "Matrix"):
+    def matrix(self, value: Matrix):
         if self._matrix == value:
             return
         old_matrix = self._matrix
         self._matrix = value
         self.transform_changed.send(self, old_matrix=old_matrix)
 
-    def get_world_transform(self) -> "Matrix":
+    def get_world_transform(self) -> Matrix:
         """
         Calculates the cumulative transformation matrix for this item,
         which transforms it from its local coordinate space into the
@@ -800,7 +873,7 @@ class DocItem(ABC):
             return parent_transform @ self.matrix
         return self.matrix
 
-    def get_ancestor_by_type(self, ancestor_type: Type) -> Optional["DocItem"]:
+    def get_ancestor_by_type(self, ancestor_type: type) -> DocItem | None:
         """
         Traverses the parent hierarchy to find the first ancestor of the
         specified type.

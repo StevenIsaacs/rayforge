@@ -1,7 +1,7 @@
 import uuid
 from enum import Enum
 from gettext import gettext as _
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 from blinker import Signal
@@ -27,17 +27,17 @@ class RotaryModule:
         self.name: str = _("Rotary Module")
         self.axis: Axis = Axis.A
         self.mode: RotaryMode = RotaryMode.TRUE_4TH_AXIS
-        self.mu_per_rotation: float = 0.0
+        self.mm_per_rotation: float = 0.0
         self.default_diameter: float = 25.0
         self.max_workpiece_length: float = 300.0
         self.rotary_type: RotaryType = RotaryType.JAWS
         self.roller_diameter: float = 0.0
         self.reverse_axis: bool = False
         self.axis_position: np.ndarray = np.zeros(3, dtype=np.float64)
-        self.model_path: Optional[str] = None
+        self.model_path: str | None = None
         self.transform: np.ndarray = np.eye(4, dtype=np.float64)
         self.changed = Signal()
-        self.extra: Dict[str, Any] = {}
+        self.extra: dict[str, Any] = {}
 
     def set_name(self, name: str):
         if self.name == name:
@@ -59,9 +59,9 @@ class RotaryModule:
         self.changed.send(self)
 
     def set_mm_per_rotation(self, value: float):
-        if self.mu_per_rotation == value:
+        if self.mm_per_rotation == value:
             return
-        self.mu_per_rotation = value
+        self.mm_per_rotation = value
         self.changed.send(self)
 
     def set_position(self, x: float, y: float, z: float):
@@ -155,16 +155,16 @@ class RotaryModule:
         self.axis_position = new
         self.changed.send(self)
 
-    def set_model_path(self, model_path: Optional[str]):
+    def set_model_path(self, model_path: str | None):
         if self.model_path == model_path:
             return
         self.model_path = model_path
         self.changed.send(self)
 
-    def get_collision_bbox(self) -> Optional[Rect3D]:
+    def get_collision_bbox(self) -> Rect3D | None:
         return None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         result = {
             "uid": self.uid,
             "name": self.name,
@@ -176,8 +176,8 @@ class RotaryModule:
             "model_path": self.model_path,
             "transform": self.transform.flatten().tolist(),
         }
-        if self.mu_per_rotation > 0:
-            result["mm_per_rotation"] = self.mu_per_rotation
+        if self.mm_per_rotation > 0:
+            result["mm_per_rotation"] = self.mm_per_rotation
         if self.roller_diameter > 0:
             result["roller_diameter"] = self.roller_diameter
         if self.reverse_axis:
@@ -188,7 +188,7 @@ class RotaryModule:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RotaryModule":
+    def from_dict(cls, data: dict[str, Any]) -> "RotaryModule":
         known_keys = {
             "uid",
             "name",
@@ -223,7 +223,7 @@ class RotaryModule:
         rm.name = data.get("name", _("Rotary Module"))
         rm.axis = Axis.from_name(data.get("axis", "A"))
         rm.mode = RotaryMode(data.get("mode", "true_4th_axis"))
-        rm.mu_per_rotation = data.get("mm_per_rotation", 0.0)
+        rm.mm_per_rotation = data.get("mm_per_rotation", 0.0)
         rm.default_diameter = data.get("default_diameter", 25.0)
         rm.max_workpiece_length = data.get("max_workpiece_length", 300.0)
         rm.rotary_type = RotaryType(data.get("rotary_type", "jaws"))

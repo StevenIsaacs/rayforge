@@ -1,6 +1,6 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, List, Set, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from gi.repository import Adw, GLib, Gtk
 
@@ -10,6 +10,7 @@ from rayforge.core.workpiece import WorkPiece
 from rayforge.ui_gtk.doceditor.property_providers.base import (
     PropertyProvider,
 )
+from rayforge.ui_gtk.shared.pref_rows import SpinRow
 from rayforge.ui_gtk.varset.varsetwidget import VarSetRowList
 
 from .sketch_cmd import SketchCmd
@@ -31,7 +32,7 @@ class SketchPropertyProvider(PropertyProvider):
     separate_group = True
     group_title = _("Sketch Parameters")
 
-    def can_handle(self, items: List[DocItem]) -> bool:
+    def can_handle(self, items: list[DocItem]) -> bool:
         """
         Handles the selection if all items are WorkPieces derived from the
         *same* sketch definition.
@@ -54,7 +55,7 @@ class SketchPropertyProvider(PropertyProvider):
 
         return first_sketch_uid is not None
 
-    def create_widgets(self) -> List[Gtk.Widget]:
+    def create_widgets(self) -> list[Gtk.Widget]:
         """Creates the VarSetRowList for sketch parameters."""
         logger.debug("Creating sketch property widgets.")
         self.varset_widget = VarSetRowList(show_reset=True)
@@ -70,7 +71,7 @@ class SketchPropertyProvider(PropertyProvider):
 
         return [self.varset_widget, self._empty_row]
 
-    def update_widgets(self, editor: "DocEditor", items: List[DocItem]):
+    def update_widgets(self, editor: "DocEditor", items: list[DocItem]):
         """Populates and updates the VarSetRowList based on the selection."""
         logger.debug(
             f"Updating sketch property widgets for {len(items)} items."
@@ -79,7 +80,7 @@ class SketchPropertyProvider(PropertyProvider):
         try:
             self.editor = editor
             self.items = items
-            workpieces = cast(List[WorkPiece], self.items)
+            workpieces = cast(list[WorkPiece], self.items)
             first_wp = workpieces[0]
 
             sketch = cast("Sketch", first_wp.get_geometry_provider())
@@ -112,7 +113,7 @@ class SketchPropertyProvider(PropertyProvider):
             logger.debug("Finished updating sketch property widgets.")
 
     def _update_widget_for_mixed_state(
-        self, base_varset: VarSet, workpieces: List[WorkPiece]
+        self, base_varset: VarSet, workpieces: list[WorkPiece]
     ):
         """
         Adjusts the UI controls to show common values or indicate a
@@ -130,7 +131,7 @@ class SketchPropertyProvider(PropertyProvider):
 
         logger.debug("Multiple items selected, checking for mixed values.")
         for key, (row, var) in self.varset_widget.widget_map.items():
-            all_values: Set[Any] = set()
+            all_values: set[Any] = set()
             for wp in workpieces:
                 value = wp.geometry_provider_params.get(key, var.default)
                 all_values.add(value)
@@ -142,7 +143,7 @@ class SketchPropertyProvider(PropertyProvider):
                 logger.debug(f"Parameter '{key}' has mixed values.")
                 if isinstance(row, Adw.EntryRow):
                     row.set_text("")
-                elif isinstance(row, Adw.SpinRow):
+                elif isinstance(row, SpinRow):
                     row.set_subtitle(_("Mixed Values"))
                 elif isinstance(row, Adw.ComboRow):
                     row.set_selected(0)
@@ -202,7 +203,7 @@ class SketchPropertyProvider(PropertyProvider):
             f"items: {changes_to_apply}"
         )
 
-        workpieces = cast(List[WorkPiece], self.items)
+        workpieces = cast(list[WorkPiece], self.items)
         SketchCmd(self.editor).set_workpiece_parameters(
             workpieces, changes_to_apply
         )

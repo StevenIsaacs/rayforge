@@ -5,12 +5,6 @@ import math
 from typing import (
     TYPE_CHECKING,
     Any,
-    Dict,
-    List,
-    Optional,
-    Set,
-    Tuple,
-    Union,
 )
 
 from raygeo.geo import Matrix
@@ -29,19 +23,19 @@ logger = logging.getLogger(__name__)
 
 
 class MultiSelectionGroup:
-    def __init__(self, elements: List[CanvasElement], canvas: Canvas):
+    def __init__(self, elements: list[CanvasElement], canvas: Canvas):
         if not elements:
             raise ValueError(
                 "MultiSelectionGroup cannot be initialized with an "
                 "empty list of elements."
             )
 
-        self.elements: List[CanvasElement] = elements
+        self.elements: list[CanvasElement] = elements
         self.canvas: Canvas = canvas
         self._bounding_box: Rect = (0, 0, 0, 0)
-        self._center: "Point" = (0, 0)
-        self.initial_states: List[Dict[str, Any]] = []
-        self.initial_center: "Point" = (0, 0)
+        self._center: Point = (0, 0)
+        self.initial_states: list[dict[str, Any]] = []
+        self.initial_center: Point = (0, 0)
 
         # The transformation matrix for the entire group, applied during a
         # drag operation.
@@ -66,25 +60,17 @@ class MultiSelectionGroup:
         return self._bounding_box[3]
 
     @property
-    def center(self) -> "Point":
+    def center(self) -> Point:
         return self._center
 
     def _calculate_bounding_box(self):
-        min_x, max_x = float("inf"), float("-inf")
-        min_y, max_y = float("inf"), float("-inf")
+        min_x, min_y = float("inf"), float("inf")
+        max_x, max_y = float("-inf"), float("-inf")
 
         for elem in self.elements:
-            # We need the full world transform to correctly find the corners
-            world_transform = elem.get_world_transform()
-            w, h = elem.width, elem.height
-
-            # The corners of the element in its own local space
-            local_corners = [(0, 0), (w, 0), (w, h), (0, h)]
-
-            for lx, ly in local_corners:
-                wx, wy = world_transform.transform_point((lx, ly))
-                min_x, min_y = min(min_x, wx), min(min_y, wy)
-                max_x, max_y = max(max_x, wx), max(max_y, wy)
+            x, y, w, h = elem.get_world_bounding_box()
+            min_x, min_y = min(min_x, x), min(min_y, y)
+            max_x, max_y = max(max_x, x + w), max(max_y, y + h)
 
         self._bounding_box = (min_x, min_y, max_x - min_x, max_y - min_y)
         self._center = (min_x + self.width / 2, min_y + self.height / 2)
@@ -156,7 +142,7 @@ class MultiSelectionGroup:
         self,
         region: ElementRegion,
         base_handle_size: float,
-        scale_compensation: Union[float, Tuple[float, float]] = 1.0,
+        scale_compensation: float | tuple[float, float] = 1.0,
     ) -> Rect:
         return get_region_rect(
             region,
@@ -170,7 +156,7 @@ class MultiSelectionGroup:
         self,
         x: float,
         y: float,
-        candidates: Optional[Set[ElementRegion]] = None,
+        candidates: set[ElementRegion] | None = None,
     ) -> ElementRegion:
         # The group's bounding box is (min_x, min_y, width, height) in world
         # coords. We convert the world mouse coordinate (x,y) into the group's
@@ -231,9 +217,7 @@ class MultiSelectionGroup:
         )
         self._update_element_transforms()
 
-    def apply_rotate(
-        self, angle_delta: float, center: Optional["Point"] = None
-    ):
+    def apply_rotate(self, angle_delta: float, center: Point | None = None):
         """
         Sets the group transform to a rotation around the group's initial
         center and updates elements.
@@ -283,7 +267,7 @@ class MultiSelectionGroup:
         self,
         current_x: float,
         current_y: float,
-        rotation_pivot: "Point",
+        rotation_pivot: Point,
         drag_start_angle: float,
     ):
         """

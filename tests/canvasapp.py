@@ -6,18 +6,17 @@ from pathlib import Path
 import gi
 
 gi.require_version("Gtk", "4.0")
-from typing import Dict, List, Optional
 
 import cairo
 from gi.repository import Gdk, Gtk
-
-base_path = Path(__file__).parent
-logging.basicConfig(level=logging.DEBUG)
-
 from raygeo.geo import Matrix
 from raygeo.geo.types import Point
 
 from rayforge.ui_gtk.canvas import Canvas, CanvasElement, ShrinkWrapGroup
+
+base_path = Path(__file__).parent
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 class ExampleElement(CanvasElement):
@@ -29,9 +28,7 @@ class ExampleElement(CanvasElement):
     if `snap_grid_size` is provided.
     """
 
-    def __init__(
-        self, *args, snap_grid_size: Optional[float] = None, **kwargs
-    ):
+    def __init__(self, *args, snap_grid_size: float | None = None, **kwargs):
         """
         Initializes the ExampleElement.
 
@@ -72,7 +69,7 @@ class ExampleElement(CanvasElement):
 
     def render_to_surface(
         self, width: int, height: int
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         """Overrides surface rendering for buffered elements."""
         surface = super().render_to_surface(width, height)
         if surface:
@@ -120,7 +117,7 @@ class LShapeElement(CanvasElement):
 
     def render_to_surface(
         self, width: int, height: int
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         if width <= 0 or height <= 0:
             return None
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, width, height)
@@ -145,7 +142,7 @@ class EditableElement(CanvasElement):
     "edit mode" where its vertices can be moved.
     """
 
-    vertices: List[List[float]]
+    vertices: list[list[float]]
 
     def __init__(self, x, y, width, height, **kwargs):
         # Ensure is_editable is set to True
@@ -160,8 +157,8 @@ class EditableElement(CanvasElement):
             [width * 0.9, height * 0.9],  # Bottom-right
             [width * 0.1, height * 0.9],  # Bottom-left
         ]
-        self._active_vertex_idx: Optional[int] = None
-        self._initial_vertex_pos: Optional[List[float]] = None
+        self._active_vertex_idx: int | None = None
+        self._initial_vertex_pos: list[float] | None = None
 
     def _draw_content(self, ctx: cairo.Context, width: float, height: float):
         """Draws a polygon connecting the vertices."""
@@ -193,7 +190,7 @@ class EditableElement(CanvasElement):
 
     def render_to_surface(
         self, width: int, height: int
-    ) -> Optional[cairo.ImageSurface]:
+    ) -> cairo.ImageSurface | None:
         """Overrides surface rendering for buffered elements."""
         surface = super().render_to_surface(width, height)
         if surface:
@@ -207,7 +204,7 @@ class EditableElement(CanvasElement):
         return surface
 
     def on_edit_mode_enter(self):
-        logging.info("EditableElement entered edit mode.")
+        logger.info("EditableElement entered edit mode.")
         self.background = (0.2, 0.2, 0.4, 1.0)  # Dark blue in edit mode
         # Store original buffered state and temporarily disable it for smooth
         # interactive drawing.
@@ -216,7 +213,7 @@ class EditableElement(CanvasElement):
         self.trigger_update()
 
     def on_edit_mode_leave(self):
-        logging.info("EditableElement left edit mode.")
+        logger.info("EditableElement left edit mode.")
         self.background = self.original_background
         self.buffered = self._was_buffered
         self._active_vertex_idx = None
@@ -255,14 +252,14 @@ class EditableElement(CanvasElement):
             ctx.stroke()
         ctx.restore()
 
-    def _get_hit_vertex(self, world_x: float, world_y: float) -> Optional[int]:
+    def _get_hit_vertex(self, world_x: float, world_y: float) -> int | None:
         """Checks if a world coordinate point hits any vertex handle."""
         if not self.canvas:
             return None
 
         try:
             inv_world = self.get_world_transform().invert()
-        except Exception:
+        except ValueError:
             return None
 
         local_x, local_y = inv_world.transform_point((world_x, world_y))
@@ -290,7 +287,7 @@ class EditableElement(CanvasElement):
         if hit_idx is not None:
             self._active_vertex_idx = hit_idx
             self._initial_vertex_pos = self.vertices[hit_idx][:]
-            logging.debug(f"Editing vertex {hit_idx}")
+            logger.debug(f"Editing vertex {hit_idx}")
             return True
         return False
 
@@ -310,7 +307,7 @@ class EditableElement(CanvasElement):
             local_dx, local_dy = inv_rot_scale.transform_vector(
                 (world_dx, world_dy)
             )
-        except Exception:
+        except ValueError:
             return
 
         self.vertices[self._active_vertex_idx][0] = (
@@ -327,14 +324,14 @@ class EditableElement(CanvasElement):
     def handle_edit_release(self, world_x: float, world_y: float):
         self._active_vertex_idx = None
         self._initial_vertex_pos = None
-        logging.debug("Finished editing vertex.")
+        logger.debug("Finished editing vertex.")
 
 
 class CanvasApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="com.example.CanvasApp")
-        self.mouse_pos: Dict[Gtk.Widget, Point] = {}
-        self.initial_pan_transforms: Dict[str, Matrix] = {}
+        self.mouse_pos: dict[Gtk.Widget, Point] = {}
+        self.initial_pan_transforms: dict[str, Matrix] = {}
 
     def do_activate(self):
         win = Gtk.ApplicationWindow(application=self)
@@ -405,7 +402,7 @@ class CanvasApp(Gtk.Application):
         return Gdk.EVENT_PROPAGATE
 
     def on_scroll(self, controller, dx, dy, c_norm, c_flip):
-        """Handles zooming on both canvases simultaneously, centered on the mouse."""
+        """Handles zooming on both canvases, centered on the mouse."""
         zoom_factor = 1.1 if dy < 0 else 1 / 1.1
 
         canvas = controller.get_widget()

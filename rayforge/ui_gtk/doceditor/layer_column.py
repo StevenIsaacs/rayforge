@@ -1,10 +1,10 @@
 import json
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Set, cast
+from typing import TYPE_CHECKING, cast
 
 from blinker import Signal
-from gi.repository import Adw, Gdk, Gio, GObject, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, Gtk, Pango
 
 from ...context import get_context
 from ...core.doc import Doc
@@ -115,8 +115,8 @@ class LayerColumn(Gtk.Box):
         self.layer = layer
         self.editor = editor
         self._row_items = {}
-        self._ordered_items: List = []
-        self._selected_uids: Set = set()
+        self._ordered_items: list = []
+        self._selected_uids: set = set()
         self._selection_anchor = None
         self._potential_drop_index = -1
         self._drop_shift_held = False
@@ -136,7 +136,7 @@ class LayerColumn(Gtk.Box):
         self._click_gesture.connect("released", self._on_column_released)
         self.add_controller(self._click_gesture)
 
-        self._context_popover: Optional[Gtk.PopoverMenu] = None
+        self._context_popover: Gtk.PopoverMenu | None = None
         self._row_drag_happened: bool = False
 
         right_click = Gtk.GestureClick()
@@ -240,7 +240,7 @@ class LayerColumn(Gtk.Box):
         self.listbox.set_selection_mode(Gtk.SelectionMode.NONE)
 
         drop_target = Gtk.DropTarget.new(
-            GObject.TYPE_STRING,
+            str,
             Gdk.DragAction.MOVE | Gdk.DragAction.COPY,
         )
         drop_target.connect("accept", self._on_drop_accept)
@@ -319,9 +319,9 @@ class LayerColumn(Gtk.Box):
         for item in self.layer.get_content_items():
             row = Gtk.ListBoxRow()
             if isinstance(item, Group):
-                item_row = GroupRow(item)
+                item_row = GroupRow(item, on_rename=self._on_rename_item)
             elif isinstance(item, WorkPiece):
-                item_row = WorkpieceRow(item)
+                item_row = WorkpieceRow(item, on_rename=self._on_rename_item)
             else:
                 continue
             row.set_child(item_row)
@@ -330,7 +330,20 @@ class LayerColumn(Gtk.Box):
             self._setup_row_drag_source(row, item_row)
             self.listbox.append(row)
 
-    def update_row_selection(self, selected_uids: Set):
+    def _on_rename_item(self, item: DocItem, new_name: str):
+        self.editor.edit.rename_item(item, new_name)
+
+    def start_item_rename(self, item: DocItem) -> bool:
+        """Starts in-place renaming of the given item, if present in this
+        column."""
+        for row, row_item in self._row_items.items():
+            if row_item is not item:
+                continue
+            row.get_child().start_rename()
+            return True
+        return False
+
+    def update_row_selection(self, selected_uids: set):
         self._selected_uids = {
             uid
             for uid in selected_uids
@@ -570,7 +583,20 @@ class LayerColumn(Gtk.Box):
                     items=[clicked_item],
                     extend=False,
                 )
-            self._show_item_context_menu(gesture)
+            else:
+                selected = [
+                    i
+                    for i in self._ordered_items
+                    if i.uid in self._selected_uids
+                ]
+                selected.remove(clicked_item)
+                selected.insert(0, clicked_item)
+                self.select_items_requested.send(
+                    self,
+                    items=selected,
+                    extend=False,
+                )
+            self._show_item_context_menu(gesture, clicked_item)
 
     def _popup_context_menu(self, menu: Gio.Menu, gesture: Gtk.Gesture):
         if self._context_popover:
@@ -589,8 +615,10 @@ class LayerColumn(Gtk.Box):
         menu.append_item(Gio.MenuItem.new(_("Paste"), "win.paste"))
         self._popup_context_menu(menu, gesture)
 
-    def _show_item_context_menu(self, gesture):
+    def _show_item_context_menu(self, gesture, item):
         menu = Gio.Menu.new()
+        menu.append_item(Gio.MenuItem.new(_("Rename"), "win.rename-item"))
+        menu.append_section(None, Gio.Menu.new())
         menu.append_item(Gio.MenuItem.new(_("Duplicate"), "win.duplicate"))
         menu.append_section(None, Gio.Menu.new())
         menu.append_item(Gio.MenuItem.new(_("Copy"), "win.copy"))
@@ -717,14 +745,7 @@ class LayerColumn(Gtk.Box):
     def _get_center_position(self) -> tuple:
         machine = get_context().machine
         if machine:
-            work_area = machine.work_area
-            wa_w, wa_h = work_area[2], work_area[3]
-            origin_x, origin_y = machine.get_reference_position_world()
-            space = machine.get_coordinate_space()
-            bl_x, bl_y = space.world_position_from_origin(
-                origin_x, origin_y, (wa_w, wa_h)
-            )
-            return (bl_x + wa_w / 2, bl_y + wa_h / 2)
+            return machine.panel.work_area_center()
         return (50.0, 50.0)
 
     def _on_drop_accept(self, drop_target, drop):
@@ -804,7 +825,7 @@ class LayerColumn(Gtk.Box):
             picked = picked.get_parent()
         return None
 
-    def _find_item_by_uid(self, uid: str) -> Optional[DocItem]:
+    def _find_item_by_uid(self, uid: str) -> DocItem | None:
         for layer in self.doc.layers:
             for item in layer.get_content_items():
                 if item.uid == uid:

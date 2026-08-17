@@ -1,5 +1,5 @@
 from gettext import gettext as _
-from typing import Optional, cast
+from typing import cast
 
 from gi.repository import Adw, Gtk
 
@@ -7,8 +7,8 @@ from ...context import get_context
 from ...machine.device.profile import DeviceProfile
 from ...machine.models.machine import Machine
 from ..icons import get_icon
-from ..machine.profile_selector import MachineProfileSelectorDialog
 from ..machine.settings_dialog import MachineSettingsDialog
+from ..machine.unified_wizard import UnifiedWizard
 from ..shared.gtk import apply_css
 from ..shared.preferences_page import TrackedPreferencesPage
 
@@ -111,7 +111,7 @@ class MachineSettingsPage(TrackedPreferencesPage):
 
             if not is_valid:
                 icon = get_icon("warning-symbolic")
-                icon.get_style_context().add_class("warning")
+                icon.add_css_class("warning")
                 tooltip = error_msg or _(
                     "This machine has an invalid configuration."
                 )
@@ -168,7 +168,7 @@ class MachineSettingsPage(TrackedPreferencesPage):
         """Shows a confirmation dialog before deleting a machine."""
         dialog = Adw.MessageDialog(
             transient_for=cast(
-                Optional[Gtk.Window], self.get_ancestor(Gtk.Window)
+                Gtk.Window | None, self.get_ancestor(Gtk.Window)
             ),
             modal=True,
             heading=_("Delete ‘{name}’?").format(name=machine.name),
@@ -196,21 +196,32 @@ class MachineSettingsPage(TrackedPreferencesPage):
         dialog.close()
 
     def _on_add_machine_clicked(self, button):
-        """Shows a dialog to select a machine profile to add."""
-        dialog = MachineProfileSelectorDialog(
+        """Shows the unified wizard to add a new machine."""
+        dialog = UnifiedWizard(
             transient_for=cast(
-                Optional[Gtk.Window], self.get_ancestor(Gtk.Window)
+                Gtk.Window | None, self.get_ancestor(Gtk.Window)
             )
         )
-        dialog.profile_selected.connect(self._on_profile_selected_for_add)
+        dialog.profile_created.connect(self._on_profile_selected_for_add)
         dialog.present()
 
-    def _on_profile_selected_for_add(self, sender, *, profile: DeviceProfile):
-        """Creates a machine and opens its settings editor."""
-        new_machine = profile.create_machine(get_context())
+    def _on_profile_selected_for_add(
+        self,
+        sender,
+        *,
+        profile: DeviceProfile,
+        machine: Machine | None = None,
+    ):
+        """Creates a machine and opens its settings editor.
+
+        The UnifiedWizard hands back the live ``Machine`` it created
+        via ``profile.create_machine(...)`` so we don't double-create.
+        """
+        if machine is None:
+            machine = profile.create_machine(get_context())
 
         editor_dialog = MachineSettingsDialog(
-            machine=new_machine,
+            machine=machine,
             transient_for=self.get_ancestor(Gtk.Window),
         )
         editor_dialog.present()

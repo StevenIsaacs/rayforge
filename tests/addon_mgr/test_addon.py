@@ -10,9 +10,11 @@ import yaml
 from rayforge.addon_mgr.addon import (
     Addon,
     AddonAuthor,
+    AddonMaturity,
     AddonMetadata,
     AddonProvides,
     AddonValidationError,
+    parse_maturity,
 )
 from rayforge.shared.util.versioning import UnknownVersion, get_git_tag_version
 
@@ -142,6 +144,49 @@ class TestAddonMetadata:
         meta = AddonMetadata.from_registry_entry("my_addon", data)
         assert meta.version_entries == []
 
+    def test_from_registry_entry_parses_maturity(self):
+        """Test parsing maturity from registry entry."""
+        data = {
+            "display_name": "My Addon",
+            "depends": [],
+            "author": {"name": "Test", "email": "t@t.com"},
+            "maturity": "experimental",
+        }
+        meta = AddonMetadata.from_registry_entry("my_addon", data)
+        assert meta.maturity == AddonMaturity.EXPERIMENTAL
+
+    def test_from_registry_entry_missing_maturity_defaults_to_stable(self):
+        """Test that missing maturity defaults to stable."""
+        data = {
+            "display_name": "My Addon",
+            "depends": [],
+            "author": {"name": "Test", "email": "t@t.com"},
+        }
+        meta = AddonMetadata.from_registry_entry("my_addon", data)
+        assert meta.maturity == AddonMaturity.STABLE
+
+    def test_to_dict_serializes_maturity(self):
+        """Test that to_dict serializes maturity as a lowercase string."""
+        meta = AddonMetadata(
+            name="test",
+            description="Test addon",
+            version="1.0.0",
+            depends=[],
+            author=AddonAuthor(name="Test", email="test@test.com"),
+            provides=AddonProvides(),
+            maturity=AddonMaturity.EXPERIMENTAL,
+        )
+        d = meta.to_dict()
+        assert d["maturity"] == "experimental"
+
+    def test_parse_maturity_unknown_falls_back_to_stable(self):
+        """Test that unknown maturity values fall back to stable."""
+        assert parse_maturity("broken") == AddonMaturity.STABLE
+        assert parse_maturity("") == AddonMaturity.STABLE
+        assert parse_maturity(42) == AddonMaturity.STABLE
+        assert parse_maturity(None) == AddonMaturity.STABLE
+        assert parse_maturity("EXPERIMENTAL") == AddonMaturity.EXPERIMENTAL
+
 
 class TestAddon:
     def test_load_from_directory_success(self):
@@ -161,12 +206,31 @@ class TestAddon:
             assert addon.root_path == path
             assert addon.metadata.version == TEST_VERSION
             assert addon.metadata.provides.worker == "main.py"
+            assert addon.metadata.maturity == AddonMaturity.STABLE
+
+    def test_load_from_directory_parses_maturity(self):
+        """Test loading an addon with an explicit maturity."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)
+            data = {
+                "name": "test_pkg",
+                "author": {"name": "Me", "email": "me@me.com"},
+                "provides": {"worker": "main.py"},
+                "maturity": "experimental",
+            }
+            with open(path / "rayforge-addon.yaml", "w") as f:
+                yaml.dump(data, f)
+
+            addon = Addon.load_from_directory(path, version=TEST_VERSION)
+            assert addon.metadata.maturity == AddonMaturity.EXPERIMENTAL
 
     def test_load_missing_metadata(self):
         """Test error when metadata file is missing."""
-        with tempfile.TemporaryDirectory() as tmp:
-            with pytest.raises(FileNotFoundError):
-                Addon.load_from_directory(Path(tmp), version=TEST_VERSION)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            pytest.raises(FileNotFoundError),
+        ):
+            Addon.load_from_directory(Path(tmp), version=TEST_VERSION)
 
     def test_validate_success_simple(self):
         """Test basic validation passes."""
@@ -359,13 +423,15 @@ class TestGetGitTagVersion:
         """Test raises RuntimeError when GitPython is not installed."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)
-            with patch.dict(sys.modules, {"git": None, "git.Repo": None}):
-                with patch(
+            with (
+                patch.dict(sys.modules, {"git": None, "git.Repo": None}),
+                patch(
                     "rayforge.shared.util.versioning.importlib.import_module",
                     side_effect=ImportError,
-                ):
-                    with pytest.raises(RuntimeError, match="GitPython"):
-                        get_git_tag_version(path)
+                ),
+                pytest.raises(RuntimeError, match="GitPython"),
+            ):
+                get_git_tag_version(path)
 
     def test_raises_when_not_git_repository(self):
         """Test raises RuntimeError when directory is not a git repo."""
@@ -374,9 +440,11 @@ class TestGetGitTagVersion:
             mock_git = MagicMock()
             mock_git.Repo.side_effect = Exception("Not a git repo")
 
-            with patch.dict(sys.modules, {"git": mock_git}):
-                with pytest.raises(RuntimeError, match="Failed to get"):
-                    get_git_tag_version(path)
+            with (
+                patch.dict(sys.modules, {"git": mock_git}),
+                pytest.raises(RuntimeError, match="Failed to get"),
+            ):
+                get_git_tag_version(path)
 
     def test_raises_when_no_tags(self):
         """Test raises RuntimeError when git repo has no tags."""
@@ -387,9 +455,11 @@ class TestGetGitTagVersion:
             mock_git = MagicMock()
             mock_git.Repo.return_value = mock_repo
 
-            with patch.dict(sys.modules, {"git": mock_git}):
-                with pytest.raises(RuntimeError, match="No git tags found"):
-                    get_git_tag_version(path)
+            with (
+                patch.dict(sys.modules, {"git": mock_git}),
+                pytest.raises(RuntimeError, match="No git tags found"),
+            ):
+                get_git_tag_version(path)
 
     def test_returns_latest_tag_name(self):
         """Test returns the name of the latest git tag by commit datetime."""
@@ -453,6 +523,8 @@ class TestGetGitTagVersion:
             mock_git = MagicMock()
             mock_git.Repo.side_effect = Exception("Git error")
 
-            with patch.dict(sys.modules, {"git": mock_git}):
-                with pytest.raises(RuntimeError, match="Git error"):
-                    get_git_tag_version(path)
+            with (
+                patch.dict(sys.modules, {"git": mock_git}),
+                pytest.raises(RuntimeError, match="Git error"),
+            ):
+                get_git_tag_version(path)

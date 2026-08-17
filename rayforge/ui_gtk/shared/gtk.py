@@ -1,6 +1,6 @@
 import logging
 from gettext import gettext as _
-from typing import Optional, Tuple, cast
+from typing import cast
 
 from gi.repository import Gdk, Gtk
 
@@ -10,7 +10,7 @@ from ...shared.util.once import once_per_object
 logger = logging.getLogger(__name__)
 
 
-def get_monitor_geometry() -> Optional[Gdk.Rectangle]:
+def get_monitor_geometry() -> Gdk.Rectangle | None:
     """
     Returns a rectangle for the current monitor dimensions. If not found,
     may return None.
@@ -36,7 +36,7 @@ def get_monitor_geometry() -> Optional[Gdk.Rectangle]:
     if not pointer:
         return monitor.get_geometry()
 
-    surface, x, y = pointer.get_surface_at_position()
+    surface, _x, _y = pointer.get_surface_at_position()
     if not surface:
         return monitor.get_geometry()
 
@@ -47,7 +47,7 @@ def get_monitor_geometry() -> Optional[Gdk.Rectangle]:
     return monitor_under_mouse.get_geometry()
 
 
-def get_screen_size() -> Optional[Tuple[int, int]]:
+def get_screen_size() -> tuple[int, int] | None:
     """Get the current monitor's screen size as (width, height)."""
     geometry = get_monitor_geometry()
     if not geometry:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from raygeo.geo.types import Point as GeoPoint
 
@@ -38,11 +38,11 @@ class BezierPreviewState(PreviewState):
         self,
         start_id: EntityID,
         start_temp: bool,
-        end_id: Optional[EntityID] = None,
+        end_id: EntityID | None = None,
         end_temp: bool = False,
-        temp_entity_id: Optional[EntityID] = None,
+        temp_entity_id: EntityID | None = None,
         is_line_preview: bool = True,
-        virtual_cp: Optional[GeoPoint] = None,
+        virtual_cp: GeoPoint | None = None,
     ):
         self.start_id = start_id
         self.start_temp = start_temp
@@ -59,8 +59,8 @@ class BezierPreviewState(PreviewState):
         return result
 
     def get_virtual_cp_absolute(
-        self, registry: "EntityRegistry"
-    ) -> Optional[GeoPoint]:
+        self, registry: EntityRegistry
+    ) -> GeoPoint | None:
         if self.virtual_cp is None or self.end_id is None:
             return None
         end_pt = registry.get_point(self.end_id)
@@ -68,9 +68,7 @@ class BezierPreviewState(PreviewState):
             return None
         return (end_pt.x + self.virtual_cp[0], end_pt.y + self.virtual_cp[1])
 
-    def get_dimensions(
-        self, registry: "EntityRegistry"
-    ) -> List[DimensionData]:
+    def get_dimensions(self, registry: EntityRegistry) -> list[DimensionData]:
         return []
 
 
@@ -87,12 +85,12 @@ class BezierCommand(SketchChangeCommand):
         sketch: Sketch,
         start_id: EntityID,
         end_pos: GeoPoint,
-        end_pid: Optional[EntityID] = None,
+        end_pid: EntityID | None = None,
         is_start_temp: bool = False,
         is_line: bool = True,
-        cp1: Optional[GeoPoint] = None,
-        cp2: Optional[GeoPoint] = None,
-        constraints: Optional[List] = None,
+        cp1: GeoPoint | None = None,
+        cp2: GeoPoint | None = None,
+        constraints: list | None = None,
     ):
         label = _("Add Line") if is_line else _("Add Bezier")
         super().__init__(sketch, label)
@@ -104,11 +102,11 @@ class BezierCommand(SketchChangeCommand):
         self.cp1 = cp1
         self.cp2 = cp2
         self.constraints = constraints or []
-        self.add_cmd: Optional[AddItemsCommand] = None
-        self._committed_end_id: Optional[EntityID] = None
+        self.add_cmd: AddItemsCommand | None = None
+        self._committed_end_id: EntityID | None = None
 
     @property
-    def committed_end_id(self) -> Optional[EntityID]:
+    def committed_end_id(self) -> EntityID | None:
         return self._committed_end_id
 
     @staticmethod
@@ -116,8 +114,8 @@ class BezierCommand(SketchChangeCommand):
         registry: EntityRegistry,
         x: float,
         y: float,
-        snapped_pid: Optional[int] = None,
-        virtual_cp: Optional[GeoPoint] = None,
+        snapped_pid: int | None = None,
+        virtual_cp: GeoPoint | None = None,
         **kwargs,
     ) -> BezierPreviewState:
         if snapped_pid is not None:
@@ -141,18 +139,20 @@ class BezierCommand(SketchChangeCommand):
                 if not start_pt.is_sharp():
                     connected = start_pt.get_connected_beziers(registry)
                     for other_b in connected:
-                        if other_b.end_idx == snapped_pid:
-                            if other_b.cp2 is not None:
-                                effective_virtual_cp = (
-                                    -other_b.cp2[0],
-                                    -other_b.cp2[1],
-                                )
-                        elif other_b.start_idx == snapped_pid:
-                            if other_b.cp1 is not None:
-                                effective_virtual_cp = (
-                                    -other_b.cp1[0],
-                                    -other_b.cp1[1],
-                                )
+                        if other_b.end_idx == snapped_pid and (
+                            other_b.cp2 is not None
+                        ):
+                            effective_virtual_cp = (
+                                -other_b.cp2[0],
+                                -other_b.cp2[1],
+                            )
+                        elif other_b.start_idx == snapped_pid and (
+                            other_b.cp1 is not None
+                        ):
+                            effective_virtual_cp = (
+                                -other_b.cp1[0],
+                                -other_b.cp1[1],
+                            )
                         break
             except (IndexError, ValueError):
                 pass
@@ -185,7 +185,7 @@ class BezierCommand(SketchChangeCommand):
         y: float,
     ) -> None:
         if not isinstance(preview_state, BezierPreviewState):
-            raise AttributeError("Expected BezierPreviewState")
+            raise TypeError("Expected BezierPreviewState")
 
         if preview_state.end_id is None:
             return
@@ -206,7 +206,7 @@ class BezierCommand(SketchChangeCommand):
         waypoint_y: float,
         drag_x: float,
         drag_y: float,
-        mirror_cp_offset: Optional[GeoPoint] = None,
+        mirror_cp_offset: GeoPoint | None = None,
     ) -> None:
         """
         Converts a line preview to a bezier preview.
@@ -256,7 +256,7 @@ class BezierCommand(SketchChangeCommand):
             cp2_val = (-drag_offset[0], -drag_offset[1])
             temp_entity.cp2 = cp2_val
 
-            cp1_val: Optional[GeoPoint] = None
+            cp1_val: GeoPoint | None = None
             if mirror_cp_offset is not None:
                 cp1_val = mirror_cp_offset
             elif not start_pt.is_sharp():
@@ -264,12 +264,14 @@ class BezierCommand(SketchChangeCommand):
                 for other_b in connected:
                     if other_b.id == preview_state.temp_entity_id:
                         continue
-                    if other_b.end_idx == preview_state.start_id:
-                        if other_b.cp2 is not None:
-                            cp1_val = (-other_b.cp2[0], -other_b.cp2[1])
-                    elif other_b.start_idx == preview_state.start_id:
-                        if other_b.cp1 is not None:
-                            cp1_val = (-other_b.cp1[0], -other_b.cp1[1])
+                    if other_b.end_idx == preview_state.start_id and (
+                        other_b.cp2 is not None
+                    ):
+                        cp1_val = (-other_b.cp2[0], -other_b.cp2[1])
+                    elif other_b.start_idx == preview_state.start_id and (
+                        other_b.cp1 is not None
+                    ):
+                        cp1_val = (-other_b.cp1[0], -other_b.cp1[1])
                     break
 
             if cp1_val is None:
@@ -324,7 +326,7 @@ class BezierCommand(SketchChangeCommand):
         registry: EntityRegistry, preview_state: PreviewState
     ) -> None:
         if not isinstance(preview_state, BezierPreviewState):
-            raise AttributeError("Expected BezierPreviewState")
+            raise TypeError("Expected BezierPreviewState")
 
         logger.debug(
             f"cleanup_preview: temp_entity_id={preview_state.temp_entity_id}, "
@@ -366,7 +368,7 @@ class BezierCommand(SketchChangeCommand):
             end_pid = temp_id
             new_point = Point(temp_id, final_x, final_y)
 
-        points_to_add: List[Point] = [new_point] if new_point else []
+        points_to_add: list[Point] = [new_point] if new_point else []
 
         if self.is_start_temp:
             try:
@@ -420,20 +422,24 @@ class BezierCommand(SketchChangeCommand):
                 if not start_pt.is_sharp():
                     connected = start_pt.get_connected_beziers(registry)
                     for other_b in connected:
-                        if other_b.id != new_entity.id:
-                            if other_b.end_idx == self.start_id:
-                                if other_b.cp2 is not None:
-                                    new_entity.cp1 = (
-                                        -other_b.cp2[0],
-                                        -other_b.cp2[1],
-                                    )
-                            elif other_b.start_idx == self.start_id:
-                                if other_b.cp1 is not None:
-                                    new_entity.cp1 = (
-                                        -other_b.cp1[0],
-                                        -other_b.cp1[1],
-                                    )
-                            break
+                        if (
+                            other_b.id != new_entity.id
+                            and other_b.end_idx == self.start_id
+                            and other_b.cp2 is not None
+                        ):
+                            new_entity.cp1 = (
+                                -other_b.cp2[0],
+                                -other_b.cp2[1],
+                            )
+                        elif (
+                            other_b.start_idx == self.start_id
+                            and other_b.cp1 is not None
+                        ):
+                            new_entity.cp1 = (
+                                -other_b.cp1[0],
+                                -other_b.cp1[1],
+                            )
+                        break
             except (IndexError, ValueError):
                 pass
 
@@ -442,20 +448,24 @@ class BezierCommand(SketchChangeCommand):
                 if end_pt is not None and not end_pt.is_sharp():
                     connected = end_pt.get_connected_beziers(registry)
                     for other_b in connected:
-                        if other_b.id != new_entity.id:
-                            if other_b.start_idx == end_pid:
-                                if other_b.cp1 is not None:
-                                    new_entity.cp2 = (
-                                        -other_b.cp1[0],
-                                        -other_b.cp1[1],
-                                    )
-                            elif other_b.end_idx == end_pid:
-                                if other_b.cp2 is not None:
-                                    new_entity.cp2 = (
-                                        -other_b.cp2[0],
-                                        -other_b.cp2[1],
-                                    )
-                            break
+                        if (
+                            other_b.id != new_entity.id
+                            and other_b.start_idx == end_pid
+                            and other_b.cp1 is not None
+                        ):
+                            new_entity.cp2 = (
+                                -other_b.cp1[0],
+                                -other_b.cp1[1],
+                            )
+                        elif (
+                            other_b.end_idx == end_pid
+                            and other_b.cp2 is not None
+                        ):
+                            new_entity.cp2 = (
+                                -other_b.cp2[0],
+                                -other_b.cp2[1],
+                            )
+                        break
             except (IndexError, ValueError):
                 pass
 

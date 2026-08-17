@@ -3,7 +3,13 @@ from post_processors.transformers import BidirScanOffsetTransformer
 from raygeo.ops import Ops
 from raygeo.ops.types import CommandType
 
-from rayforge.pipeline.transformer.base import ExecutionPhase
+
+def _apply(transformer, ops, settings=None):
+    """Run a transformer through the Rust spec dispatch."""
+    if not transformer.enabled:
+        return
+    specs = [transformer.to_spec(None, None, settings)]
+    Ops.apply_transformers(ops, specs, progress_cb=None)
 
 
 @pytest.fixture
@@ -24,10 +30,6 @@ def _build_zigzag() -> Ops:
     return ops
 
 
-def test_execution_phase_is_correct(transformer: BidirScanOffsetTransformer):
-    assert transformer.execution_phase == ExecutionPhase.POST_PROCESSING
-
-
 def test_serialization_and_deserialization():
     original = BidirScanOffsetTransformer(enabled=False)
     data = original.to_dict()
@@ -43,7 +45,7 @@ def test_no_op_when_disabled():
     original = [ops.endpoint(i) for i in range(ops.len())]
 
     transformer = BidirScanOffsetTransformer(enabled=False)
-    transformer.run(ops, settings={"bidir_x_offset_mm": 0.3})
+    _apply(transformer, ops, settings={"bidir_x_offset_mm": 0.3})
 
     assert [ops.endpoint(i) for i in range(ops.len())] == original
 
@@ -52,7 +54,7 @@ def test_no_op_with_zero_offset(transformer: BidirScanOffsetTransformer):
     ops = _build_zigzag()
     original = [ops.endpoint(i) for i in range(ops.len())]
 
-    transformer.run(ops, settings={"bidir_x_offset_mm": 0.0})
+    _apply(transformer, ops, settings={"bidir_x_offset_mm": 0.0})
 
     assert [ops.endpoint(i) for i in range(ops.len())] == original
 
@@ -61,7 +63,7 @@ def test_no_op_without_settings(transformer: BidirScanOffsetTransformer):
     ops = _build_zigzag()
     original = [ops.endpoint(i) for i in range(ops.len())]
 
-    transformer.run(ops, settings=None)
+    _apply(transformer, ops, settings=None)
 
     assert [ops.endpoint(i) for i in range(ops.len())] == original
 
@@ -71,7 +73,7 @@ def test_shifts_only_right_to_left_passes(
 ):
     ops = _build_zigzag()
 
-    transformer.run(ops, settings={"bidir_x_offset_mm": 0.3})
+    _apply(transformer, ops, settings={"bidir_x_offset_mm": 0.3})
 
     assert ops.len() == 6
     # Row 0 (LTR): untouched.
@@ -97,7 +99,7 @@ def test_shifts_only_right_to_left_passes(
 def test_negative_offset_shifts_left(transformer: BidirScanOffsetTransformer):
     ops = _build_zigzag()
 
-    transformer.run(ops, settings={"bidir_x_offset_mm": -0.5})
+    _apply(transformer, ops, settings={"bidir_x_offset_mm": -0.5})
 
     assert ops.endpoint(2) == pytest.approx((1.5, 0.5, 0.0))
     assert ops.endpoint(3) == pytest.approx((-0.5, 0.5, 0.0))
@@ -112,7 +114,7 @@ def test_preserves_intermediate_state_commands(
     ops.set_power(0.5)
     ops.scan_to(0.0, 0.5, 0.0, power_values=[210, 210, 210, 210])
 
-    transformer.run(ops, settings={"bidir_x_offset_mm": 0.3})
+    _apply(transformer, ops, settings={"bidir_x_offset_mm": 0.3})
 
     assert ops.len() == 3
     assert ops.command_type(0) == CommandType.MOVE_TO

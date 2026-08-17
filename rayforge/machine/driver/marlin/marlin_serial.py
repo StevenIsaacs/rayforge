@@ -1,17 +1,11 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 
@@ -23,8 +17,13 @@ from ....core.varset import (
     SerialPortVar,
     VarSet,
 )
-from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
+from ....pipeline.encoder.base import (
+    EncodedOutput,
+    MachineCodeOpMap,
+    OpsEncoder,
+)
 from ....pipeline.encoder.gcode import GcodeEncoder
+from ....shared.units.system import UnitSystem
 from ...transport import SerialTransport, TransportStatus
 from ...transport.serial import SerialPortPermissionError
 from ..driver import (
@@ -40,6 +39,7 @@ from ..driver import (
 )
 from .marlin_probe import probe_marlin_device
 from .marlin_util import (
+    detect_unit_system_from_m149,
     gcode_to_p_number,
     is_boot_message,
     is_error_response,
@@ -65,26 +65,27 @@ class MarlinSerialDriver(Driver):
     reports_granular_progress = True
     maturity = DriverMaturity.EXPERIMENTAL
     supports_probing = True
+    supports_unit_detection = True
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
-        self._transport: Optional[SerialTransport] = None
+        self._transport: SerialTransport | None = None
         self._port: str = ""
         self._baudrate: int = 115200
         self.keep_running = False
-        self._connection_task: Optional[asyncio.Task] = None
+        self._connection_task: asyncio.Task | None = None
         self._ok_event = asyncio.Event()
         self._handshake_event = asyncio.Event()
         self._job_running = False
         self._is_cancelled = False
-        self._on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None
+        self._on_command_done: (
+            Callable[[int], None | Awaitable[None]] | None
+        ) = None
         self._last_reported_op_index = -1
-        self._response_lines: List[str] = []
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._response_lines: list[str] = []
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._rx_buffer = ""
-        self._boot_lines: List[str] = []
+        self._boot_lines: list[str] = []
 
     @property
     def machine_space_wcs(self) -> str:
@@ -95,13 +96,13 @@ class MarlinSerialDriver(Driver):
         return _("Machine Coordinates")
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         if self._port:
             return f"serial://{self._port}"
         return None
 
     @property
-    def boot_lines(self) -> List[str]:
+    def boot_lines(self) -> list[str]:
         return self._boot_lines
 
     @classmethod
@@ -132,13 +133,13 @@ class MarlinSerialDriver(Driver):
         assert machine.dialect is not None
         return GcodeEncoder(machine.dialect)
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return [VarSet()]
 
     @classmethod
     async def probe(
         cls, context: "RayforgeContext", **kwargs: Any
-    ) -> Tuple["DeviceProfile", List[str]]:
+    ) -> tuple["DeviceProfile", list[str]]:
         return await probe_marlin_device(cls, context, **kwargs)
 
     def _setup_implementation(self, **kwargs: Any) -> None:
@@ -157,7 +158,7 @@ class MarlinSerialDriver(Driver):
         self._transport.status_changed.connect(self.on_serial_status_changed)
 
     def on_serial_status_changed(
-        self, sender, status: TransportStatus, message: Optional[str] = None
+        self, sender, status: TransportStatus, message: str | None = None
     ):
         if status == TransportStatus.CONNECTED:
             logger.debug(
@@ -183,7 +184,7 @@ class MarlinSerialDriver(Driver):
                 await self._connection_task
             except asyncio.CancelledError:
                 pass
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - awaited task cleanup
                 logger.warning(
                     f"Ignored exception in connection task during cleanup: {e}"
                 )
@@ -290,10 +291,7 @@ class MarlinSerialDriver(Driver):
                 logger.info("Connection loop cancelled.")
                 break
             except Exception as e:
-                logger.error(
-                    f"Unexpected error in connection loop: {e}",
-                    exc_info=True,
-                )
+                logger.exception("Unexpected error in connection loop")
                 self._update_connection_status(TransportStatus.ERROR, str(e))
             finally:
                 if self._transport and self._transport.is_connected:
@@ -311,7 +309,7 @@ class MarlinSerialDriver(Driver):
 
     async def _send_and_wait(
         self, command: str, wait_for_ok: bool = True
-    ) -> List[str]:
+    ) -> list[str]:
         if not self._transport or not self._transport.is_connected:
             raise ConnectionError("Serial transport not connected")
 
@@ -343,7 +341,7 @@ class MarlinSerialDriver(Driver):
 
         return self._response_lines
 
-    async def execute_interactive_command(self, command: str) -> List[str]:
+    async def execute_interactive_command(self, command: str) -> list[str]:
         """
         Send a command and return its response lines.
 
@@ -363,9 +361,7 @@ class MarlinSerialDriver(Driver):
 
     def _start_job(
         self,
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ):
         self._is_cancelled = False
         self._job_running = True
@@ -374,8 +370,8 @@ class MarlinSerialDriver(Driver):
 
     async def _stream_gcode(
         self,
-        gcode_lines: List[str],
-        machine_code_to_op_map: Optional[Dict[int, int]] = None,
+        gcode_lines: list[str],
+        op_map: MachineCodeOpMap | None = None,
     ):
         logger.debug(
             f"Starting Marlin streaming job with {len(gcode_lines)} lines."
@@ -390,11 +386,7 @@ class MarlinSerialDriver(Driver):
                 if not line:
                     continue
 
-                op_index = (
-                    machine_code_to_op_map.get(line_idx)
-                    if machine_code_to_op_map
-                    else None
-                )
+                op_index = op_map.op_for_line(line_idx) if op_map else None
 
                 await self._send_and_wait(line)
 
@@ -436,13 +428,11 @@ class MarlinSerialDriver(Driver):
         encoded: EncodedOutput,
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         self._start_job(on_command_done)
 
-        mapping = encoded.op_map.machine_code_to_op if encoded.op_map else None
+        mapping = encoded.op_map
         gcode_lines = encoded.text.splitlines()
 
         try:
@@ -503,7 +493,7 @@ class MarlinSerialDriver(Driver):
             "on 8-bit boards. set_hold is a best-effort no-op."
         )
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         dialect = self.dialect
         if axes is None:
             await self._send_and_wait(dialect.home_all)
@@ -517,16 +507,20 @@ class MarlinSerialDriver(Driver):
     async def move_to(self, pos_x, pos_y) -> None:
         dialect = self.dialect
         cmd = dialect.move_to.format(
-            speed=1500, x=float(pos_x), y=float(pos_y)
+            speed=self._to_machine_speed(1500),
+            x=self._to_machine_length(float(pos_x)),
+            y=self._to_machine_length(float(pos_y)),
         )
         await self._send_and_wait(cmd)
 
     async def jog(self, speed: int, **deltas: float) -> None:
         dialect = self.dialect
-        parts = [dialect.jog.format(speed=speed)]
+        parts = [dialect.jog.format(speed=self._to_machine_speed(speed))]
 
         for axis_name, distance in deltas.items():
-            parts.append(f"{axis_name.upper()}{distance}")
+            parts.append(
+                f"{axis_name.upper()}{self._to_machine_length(distance)}"
+            )
 
         if len(parts) == 1:
             return
@@ -564,10 +558,10 @@ class MarlinSerialDriver(Driver):
             cmd = dialect.focus_laser_on.format(power=power_abs)
         await self._send_and_wait(cmd)
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         return True
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         return True
 
     async def read_settings(self) -> None:
@@ -575,29 +569,45 @@ class MarlinSerialDriver(Driver):
             "Device settings not implemented for this driver"
         )
 
+    async def detect_unit_system(self) -> UnitSystem | None:
+        """
+        Queries the device's active linear unit via ``M149`` and
+        maps the response to a ``UnitSystem``.
+        """
+        try:
+            response_lines = await self.execute_interactive_command("M149")
+        except (ConnectionError, asyncio.TimeoutError) as e:
+            logger.warning(f"Unit system detection failed: {e}")
+            return None
+        return detect_unit_system_from_m149(response_lines)
+
     async def write_setting(self, key: str, value: Any) -> None:
         raise NotImplementedError(
             "Device settings not implemented for this driver"
         )
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         p_num = gcode_to_p_number(wcs_slot)
         if p_num is None:
             raise ValueError(f"Invalid WCS slot: {wcs_slot}")
-        dialect = self.dialect
-        cmd = dialect.set_wcs_offset.format(p_num=p_num, x=x, y=y, z=z)
+        cmd = self.dialect.format_wcs_offset(
+            p_num,
+            self._to_machine_length(x),
+            self._to_machine_length(y),
+            self._to_machine_length(z) if z is not None else None,
+        )
         await self._send_and_wait(cmd)
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         raise NotImplementedError(
             "Reading all WCS offsets is not supported by Marlin."
         )
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         raise NotImplementedError(
             "Probing is not implemented for the Marlin driver."
         )
@@ -650,9 +660,9 @@ class MarlinSerialDriver(Driver):
 
         match = m114_pos_re.search(line)
         if match:
-            x = float(match.group(1))
-            y = float(match.group(2))
-            z = float(match.group(3))
+            x = self._from_machine_length(float(match.group(1)))
+            y = self._from_machine_length(float(match.group(2)))
+            z = self._from_machine_length(float(match.group(3)))
             old_pos = self.state.machine_pos
             new_pos = (x, y, z)
             if new_pos != old_pos:
@@ -678,7 +688,7 @@ class MarlinSerialDriver(Driver):
         self._response_lines.append(line)
 
     def _update_connection_status(
-        self, status: TransportStatus, message: Optional[str] = None
+        self, status: TransportStatus, message: str | None = None
     ):
         log_data = f"Connection status: {status.name}"
         if message:
@@ -687,14 +697,17 @@ class MarlinSerialDriver(Driver):
         self.connection_status_changed.send(
             self, status=status, message=message
         )
-        if status in [
-            TransportStatus.DISCONNECTED,
-            TransportStatus.ERROR,
-        ]:
-            if self.state.status != DeviceStatus.UNKNOWN:
-                self.state.status = DeviceStatus.UNKNOWN
-                logger.info(
-                    f"Device state changed: {self.state.status.name}",
-                    extra=self._log_extra("STATE_CHANGE"),
-                )
-                self.state_changed.send(self, state=self.state)
+        if (
+            status
+            in [
+                TransportStatus.DISCONNECTED,
+                TransportStatus.ERROR,
+            ]
+            and self.state.status != DeviceStatus.UNKNOWN
+        ):
+            self.state.status = DeviceStatus.UNKNOWN
+            logger.info(
+                f"Device state changed: {self.state.status.name}",
+                extra=self._log_extra("STATE_CHANGE"),
+            )
+            self.state_changed.send(self, state=self.state)

@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, Optional, Union
+from typing import Any
 
 
 class ParameterContext:
@@ -9,8 +9,8 @@ class ParameterContext:
     """
 
     def __init__(self) -> None:
-        self._expressions: Dict[str, str] = {}
-        self._cache: Dict[str, Any] = {}
+        self._expressions: dict[str, str] = {}
+        self._cache: dict[str, Any] = {}
         self._dirty: bool = False
 
         # Safe math context
@@ -18,19 +18,19 @@ class ParameterContext:
             k: v for k, v in vars(math).items() if not k.startswith("_")
         }
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the parameter context to a dictionary."""
         return {"expressions": self._expressions.copy()}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ParameterContext":
+    def from_dict(cls, data: dict[str, Any]) -> "ParameterContext":
         """Deserializes a dictionary into a ParameterContext instance."""
         new_context = cls()
         new_context._expressions = data.get("expressions", {})
         new_context._dirty = True  # Force re-evaluation on next get
         return new_context
 
-    def set(self, name: str, value: Union[float, str]) -> None:
+    def set(self, name: str, value: float | str) -> None:
         """Sets a parameter. Can be a float or a math string."""
         self._expressions[name] = str(value)
         self._dirty = True
@@ -41,13 +41,13 @@ class ParameterContext:
             self.evaluate_all()
         return self._cache.get(name, default)
 
-    def get_all_values(self) -> Dict[str, Any]:
+    def get_all_values(self) -> dict[str, Any]:
         """Evaluates all expressions and returns a dictionary of all values."""
         if self._dirty:
             self.evaluate_all()
         return self._cache.copy()
 
-    def evaluate(self, expression: Union[str, float]) -> Any:
+    def evaluate(self, expression: str | float) -> Any:
         """Evaluates an arbitrary expression string using current context."""
         if isinstance(expression, (int, float)):
             return float(expression)
@@ -66,11 +66,11 @@ class ParameterContext:
 
         try:
             return eval(str(expression), {"__builtins__": None}, ctx)
-        except Exception:
+        except Exception:  # noqa: BLE001 - arbitrary user expression eval
             return 0.0
 
     def evaluate_all(
-        self, initial_values: Optional[Dict[str, Any]] = None
+        self, initial_values: dict[str, Any] | None = None
     ) -> None:
         """
         Iteratively resolves dependencies.

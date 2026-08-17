@@ -1,11 +1,10 @@
 import asyncio
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, Tuple
 from unittest.mock import MagicMock
 
 import pytest
 from raygeo.geo import Geometry, Matrix
-from raygeo.ops import Ops
 from raygeo.ops.axis import Axis
 
 import rayforge.machine.driver as driver_module
@@ -33,7 +32,7 @@ from rayforge.machine.models.laser import Laser
 from rayforge.machine.models.machine import JogDirection, Machine, Origin
 from rayforge.machine.models.macro import MacroTrigger
 from rayforge.machine.transport import TransportStatus
-from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
+from rayforge.pipeline.encoder.base import EncodedOutput
 from rayforge.shared.tasker.manager import TaskManager
 
 
@@ -46,8 +45,6 @@ def contour_step_class():
 # Define the test-specific driver in the test file where it is used.
 class OtherDriver(NoDeviceDriver):
     """A second dummy driver class for testing purposes."""
-
-    pass
 
 
 # Register the driver at the module level to ensure it's available
@@ -78,7 +75,7 @@ def doc_editor(
     editor.cleanup()
 
 
-def create_test_workpiece_and_source() -> Tuple[WorkPiece, SourceAsset]:
+def create_test_workpiece_and_source() -> tuple[WorkPiece, SourceAsset]:
     """Creates a simple WorkPiece and its linked SourceAsset for testing."""
     svg_data = b'<svg><path d="M0,0 L10,10"/></svg>'
     source_file = Path("test.svg")
@@ -160,200 +157,6 @@ class TestMachine:
         assert machine.driver_args == {"port": "/dev/null"}
 
     @pytest.mark.asyncio
-    async def test_encode_ops_delegates_to_driver(
-        self, machine: Machine, mocker, task_mgr: TaskManager
-    ):
-        """
-        Verify that machine.encode_ops calls create_encoder on the driver
-        class.
-        """
-        await wait_for_tasks_to_finish(task_mgr)
-        # --- Arrange ---
-        machine.set_origin(Origin.BOTTOM_LEFT)
-
-        # Create a mock encoder
-        mock_encoder = mocker.Mock()
-        mock_encoder.encode.return_value = EncodedOutput(
-            text="G0", op_map=MachineCodeOpMap()
-        )
-
-        # Patch the driver class's create_encoder static method
-        create_encoder_mock = mocker.patch.object(
-            NoDeviceDriver, "create_encoder", return_value=mock_encoder
-        )
-
-        ops_to_encode = Ops()
-        doc_context = Doc()
-
-        # Spy on the copy method to check it's called
-        copy_spy = mocker.spy(ops_to_encode, "copy")
-
-        # --- Act ---
-        machine.encode_ops(ops_to_encode, doc_context)
-
-        # --- Assert ---
-        # 1. Verify that create_encoder was called with the machine
-        create_encoder_mock.assert_called_once_with(machine)
-
-        # 2. Verify that the ops were copied before being passed to the encoder
-        copy_spy.assert_called_once()
-
-        # 3. Verify that the encoder's encode method was called
-        mock_encoder.encode.assert_called_once()
-        call_args = mock_encoder.encode.call_args.args
-        assert isinstance(call_args[0], Ops)
-        assert call_args[1] is machine
-        assert call_args[2] is doc_context
-
-    @pytest.mark.asyncio
-    async def test_encode_ops_transforms_coordinates_for_origin(
-        self, machine: Machine, mocker, task_mgr: TaskManager
-    ):
-        """
-        Verify that encode_ops correctly applies coordinate transformations
-        when the machine origin is not Bottom-Left (the internal native
-        format).
-        """
-        await wait_for_tasks_to_finish(task_mgr)
-        # --- Arrange ---
-        mock_encoder = mocker.Mock()
-        mock_encoder.encode.return_value = EncodedOutput(
-            text="G0", op_map=MachineCodeOpMap()
-        )
-
-        # Patch the driver class's create_encoder static method
-        mocker.patch.object(
-            NoDeviceDriver, "create_encoder", return_value=mock_encoder
-        )
-
-        original_ops = Ops()
-        copied_ops = Ops()
-        copy_mock = mocker.patch.object(Ops, "copy", return_value=copied_ops)
-        transform_mock = mocker.patch.object(copied_ops, "transform")
-
-        doc = Doc()
-
-        # --- Case 1: Default (Bottom Left) - Should NOT Transform ---
-        machine.set_origin(Origin.BOTTOM_LEFT)
-        mock_encoder.reset_mock()
-        copy_mock.reset_mock()
-        transform_mock.reset_mock()
-
-        machine.encode_ops(original_ops, doc)
-
-        # A copy is always made to apply offsets.
-        copy_mock.assert_called_once()
-        # But transform should not be called on the copy for this origin.
-        transform_mock.assert_not_called()
-        # The encoder should be called with the copied object.
-        mock_encoder.encode.assert_called_once()
-        call_args = mock_encoder.encode.call_args.args
-        assert call_args[0] is copied_ops
-        assert call_args[1] is machine
-        assert call_args[2] is doc
-
-        # --- Case 2: Origin Change (Top Left) - Should Transform ---
-        machine.set_origin(Origin.TOP_LEFT)
-        mock_encoder.reset_mock()
-        copy_mock.reset_mock()
-        transform_mock.reset_mock()
-
-        machine.encode_ops(original_ops, doc)
-
-        copy_mock.assert_called_once()
-        transform_mock.assert_called_once()
-        mock_encoder.encode.assert_called_once()
-        call_args = mock_encoder.encode.call_args.args
-        assert call_args[0] is copied_ops
-        assert call_args[1] is machine
-        assert call_args[2] is doc
-
-        # Verify the transform matrix has Y flipped (-1 scale) for Top Left
-        # conversion
-        # Y_new = Height - Y_old
-        args, _ = transform_mock.call_args
-        matrix_arg = args[0]
-        assert matrix_arg[0, 0] == 1.0  # X scale
-        assert matrix_arg[1, 1] == -1.0  # Y scale
-
-    @pytest.mark.asyncio
-    async def test_encode_ops_applies_wcs_offset(
-        self, machine: Machine, mocker, task_mgr: TaskManager
-    ):
-        """
-        Verify that encode_ops correctly subtracts the active WCS offset
-        from the command coordinates.
-        """
-        await wait_for_tasks_to_finish(task_mgr)
-
-        mock_encoder = mocker.Mock()
-        mock_encoder.encode.return_value = EncodedOutput(
-            text="G0", op_map=MachineCodeOpMap()
-        )
-
-        mocker.patch.object(
-            NoDeviceDriver, "create_encoder", return_value=mock_encoder
-        )
-
-        original_ops = Ops()
-        original_ops.move_to(200.0, 150.0, 0.0)
-        original_ops.line_to(300.0, 250.0, 0.0)
-
-        doc = Doc()
-        machine.set_origin(Origin.BOTTOM_LEFT)
-
-        machine.update_wcs_offset("G54", (100.0, 100.0, 0.0))
-        machine.set_active_wcs("G54")
-
-        machine.encode_ops(original_ops, doc)
-
-        call_args = mock_encoder.encode.call_args
-        encoded_ops = call_args[0][0]
-
-        assert encoded_ops.endpoint(0) == (100.0, 50.0, 0.0)
-        assert encoded_ops.endpoint(1) == (200.0, 150.0, 0.0)
-
-    @pytest.mark.asyncio
-    async def test_encode_ops_ignores_wcs_if_missing(
-        self, machine: Machine, mocker, task_mgr: TaskManager
-    ):
-        """
-        Verify that encode_ops treats missing WCS keys as absolute (0,0,0)
-        and does NOT apply a transform.
-        """
-        await wait_for_tasks_to_finish(task_mgr)
-
-        # Setup mocks
-        mock_encoder = mocker.Mock()
-        mock_encoder.encode.return_value = EncodedOutput(
-            text="G0", op_map=MachineCodeOpMap()
-        )
-
-        # Patch the driver class's create_encoder static method
-        mocker.patch.object(
-            NoDeviceDriver, "create_encoder", return_value=mock_encoder
-        )
-
-        original_ops = Ops()
-        copied_ops = Ops()
-        mocker.patch.object(original_ops, "copy", return_value=copied_ops)
-        transform_mock = mocker.patch.object(copied_ops, "transform")
-
-        doc = Doc()
-        machine.set_origin(Origin.BOTTOM_LEFT)
-
-        # Set active WCS to "G53" (which is NOT in default wcs_offsets)
-        machine.set_active_wcs("G53")
-        assert "G53" not in machine.coordinate_systems
-
-        # Act
-        machine.encode_ops(original_ops, doc)
-
-        # Assert
-        # Should NOT have called transform because offset is (0,0,0)
-        transform_mock.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_set_work_origin_here(
         self, machine: Machine, mocker, task_mgr: TaskManager
     ):
@@ -395,6 +198,48 @@ class TestMachine:
         # Assert 2
         set_wcs_spy.assert_called_once_with("G54", 100.0, 200.0, 0.0)
         read_wcs_spy.assert_called_once()
+
+    def test_has_z_axis_default_true(self, machine: Machine):
+        """A default machine has a Z axis configured."""
+        assert machine.has_z_axis is True
+        assert Axis.Z in machine.available_axes
+
+    def test_has_z_axis_false_when_z_removed(self, machine: Machine):
+        """Removing the Z axis config makes has_z_axis False."""
+        machine.axes.remove_config(Axis.Z)
+        assert machine.has_z_axis is False
+        assert Axis.Z not in machine.available_axes
+        assert machine.available_axes == (Axis.X | Axis.Y)
+
+    @pytest.mark.asyncio
+    async def test_set_work_origin_no_z_omits_z(
+        self, machine: Machine, mocker, task_mgr: TaskManager
+    ):
+        """A no-Z machine passes z=None to the driver so Z is omitted."""
+        await wait_for_tasks_to_finish(task_mgr)
+        await machine.connect()
+        await wait_for_tasks_to_finish(task_mgr)
+        machine.active_wcs = "G54"
+        machine.update_wcs_offset("G54", (10.0, 20.0, 0.0))
+        machine.device_state.machine_pos = (100.0, 200.0, 0.0)
+        machine.axes.remove_config(Axis.Z)
+
+        set_wcs_spy = mocker.patch.object(
+            machine.driver,
+            "set_wcs_offset",
+            new_callable=mocker.AsyncMock,
+        )
+        mocker.patch.object(
+            machine.driver,
+            "read_wcs_offsets",
+            new_callable=mocker.AsyncMock,
+        )
+
+        await machine.set_work_origin_here(Axis.X | Axis.Y | Axis.Z)
+
+        # Z is masked out by available_axes, and set_work_origin passes
+        # None so the driver omits the Z word.
+        set_wcs_spy.assert_called_once_with("G54", 100.0, 200.0, None)
 
     @pytest.mark.asyncio
     async def test_set_work_origin_blocks_immutable(
@@ -690,7 +535,7 @@ class TestMachine:
 
         # --- Assert ---
         run_spy.assert_called_once()
-        encoded, received_doc, received_ops = run_spy.call_args.args
+        encoded, received_doc, _received_ops = run_spy.call_args.args
         assert isinstance(encoded, EncodedOutput)
         assert received_doc is doc
 
@@ -709,7 +554,8 @@ class TestMachine:
         # --- Arrange ---
         await wait_for_tasks_to_finish(task_mgr)
         # Configure the machine to be capable of framing.
-        head = machine.get_default_head()
+        head = machine.get_default_laser_head()
+        assert head is not None
         head.set_frame_power(1)
         assert machine.can_frame() is True
 
@@ -737,7 +583,7 @@ class TestMachine:
 
         # --- Assert ---
         run_spy.assert_called_once()
-        encoded, received_doc, received_ops = run_spy.call_args.args
+        encoded, received_doc, _received_ops = run_spy.call_args.args
         from rayforge.pipeline.encoder.base import EncodedOutput
 
         assert isinstance(encoded, EncodedOutput)
@@ -762,7 +608,8 @@ class TestMachine:
         """
         await wait_for_tasks_to_finish(task_mgr)
 
-        head = machine.get_default_head()
+        head = machine.get_default_laser_head()
+        assert head is not None
         head.set_frame_power(1)
         head.set_frame_repeat_count(3)
 
@@ -816,7 +663,8 @@ class TestMachine:
         assert machine.can_focus() is False
 
         # Set focus power on default head
-        head = machine.get_default_head()
+        head = machine.get_default_laser_head()
+        assert head is not None
         head.set_focus_power(0.1)
         assert machine.can_focus() is True
 
@@ -945,7 +793,7 @@ class TestMachine:
     async def test_get_default_head(
         self, machine: Machine, task_mgr: TaskManager
     ):
-        """Returns the first laser head, or raises an error if none exist."""
+        """Returns the first head, or raises an error if none exist."""
         await wait_for_tasks_to_finish(task_mgr)
         default_head = machine.get_default_head()
         assert isinstance(default_head, Laser)
@@ -964,7 +812,7 @@ class TestMachine:
         # Test with empty heads list - should raise ValueError
         machine.heads.clear()
         with pytest.raises(
-            ValueError, match="Machine has no laser heads configured"
+            ValueError, match="Machine has no heads configured"
         ):
             machine.get_default_head()
 
@@ -1645,42 +1493,72 @@ class TestMachine:
         assert limits == expected_limits
 
     @pytest.mark.parametrize(
-        "reverse_x, reverse_y, wcs_offset, expected_offset",
+        "wcs_is_workarea_origin, origin, reverse_x, reverse_y, expected",
         [
-            # No reverse axes
-            (False, False, (0.0, 0.0, 0.0), (0.0, 0.0)),
-            (False, False, (10.0, 20.0, 0.0), (10.0, 20.0)),
-            # Reverse X only
-            (True, False, (0.0, 0.0, 0.0), (0.0, 0.0)),
-            (True, False, (10.0, 20.0, 0.0), (-10.0, 20.0)),
-            # Reverse Y only
-            (False, True, (0.0, 0.0, 0.0), (0.0, 0.0)),
-            (False, True, (10.0, 20.0, 0.0), (10.0, -20.0)),
-            # Both reversed
-            (True, True, (0.0, 0.0, 0.0), (0.0, 0.0)),
-            (True, True, (10.0, 20.0, 0.0), (-10.0, -20.0)),
+            # Active WCS offset (25, 35), checked against legacy
+            # native-mode behavior for every origin and reversal
+            # combination.
+            (False, Origin.BOTTOM_LEFT, False, False, (25.0, 35.0)),
+            (False, Origin.BOTTOM_LEFT, True, False, (-25.0, 35.0)),
+            (False, Origin.BOTTOM_LEFT, False, True, (25.0, -35.0)),
+            (False, Origin.BOTTOM_LEFT, True, True, (-25.0, -35.0)),
+            (False, Origin.TOP_LEFT, False, False, (25.0, 165.0)),
+            (False, Origin.TOP_LEFT, True, False, (-25.0, 165.0)),
+            (False, Origin.TOP_LEFT, False, True, (25.0, 235.0)),
+            (False, Origin.TOP_LEFT, True, True, (-25.0, 235.0)),
+            (False, Origin.BOTTOM_RIGHT, False, False, (75.0, 35.0)),
+            (False, Origin.BOTTOM_RIGHT, True, False, (125.0, 35.0)),
+            (False, Origin.BOTTOM_RIGHT, False, True, (75.0, -35.0)),
+            (False, Origin.BOTTOM_RIGHT, True, True, (125.0, -35.0)),
+            (False, Origin.TOP_RIGHT, False, False, (75.0, 165.0)),
+            (False, Origin.TOP_RIGHT, True, False, (125.0, 165.0)),
+            (False, Origin.TOP_RIGHT, False, True, (75.0, 235.0)),
+            (False, Origin.TOP_RIGHT, True, True, (125.0, 235.0)),
+            # Work-area reference offset with margins (10, 20, 30, 40).
+            # These values intentionally preserve the pre-feature
+            # transform through machine_point_to_world for non-bottom-
+            # left origins.
+            (True, Origin.BOTTOM_LEFT, False, False, (10.0, 40.0)),
+            (True, Origin.BOTTOM_LEFT, True, False, (-10.0, 40.0)),
+            (True, Origin.BOTTOM_LEFT, False, True, (10.0, -40.0)),
+            (True, Origin.BOTTOM_LEFT, True, True, (-10.0, -40.0)),
+            (True, Origin.TOP_LEFT, False, False, (10.0, 20.0)),
+            (True, Origin.TOP_LEFT, True, False, (-10.0, 20.0)),
+            (True, Origin.TOP_LEFT, False, True, (10.0, 380.0)),
+            (True, Origin.TOP_LEFT, True, True, (-10.0, 380.0)),
+            (True, Origin.BOTTOM_RIGHT, False, False, (30.0, 40.0)),
+            (True, Origin.BOTTOM_RIGHT, True, False, (170.0, 40.0)),
+            (True, Origin.BOTTOM_RIGHT, False, True, (30.0, -40.0)),
+            (True, Origin.BOTTOM_RIGHT, True, True, (170.0, -40.0)),
+            (True, Origin.TOP_RIGHT, False, False, (30.0, 20.0)),
+            (True, Origin.TOP_RIGHT, True, False, (170.0, 20.0)),
+            (True, Origin.TOP_RIGHT, False, True, (30.0, 380.0)),
+            (True, Origin.TOP_RIGHT, True, True, (170.0, 380.0)),
         ],
     )
-    def test_get_visual_wcs_offset(
+    def test_reference_position_world_native_regression_matrix(
         self,
         isolated_machine: Machine,
+        wcs_is_workarea_origin,
+        origin,
         reverse_x,
         reverse_y,
-        wcs_offset,
-        expected_offset,
+        expected,
     ):
-        """
-        Tests that get_visual_wcs_offset returns the WCS offset with
-        axis reversal applied.
-        """
-        isolated_machine.set_axis_extents(100, 100)
+        """Native mode preserves all pre-orientation reference
+        transforms."""
+        isolated_machine.set_axis_extents(100.0, 200.0)
+        isolated_machine.set_work_margins(10.0, 20.0, 30.0, 40.0)
+        isolated_machine.set_origin(origin)
         isolated_machine.set_reverse_x_axis(reverse_x)
         isolated_machine.set_reverse_y_axis(reverse_y)
         isolated_machine.set_active_wcs("G54")
-        isolated_machine.update_wcs_offset("G54", wcs_offset)
+        isolated_machine.update_wcs_offset("G54", (25.0, 35.0, 0.0))
+        isolated_machine.set_wcs_origin_is_workarea_origin(
+            wcs_is_workarea_origin
+        )
 
-        offset = isolated_machine.get_visual_wcs_offset()
-        assert offset == pytest.approx(expected_offset)
+        assert isolated_machine.panel.reference_position_world == expected
 
 
 class TestJogDelegation:
@@ -2009,221 +1887,3 @@ class TestJogDelegation:
             isolated_machine.would_jog_exceed_limits(axis, distance)
             is expected
         )
-
-
-class TestPrepareOpsForEncoding:
-    """
-    Tests for Machine._prepare_ops_for_encoding coordinate transformations.
-
-    These tests verify that ops coordinates are correctly transformed from
-    world coordinates (pipeline output) to command coordinates (G-code)
-    for all origin positions, axis directions, and WCS modes.
-    """
-
-    WCS_MODE_SCENARIOS = [
-        # (origin, reverse_x, reverse_y, wcs_offset, world_point, expected_cmd)
-        # Bottom-Left, positive axes
-        (
-            Origin.BOTTOM_LEFT,
-            False,
-            False,
-            (0, 0, 0),
-            (50, 60, 0),
-            (50, 60, 0),
-        ),
-        (
-            Origin.BOTTOM_LEFT,
-            False,
-            False,
-            (20, 30, 0),
-            (50, 60, 0),
-            (30, 30, 0),
-        ),
-        # Top-Left, positive axes (Y flipped)
-        (Origin.TOP_LEFT, False, False, (0, 0, 0), (50, 60, 0), (50, 40, 0)),
-        (Origin.TOP_LEFT, False, False, (20, 30, 0), (50, 60, 0), (30, 10, 0)),
-        # Top-Right, positive axes (X and Y flipped)
-        (Origin.TOP_RIGHT, False, False, (0, 0, 0), (50, 60, 0), (50, 40, 0)),
-        (
-            Origin.TOP_RIGHT,
-            False,
-            False,
-            (20, 30, 0),
-            (50, 60, 0),
-            (30, 10, 0),
-        ),
-        # Bottom-Right, positive axes (X flipped)
-        (
-            Origin.BOTTOM_RIGHT,
-            False,
-            False,
-            (0, 0, 0),
-            (50, 60, 0),
-            (50, 60, 0),
-        ),
-        (
-            Origin.BOTTOM_RIGHT,
-            False,
-            False,
-            (20, 30, 0),
-            (50, 60, 0),
-            (30, 30, 0),
-        ),
-    ]
-
-    @pytest.mark.parametrize(
-        "origin,reverse_x,reverse_y,wcs_offset,world_point,expected_cmd",
-        WCS_MODE_SCENARIOS,
-    )
-    def test_wcs_mode_coordinate_transform(
-        self,
-        isolated_machine: Machine,
-        origin,
-        reverse_x,
-        reverse_y,
-        wcs_offset,
-        world_point,
-        expected_cmd,
-    ):
-        """
-        Tests that _prepare_ops_for_encoding correctly transforms coordinates
-        in WCS mode for all origin and axis direction combinations.
-        """
-        machine = isolated_machine
-        machine.set_axis_extents(100.0, 100.0)
-        machine.set_work_margins(10.0, 20.0, 30.0, 40.0)
-        machine.set_origin(origin)
-        machine.set_reverse_x_axis(reverse_x)
-        machine.set_reverse_y_axis(reverse_y)
-        machine.wcs_origin_is_workarea_origin = False
-        machine.set_active_wcs("G54")
-        machine.update_wcs_offset("G54", wcs_offset)
-
-        ops = Ops()
-        ops.move_to(world_point[0], world_point[1], world_point[2])
-
-        result = machine._prepare_ops_for_encoding(ops)
-
-        assert result.endpoint(0) == pytest.approx(expected_cmd, abs=0.001)
-
-    WORKAREA_WCS_MODE_SCENARIOS = [
-        # (origin, reverse_x, reverse_y, world_point, expected_cmd)
-        # World point is in machine coords. Expected is relative to workarea.
-        # Margins: left=10, top=20, right=30, bottom=40
-        # Workarea: 60x40 (100-10-30 x 100-20-40)
-        # Bottom-Left: workarea origin at (10, 40)
-        (Origin.BOTTOM_LEFT, False, False, (20, 50, 0), (10, 10, 0)),
-    ]
-
-    @pytest.mark.parametrize(
-        "origin,reverse_x,reverse_y,world_point,expected_cmd",
-        WORKAREA_WCS_MODE_SCENARIOS,
-    )
-    def test_workarea_wcs_mode_coordinate_transform(
-        self,
-        isolated_machine: Machine,
-        origin,
-        reverse_x,
-        reverse_y,
-        world_point,
-        expected_cmd,
-    ):
-        """
-        Tests that _prepare_ops_for_encoding correctly transforms
-        coordinates when wcs_origin_is_workarea_origin is True.
-        """
-        machine = isolated_machine
-        machine.set_axis_extents(100.0, 100.0)
-        machine.set_work_margins(10.0, 20.0, 30.0, 40.0)
-        machine.set_origin(origin)
-        machine.set_reverse_x_axis(reverse_x)
-        machine.set_reverse_y_axis(reverse_y)
-        machine.wcs_origin_is_workarea_origin = True
-
-        ops = Ops()
-        ops.move_to(world_point[0], world_point[1], world_point[2])
-
-        result = machine._prepare_ops_for_encoding(ops)
-
-        assert result.endpoint(0) == pytest.approx(expected_cmd, abs=0.001)
-
-    def test_wcs_z_offset_not_subtracted(self, isolated_machine: Machine):
-        """
-        WCS Z offset should NOT be subtracted from command Z coordinates.
-        The controller handles WCS→machine translation via the G54 command
-        emitted in the preamble. Ops Z=0 means "work surface" and should
-        remain 0 in the G-code regardless of WCS Z offset.
-        """
-        machine = isolated_machine
-        machine.set_axis_extents(100.0, 100.0)
-        machine.set_origin(Origin.BOTTOM_LEFT)
-        machine.wcs_origin_is_workarea_origin = False
-        machine.set_active_wcs("G54")
-        machine.update_wcs_offset("G54", (10, 20, 30))
-
-        ops = Ops()
-        ops.move_to(50, 60, 0)
-        ops.line_to(50, 60, -5)
-
-        result = machine._prepare_ops_for_encoding(ops)
-
-        assert result.endpoint(0) == pytest.approx((40, 40, 0), abs=0.001)
-        assert result.endpoint(1) == pytest.approx((40, 40, -5), abs=0.001)
-
-    @pytest.mark.parametrize(
-        "reverse_z,input_z,expected_z",
-        [
-            (False, 0.0, 0.0),
-            (False, -5.0, -5.0),
-            (True, 0.0, 0.0),
-            (True, -5.0, 5.0),
-            (True, 5.0, -5.0),
-        ],
-    )
-    def test_reverse_z_axis_in_encoding(
-        self, isolated_machine: Machine, reverse_z, input_z, expected_z
-    ):
-        """
-        When reverse_z_axis is enabled, Z coordinates should be negated
-        in the G-code output so that a reversed machine interprets them
-        correctly.
-        """
-        machine = isolated_machine
-        machine.set_axis_extents(100.0, 100.0)
-        machine.set_origin(Origin.BOTTOM_LEFT)
-        machine.set_reverse_z_axis(reverse_z)
-
-        ops = Ops()
-        ops.move_to(10, 20, input_z)
-
-        result = machine._prepare_ops_for_encoding(ops)
-        assert result.len() > 0
-        end = result.endpoint(0)
-        assert end is not None
-
-        assert end[0] == pytest.approx(10.0, abs=0.001)
-        assert end[1] == pytest.approx(20.0, abs=0.001)
-        assert end[2] == pytest.approx(expected_z, abs=0.001)
-
-    def test_multiple_commands_transformed(self, isolated_machine: Machine):
-        """
-        Tests that multiple commands in an ops object are all transformed.
-        """
-        machine = isolated_machine
-        machine.set_axis_extents(100.0, 100.0)
-        machine.set_work_margins(10.0, 20.0, 30.0, 40.0)
-        machine.set_origin(Origin.BOTTOM_LEFT)
-        machine.wcs_origin_is_workarea_origin = False
-        machine.set_active_wcs("G54")
-        machine.update_wcs_offset("G54", (10, 10, 0))
-
-        ops = Ops()
-        ops.move_to(20, 20, 0)
-        ops.line_to(30, 30, 0)
-        ops.line_to(40, 40, 0)
-
-        result = machine._prepare_ops_for_encoding(ops)
-
-        assert result.endpoint(0) == pytest.approx((10, 10, 0))
-        assert result.endpoint(1) == pytest.approx((20, 20, 0))
-        assert result.endpoint(2) == pytest.approx((30, 30, 0))

@@ -4,7 +4,7 @@ description: "Gérez les machines dans Rayforge — ajoutez, configurez, exporte
 
 # Machines
 
-![Paramètres des Machines](/screenshots/application-machines.png)
+![Paramètres des Machines](/screenshots/app-settings-machines.png)
 
 La page Machines dans les Paramètres de l'Application affiche une liste de
 toutes les machines configurées. Chaque entrée affiche le nom de la machine
@@ -24,9 +24,9 @@ actuellement active est marquée d'une icône de coche.
 
 Alternativement :
 
-- Cliquez sur **Other Device…** pour lancer l'
-  [Assistant de Configuration](../machine/config-wizard.md), qui détecte
-  automatiquement les paramètres d'un appareil connecté
+- Cliquez sur **Device Not Listed** pour lancer l'
+  [Assistant de Configuration](../getting-started/first-time-setup.md), qui
+  vous guide pas à pas dans la configuration d'une machine
 - Cliquez sur **Import from File…** pour ajouter une machine depuis un
   profil exporté précédemment ou depuis un profil d'appareil LightBurn
   (.lbdev). Les profils LightBurn incluent le calibrage de caméra et

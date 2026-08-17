@@ -1,6 +1,6 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, ClassVar, Union
 
 from ...core.commands import (
     AddItemsCommand,
@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 class EqualConstraintTool(SketchTool):
     ICON = "sketch-constrain-equal-symbolic"
     LABEL = _("Equal")
-    SHORTCUTS = ["e"]
+    SHORTCUTS: ClassVar[list[str]] = ["e"]
 
     def is_available(
         self,
-        target: Optional[Union[Point, Entity, "Constraint"]],
-        target_type: Optional[str],
+        target: Union[Point, Entity, "Constraint"] | None,
+        target_type: str | None,
     ) -> bool:
         return EqualLengthConstraint.can_apply_to(
             self.element.selection, self.element.sketch

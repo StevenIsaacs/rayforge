@@ -140,7 +140,7 @@ class MarlinSimulator:
             self._write("ok\n")
         elif cmd == "M410":
             self._write("ok\n")
-        elif cmd.startswith("G0 ") or cmd.startswith("G1 "):
+        elif cmd.startswith(("G0 ", "G1 ")):
             xm = re.search(r"X([+-]?\d+\.?\d*)", cmd)
             ym = re.search(r"Y([+-]?\d+\.?\d*)", cmd)
             if xm:
@@ -448,7 +448,7 @@ class TestMarlinSerialDriverRealSerial:
         ops.move_to(10, 10, 0)
         ops.line_to(20, 20, 0)
         doc = Doc()
-        encoded = machine.encode_ops(ops, doc)
+        encoded = driver.get_encoder().encode(ops, machine, doc)
         await asyncio.wait_for(driver.run(encoded, doc, ops), timeout=5.0)
         job_finished.assert_called_once()
 

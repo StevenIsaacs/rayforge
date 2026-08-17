@@ -1,17 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum, auto
 from locale import format_string
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Set,
-    Tuple,
-    Union,
 )
 
 from raygeo.geo.types import Point
@@ -43,7 +37,7 @@ class Constraint:
 
     # These attributes are expected on dimensional constraints
     value: float = 0.0
-    expression: Optional[str] = None
+    expression: str | None = None
     status: ConstraintStatus = ConstraintStatus.VALID
     user_visible: bool = True
 
@@ -52,7 +46,7 @@ class Constraint:
 
     @classmethod
     def can_apply_to(
-        cls, selection: "SketchSelection", sketch: Optional["Sketch"] = None
+        cls, selection: SketchSelection, sketch: Sketch | None = None
     ) -> bool:
         """
         Returns True if this constraint can be applied to the current
@@ -62,7 +56,7 @@ class Constraint:
         return False
 
     @classmethod
-    def get_type_key(cls) -> Optional[str]:
+    def get_type_key(cls) -> str | None:
         """
         Returns the string key used to identify this constraint type.
         Returns None for constraints that cannot be created by users.
@@ -75,7 +69,7 @@ class Constraint:
         raise NotImplementedError()
 
     def targets_segment(
-        self, p1: EntityID, p2: EntityID, entity_id: Optional[EntityID]
+        self, p1: EntityID, p2: EntityID, entity_id: EntityID | None
     ) -> bool:
         """
         Returns True if this constraint restricts the length/distance of the
@@ -84,14 +78,14 @@ class Constraint:
         return False
 
     def error(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> Union[float, Tuple[float, ...], List[float]]:
+        self, reg: EntityRegistry, params: ParameterContext
+    ) -> float | tuple[float, ...] | list[float]:
         """Calculates the error of the constraint."""
         return 0.0
 
     def gradient(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> Dict[EntityID, List[Point]]:
+        self, reg: EntityRegistry, params: ParameterContext
+    ) -> dict[EntityID, list[Point]]:
         """
         Calculates the partial derivatives (Jacobian entries) of the error.
         Returns a map: point_id -> list of (d_error/dx, d_error/dy).
@@ -101,7 +95,7 @@ class Constraint:
         return {}
 
     def constrains_radius(
-        self, registry: "EntityRegistry", entity_id: EntityID
+        self, registry: EntityRegistry, entity_id: EntityID
     ) -> bool:
         """
         Returns True if this constraint explicitly defines or links the
@@ -111,7 +105,7 @@ class Constraint:
         """
         return False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the constraint to a dictionary."""
         return {}  # Default for non-serializable constraints like Drag
 
@@ -119,7 +113,7 @@ class Constraint:
         self,
         sx: float,
         sy: float,
-        reg: "EntityRegistry",
+        reg: EntityRegistry,
         to_screen: Callable[[Point], Point],
         element: Any,
         threshold: float,
@@ -127,7 +121,7 @@ class Constraint:
         """Checks if the constraint's visual representation is hit."""
         return False
 
-    def _set_color(self, ctx: "cairo.Context", is_hovered: bool) -> None:
+    def _set_color(self, ctx: cairo.Context, is_hovered: bool) -> None:
         """
         Sets the standard drawing color for constraints based on hover and
         status.
@@ -144,7 +138,7 @@ class Constraint:
             ctx.set_source_rgb(0.0, 0.6, 0.0)  # Green for valid
 
     def _draw_selection_underlay(
-        self, ctx: "cairo.Context", width_scale: float = 3.0
+        self, ctx: cairo.Context, width_scale: float = 3.0
     ) -> None:
         """Draws a semi-transparent blue underlay for the current path."""
         ctx.save()
@@ -154,7 +148,7 @@ class Constraint:
         ctx.restore()
 
     def _draw_conflict_underlay(
-        self, ctx: "cairo.Context", width_scale: float = 3.5
+        self, ctx: cairo.Context, width_scale: float = 3.5
     ) -> None:
         """Draws a semi-transparent red underlay for conflicting items."""
         ctx.save()
@@ -174,7 +168,7 @@ class Constraint:
         """
         return self.get_type_name()
 
-    def get_subtitle(self, registry: "EntityRegistry") -> str:
+    def get_subtitle(self, registry: EntityRegistry) -> str:
         """
         Returns a human-readable subtitle describing the constrained entities.
         Subclasses should override to provide meaningful descriptions.
@@ -187,8 +181,8 @@ class Constraint:
 
     def draw(
         self,
-        ctx: "cairo.Context",
-        registry: "EntityRegistry",
+        ctx: cairo.Context,
+        registry: EntityRegistry,
         to_screen: Callable[[Point], Point],
         is_selected: bool = False,
         is_hovered: bool = False,
@@ -198,9 +192,8 @@ class Constraint:
         Draws the visual representation of the constraint on the canvas.
         Default implementation does nothing.
         """
-        pass
 
-    def update_from_context(self, context: Dict[str, Any]):
+    def update_from_context(self, context: dict[str, Any]):
         """
         Re-evaluates the expression (if present) using the provided context
         and updates self.value and self.status.
@@ -217,7 +210,7 @@ class Constraint:
             # If there's no expression, it's just a valid numeric constraint.
             self.status = ConstraintStatus.VALID
 
-    def depends_on_points(self, point_ids: Set[EntityID]) -> bool:
+    def depends_on_points(self, point_ids: set[EntityID]) -> bool:
         """Checks if the constraint references any of the given point IDs."""
         for attr in ["p1", "p2", "p3", "p4", "center", "point_id"]:
             if hasattr(self, attr):
@@ -226,7 +219,7 @@ class Constraint:
                     return True
         return False
 
-    def depends_on_entities(self, entity_ids: Set[EntityID]) -> bool:
+    def depends_on_entities(self, entity_ids: set[EntityID]) -> bool:
         """Checks if the constraint references any of the given entity IDs."""
         for attr in [
             "e1_id",
@@ -249,7 +242,7 @@ class Constraint:
                     return True
         return False
 
-    def get_draggable_point(self) -> Optional[EntityID]:
+    def get_draggable_point(self) -> EntityID | None:
         """
         Returns a point ID that can be dragged to manipulate this constraint.
 

@@ -1,5 +1,3 @@
-from typing import List, Optional
-
 from gi.repository import Gtk
 
 from .shortcut import Shortcut
@@ -13,8 +11,8 @@ class StatusBar(Gtk.Box):
 
     def add_shortcut_entry(
         self,
-        keys: List[str],
-        description: Optional[str] = None,
+        keys: list[str],
+        description: str | None = None,
         separator: str = "+",
     ):
         """Add a shortcut to the status bar."""

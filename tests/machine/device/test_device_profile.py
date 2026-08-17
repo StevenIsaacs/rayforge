@@ -13,9 +13,11 @@ from rayforge.machine.device.profile import (
     DeviceProfile,
     export_machine_to_dir,
 )
-from rayforge.machine.models.laser import LaserType
+from rayforge.machine.models.laser import LaserHead, LaserType
 from rayforge.machine.models.machine import Origin
+from rayforge.machine.models.machine_panel import PanelOrientation
 from rayforge.shared.tasker.manager import TaskManager
+from rayforge.shared.units.system import UnitSystem
 
 
 async def _wait_for_tasks(task_mgr: TaskManager):
@@ -117,6 +119,7 @@ class TestDeviceProfileLoad:
                     "driver": "GrblSerialDriver",
                     "axis_extents": [300, 200],
                     "origin": "top_left",
+                    "panel_orientation": "rotated_right",
                     "supports_arcs": True,
                     "supports_curves": False,
                     "max_travel_speed": 3000,
@@ -133,6 +136,10 @@ class TestDeviceProfileLoad:
         assert pkg.meta.description == "40W CO2 laser"
         assert pkg.machine_config.axis_extents == (300, 200)
         assert pkg.machine_config.origin == Origin("top_left")
+        assert (
+            pkg.machine_config.panel_orientation
+            == PanelOrientation.ROTATED_RIGHT
+        )
         assert pkg.machine_config.supports_arcs is True
 
     def test_load_with_custom_dialect(self, tmp_path):
@@ -246,6 +253,16 @@ class TestDeviceProfileLoad:
         with pytest.raises(ValueError, match="Invalid origin"):
             DeviceProfile.from_path(device_dir)
 
+    def test_invalid_panel_orientation_raises(self, tmp_path):
+        device_dir = _make_device(
+            tmp_path,
+            name="Bad Panel Orientation",
+            subdir="bad-panel-orientation",
+            machine_extra={"panel_orientation": "mirrored"},
+        )
+        with pytest.raises(ValueError, match="Invalid panel_orientation"):
+            DeviceProfile.from_path(device_dir)
+
     def test_invalid_axis_extents_raises(self, tmp_path):
         device_dir = _make_device(
             tmp_path,
@@ -270,7 +287,7 @@ class TestDeviceProfileLoad:
         device_dir = tmp_path / "bad-manifest"
         device_dir.mkdir(parents=True)
         (device_dir / "device.yaml").write_text("just a string")
-        with pytest.raises(ValueError, match="not a mapping"):
+        with pytest.raises(TypeError, match="not a mapping"):
             DeviceProfile.from_path(device_dir)
 
     def test_non_mapping_machine_section_raises(self, tmp_path):
@@ -284,7 +301,7 @@ class TestDeviceProfileLoad:
             },
         )
         _write_grbl_dialect(device_dir)
-        with pytest.raises(ValueError, match="Invalid 'machine'"):
+        with pytest.raises(TypeError, match="Invalid 'machine'"):
             DeviceProfile.from_path(device_dir)
 
     def test_load_with_heads(self, tmp_path):
@@ -614,6 +631,8 @@ class TestExportMachine:
         machine.driver_config = {}
         machine.axis_extents = (300.0, 200.0)
         machine.origin = Origin.BOTTOM_LEFT
+        machine.panel = MagicMock()
+        machine.panel.orientation = PanelOrientation.NATIVE
         machine.supports_arcs = True
         machine.supports_curves = False
         machine.max_travel_speed = 5000
@@ -623,6 +642,7 @@ class TestExportMachine:
         machine.acceleration = None
         machine.single_axis_homing_enabled = None
         machine.rotary_enabled_default = False
+        machine.unit_system = UnitSystem.METRIC
         machine.work_margins = (0, 0, 0, 0)
         machine.soft_limits = None
         machine.heads = []
@@ -643,6 +663,7 @@ class TestExportMachine:
 
     def test_export_machine_basic(self, tmp_path):
         machine = self._make_mock_machine("Test Export")
+        machine.panel.orientation = PanelOrientation.ROTATED_LEFT
 
         dest = tmp_path / "output"
         mgr = DeviceProfileManager(install_dir=tmp_path / "inst")
@@ -656,6 +677,7 @@ class TestExportMachine:
                 data = yaml.safe_load(f)
             assert data["device"]["name"] == "Test Export"
             assert data["machine"]["driver"] == "GrblSerialDriver"
+            assert data["machine"]["panel_orientation"] == "rotated_left"
 
     def test_export_machine_to_dir(self, tmp_path):
         machine = self._make_mock_machine("Dir Export")
@@ -683,13 +705,18 @@ class TestCreateMachine:
     async def test_create_machine_gcode_has_dialect(
         self, tmp_path, lite_context, task_mgr
     ):
-        device_dir = _make_device(tmp_path, name="GRBL Test")
+        device_dir = _make_device(
+            tmp_path,
+            name="GRBL Test",
+            machine_extra={"panel_orientation": "rotated_right"},
+        )
         pkg = DeviceProfile.from_path(device_dir)
         m = pkg.create_machine(lite_context)
         await _wait_for_tasks(task_mgr)
 
         assert m.dialect_uid is not None
         assert m.dialect is not None
+        assert m.panel.orientation is PanelOrientation.ROTATED_RIGHT
 
     @pytest.mark.asyncio
     async def test_create_machine_ruida_no_dialect(
@@ -740,6 +767,7 @@ class TestCreateMachine:
 
         assert len(m.heads) == 1
         head = m.heads[0]
+        assert isinstance(head, LaserHead)
         assert head.laser_type == LaserType.CO2
         assert head.pwm_frequency == 1000
         assert head.max_pwm_frequency == 5000
@@ -768,4 +796,5 @@ class TestCreateMachine:
         await _wait_for_tasks(task_mgr)
 
         head = m.heads[0]
+        assert isinstance(head, LaserHead)
         assert head.laser_type == LaserType.DIODE

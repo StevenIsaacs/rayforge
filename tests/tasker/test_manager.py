@@ -298,7 +298,9 @@ class TestProcessTasks:
         )
         assert "proc1" in manager._tasks
 
-        assert completion_event.wait(timeout=3), (
+        # Worker processes are spawned lazily, which can take several
+        # seconds on slow CI runners (especially Windows). Wait generously.
+        assert completion_event.wait(timeout=30), (
             "Process task did not complete"
         )
 
@@ -322,7 +324,7 @@ class TestProcessTasks:
         manager.run_process(
             failing_process_func, key="proc_fail", when_done=on_done
         )
-        assert completion_event.wait(timeout=2)
+        assert completion_event.wait(timeout=30)
 
         assert final_task is not None
         assert final_task.get_status() == "failed"
@@ -362,7 +364,7 @@ class TestProcessTasks:
 
         # The on_done callback should still be called when the worker
         # finishes, but the task status should be 'canceled'.
-        assert completion_event.wait(timeout=3), (
+        assert completion_event.wait(timeout=30), (
             "on_done was not called after process finished"
         )
         assert final_task is not None
@@ -391,7 +393,7 @@ class TestProcessTasks:
         proxy.run_process(
             simple_process_func, when_done=lambda t: completion_event.set()
         )
-        assert completion_event.wait(timeout=3), "Process task did not run"
+        assert completion_event.wait(timeout=30), "Process task did not run"
 
         # 3. Shut down to ensure all workers are finished.
         proxy.shutdown()
@@ -503,7 +505,7 @@ class TestTaskManagerGlobals:
 
         # Check first call (task added, status pending)
         signal_receiver.assert_called()
-        args, kwargs = signal_receiver.call_args_list[0]
+        _args, kwargs = signal_receiver.call_args_list[0]
         assert kwargs["tasks"][0].key == "sig_test"
         # The task might have already transitioned by the time we inspect
         # the mock argument references
@@ -564,6 +566,59 @@ class TestTaskManagerGlobals:
         assert last_call_kwargs["progress"] == 1.0
 
 
+class TestRunOnMainThread:
+    """Tests for the run_on_main_thread method."""
+
+    @pytest.mark.asyncio
+    async def test_returns_result(self, manager: TaskManager):
+        """Verify the callable's return value is awaited and returned."""
+        result = await manager.run_on_main_thread(lambda: 42)
+        assert result == 42
+
+    @pytest.mark.asyncio
+    async def test_passes_args_and_kwargs(self, manager: TaskManager):
+        """Verify args and kwargs are forwarded to the callable."""
+
+        def combine(a, b, c=0):
+            return a + b + c
+
+        result = await manager.run_on_main_thread(combine, 1, 2, c=3)
+        assert result == 6
+
+    @pytest.mark.asyncio
+    async def test_reraises_exception(self, manager: TaskManager):
+        """Verify exceptions raised on the main thread are propagated."""
+
+        def boom():
+            raise ValueError("boom")
+
+        with pytest.raises(ValueError, match="boom"):
+            await manager.run_on_main_thread(boom)
+
+    @pytest.mark.asyncio
+    async def test_awaits_scheduler_execution(self):
+        """Verify the coroutine blocks until the scheduler runs the
+        callable, even when the scheduler defers to another thread."""
+        scheduler_calls = []
+        order = []
+
+        def scheduler(callback, *args, **kwargs):
+            scheduler_calls.append(callback)
+            threading.Thread(
+                target=lambda: callback(*args, **kwargs), daemon=True
+            ).start()
+
+        tm = TaskManager(main_thread_scheduler=scheduler)
+        try:
+            order.append("start")
+            await tm.run_on_main_thread(lambda: order.append("main-thread"))
+            order.append("done")
+            assert order == ["start", "main-thread", "done"]
+            assert len(scheduler_calls) == 1
+        finally:
+            tm.shutdown()
+
+
 class TestWaitUntilSettled:
     """Tests for the wait_until_settled method."""
 
@@ -606,12 +661,14 @@ class TestWaitUntilSettled:
 
         # wait_until_settled should wait and return True
         start_time = time.time()
-        result = manager.wait_until_settled(1000)  # 1 second timeout
+        # Slow CI runners (especially Windows) can stall coroutine
+        # scheduling for over a second, so use a generous timeout.
+        result = manager.wait_until_settled(5000)  # 5 second timeout
         elapsed = time.time() - start_time
 
         assert result is True
         assert elapsed >= 0.3  # Should have waited at least the task duration
-        assert elapsed < 1.0  # But less than the timeout
+        assert elapsed < 5.0  # But less than the timeout
 
         # Task should be completed
         assert completion_event.is_set()
@@ -669,14 +726,16 @@ class TestWaitUntilSettled:
             )
 
         # wait_until_settled should wait for the longest task
-        result = manager.wait_until_settled(3000)  # 3 second timeout
+        # Slow CI runners (especially Windows) can stall coroutine
+        # scheduling for over a second, so use a generous timeout.
+        result = manager.wait_until_settled(8000)  # 8 second timeout
         elapsed = time.time() - start_time
 
         assert result is True
         assert (
             elapsed >= 1.2
         )  # Should have waited at least the longest task duration
-        assert elapsed < 3.0  # But less than the timeout
+        assert elapsed < 8.0  # But less than the timeout
 
         # All tasks should be completed
         for event in completion_events:

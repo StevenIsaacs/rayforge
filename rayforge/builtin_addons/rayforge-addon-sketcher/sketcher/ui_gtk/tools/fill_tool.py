@@ -1,5 +1,5 @@
 from gettext import gettext as _
-from typing import Optional
+from typing import ClassVar
 
 import cairo
 
@@ -18,7 +18,7 @@ class FillTool(SketchTool):
 
     ICON = "sketch-fill-symbolic"
     LABEL = _("Fill")
-    SHORTCUTS = ["gf"]
+    SHORTCUTS: ClassVar[list[str]] = ["gf"]
     CURSOR_ICON = "sketch-fill-symbolic"
 
     _current_color: ColorRGBA = DEFAULT_FILL_COLOR
@@ -55,7 +55,7 @@ class FillTool(SketchTool):
 
     def _find_text_entity_at_point(
         self, mx: float, my: float
-    ) -> Optional[TextBoxEntity]:
+    ) -> TextBoxEntity | None:
         """Check if a model-space point falls inside any text glyph."""
         registry = self.element.sketch.registry
         surface = cairo.RecordingSurface(cairo.CONTENT_COLOR_ALPHA, None)

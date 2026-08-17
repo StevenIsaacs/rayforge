@@ -1,11 +1,12 @@
 from gettext import gettext as _
-from typing import List, Optional, cast
+from typing import cast
 
 from blinker import Signal
 from gi.repository import Adw, Gtk
 
 from ...camera.controller import CameraController
 from ...camera.models.camera import Camera
+from ...camera.v4l import display_name
 from ..icons import get_icon
 from ..shared.preferences_group import PreferencesGroupWithButton
 from ..shared.preferences_page import TrackedPreferencesPage
@@ -65,9 +66,8 @@ class CameraRow(Gtk.Box):
 
     def _get_subtitle_text(self) -> str:
         """Generates the subtitle text from camera properties."""
-        return _("Device ID: {device_id}").format(
-            device_id=self.camera.device_id
-        )
+        name = display_name(self.camera.device_id)
+        return _("Device ID: {device_id}").format(device_id=name)
 
     def _on_remove_clicked(self, button: Gtk.Button):
         """Emits a signal requesting the removal of this camera."""
@@ -102,7 +102,7 @@ class CameraListEditor(PreferencesGroupWithButton):
         self.list_box.set_selection_mode(Gtk.SelectionMode.SINGLE)
         self.list_box.set_show_separators(True)
 
-    def set_cameras(self, cameras: List[Camera]):
+    def set_cameras(self, cameras: list[Camera]):
         """Rebuilds the list to match the provided list of cameras."""
         selected_camera = None
         selected_row = self.list_box.get_selected_row()
@@ -176,7 +176,7 @@ class CameraEnhancementGroup(Adw.PreferencesGroup):
             description=_("Reduce noise and improve image stability."),
             **kwargs,
         )
-        self._controller: Optional[CameraController] = None
+        self._controller: CameraController | None = None
         self._updating = False
 
         self.denoise_scale = create_slider(
@@ -196,7 +196,7 @@ class CameraEnhancementGroup(Adw.PreferencesGroup):
         row.add_suffix(self.denoise_scale)
         self.add(row)
 
-    def set_controller(self, controller: Optional[CameraController]):
+    def set_controller(self, controller: CameraController | None):
         self._controller = controller
         self.set_sensitive(controller is not None)
 
@@ -217,8 +217,7 @@ class CameraEnhancementGroup(Adw.PreferencesGroup):
         # Convert 0-100 slider to 0.0-0.95 range
         val = scale.get_value() / 100.0
         # Hard clamp to 0.95 to avoid accidental infinite freeze
-        if val > 0.95:
-            val = 0.95
+        val = min(val, 0.95)
 
         self._controller.config.denoise = val
 
@@ -236,7 +235,7 @@ class CameraDistortionGroup(Adw.PreferencesGroup):
             description=desc_text,
             **kwargs,
         )
-        self._controller: Optional[CameraController] = None
+        self._controller: CameraController | None = None
         self._updating = False
 
         self.k1_spin = self._create_spin_row(_("Radial 1 (k1)"))
@@ -263,7 +262,7 @@ class CameraDistortionGroup(Adw.PreferencesGroup):
         self.add(row)
         return spin
 
-    def set_controller(self, controller: Optional[CameraController]):
+    def set_controller(self, controller: CameraController | None):
         self._controller = controller
         self.set_sensitive(controller is not None)
 
@@ -303,9 +302,9 @@ class CameraPreferencesPage(TrackedPreferencesPage):
         super().__init__(
             title=_("Camera"), icon_name="camera-on-symbolic", **kwargs
         )
-        self._controllers: List[CameraController] = []
-        self._cameras: List[Camera] = []
-        self.selected_controller: Optional[CameraController] = None
+        self._controllers: list[CameraController] = []
+        self._cameras: list[Camera] = []
+        self.selected_controller: CameraController | None = None
 
         # Signals
         self.camera_add_requested = Signal()
@@ -326,7 +325,8 @@ class CameraPreferencesPage(TrackedPreferencesPage):
         )
         self.add(self.camera_list_editor)
 
-        # Configuration panel for the selected Camera
+        # Configuration panel for the selected Camera (includes the
+        # Camera Wizard launcher row).
         self.camera_properties_widget = CameraProperties(None)
         self.add(self.camera_properties_widget)
 
@@ -337,7 +337,7 @@ class CameraPreferencesPage(TrackedPreferencesPage):
             "row-selected", self.on_camera_selected
         )
 
-    def set_controllers(self, controllers: List[CameraController]):
+    def set_controllers(self, controllers: list[CameraController]):
         """Sets the list of camera controllers and refreshes the UI."""
         self._controllers = controllers
         self._cameras = [c.config for c in controllers]

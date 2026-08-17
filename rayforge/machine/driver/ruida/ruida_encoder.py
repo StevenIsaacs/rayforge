@@ -6,7 +6,7 @@ text representation for UI display.
 """
 
 import logging
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
@@ -45,9 +45,9 @@ class RuidaEncoder(OpsEncoder):
     POWER_SCALE = 16384.0
 
     def __init__(self):
-        self.power: Optional[float] = None
-        self.cut_speed: Optional[float] = None
-        self.travel_speed: Optional[float] = None
+        self.power: float | None = None
+        self.cut_speed: float | None = None
+        self.travel_speed: float | None = None
         self.air_assist: bool = False
         self.current_pos: Point3D = (0.0, 0.0, 0.0)
         self.active_laser: int = 1
@@ -69,27 +69,27 @@ class RuidaEncoder(OpsEncoder):
         """
         self._reset_state()
 
-        binary_chunks: List[bytes] = []
-        text_lines: List[str] = []
-        op_map = MachineCodeOpMap()
+        binary_chunks: list[bytes] = []
+        text_lines: list[str] = []
+        line_spans: list[tuple[int, int]] = []
 
         for i in range(ops.len()):
             start_line = len(text_lines)
             self._handle_command(ops, i, machine, binary_chunks, text_lines)
             end_line = len(text_lines)
-
-            if end_line > start_line:
-                line_indices = list(range(start_line, end_line))
-                op_map.op_to_machine_code[i] = line_indices
-                for line_num in line_indices:
-                    op_map.machine_code_to_op[line_num] = i
-            else:
-                op_map.op_to_machine_code[i] = []
+            line_spans.append((start_line, end_line - start_line))
 
         binary_data = b"".join(binary_chunks)
 
         if text_lines and not text_lines[-1]:
             text_lines = text_lines[:-1]
+
+        machine_code_to_op = [-1] * len(text_lines)
+        for i, (start_line, line_count) in enumerate(line_spans):
+            for line_num in range(start_line, start_line + line_count):
+                if line_num < len(machine_code_to_op):
+                    machine_code_to_op[line_num] = i
+        op_map = MachineCodeOpMap.from_lists(line_spans, machine_code_to_op)
 
         return EncodedOutput(
             text="\n".join(text_lines),
@@ -119,8 +119,8 @@ class RuidaEncoder(OpsEncoder):
         ops: Ops,
         idx: int,
         machine: "Machine",
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Dispatch command to appropriate handler."""
         ct = ops.command_type(idx)
@@ -170,8 +170,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetPowerCommand - set laser power percentage."""
         power = ops.power(idx)
@@ -188,8 +188,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetCutSpeedCommand - set cutting speed in mm/s."""
         speed = ops.rate(idx)
@@ -202,8 +202,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetTravelSpeedCommand - store for move operations."""
         speed = ops.rate(idx)
@@ -217,8 +217,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetFrequencyCommand - emit 0xC6 0x60 frequency."""
         freq = ops.frequency(idx)
@@ -231,8 +231,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetPulseWidthCommand - emit 0xC6 0x10 interval."""
         pw = ops.pulse_width(idx)
@@ -246,8 +246,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetAirAssistCommand - update air assist state."""
         mode = ops.air_assist(idx)
@@ -266,8 +266,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetCoolantCommand - coolant not used on laser cutters."""
 
@@ -276,8 +276,8 @@ class RuidaEncoder(OpsEncoder):
         ops: Ops,
         idx: int,
         machine: "Machine",
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle SetLaserCommand - select active laser head."""
         laser_uid = ops.head_uid(idx)
@@ -303,8 +303,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle MoveToCommand - rapid move with laser off."""
         end = ops.endpoint(idx)
@@ -317,8 +317,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle LineToCommand - cutting move with laser on."""
         end = ops.endpoint(idx)
@@ -331,12 +331,12 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle ArcToCommand - linearize arc to series of cuts."""
         end = ops.endpoint(idx)
-        i_val, j_val, cw = ops.arc_params(idx)
+        _i_val, _j_val, cw = ops.arc_params(idx)
         text.append(
             f"; ARC to ({end[0]:.3f}, {end[1]:.3f}) {'CW' if cw else 'CCW'}"
         )
@@ -353,8 +353,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle ScanLinePowerCommand - linearize to power/line segments."""
         end = ops.endpoint(idx)
@@ -375,28 +375,33 @@ class RuidaEncoder(OpsEncoder):
     def _handle_job_start(
         self,
         machine: "Machine",
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """
         Handle JobStartCommand - select reference point and mark job start.
 
-        Raises:
-            ValueError: If active_wcs is not a valid Ruida reference point
+        The active WCS is usually one of the Ruida reference points
+        (MACHINE/REF0/REF1), but it may also be a named/absolute WCS such
+        as the default ``G54``, which is not a Ruida ref point and has a
+        zero offset (i.e. machine space). Such WCSes fall back to the
+        machine reference point instead of failing the whole job.
         """
         active_wcs = machine.active_wcs
         if active_wcs not in REF_POINT_COMMANDS:
-            raise ValueError(
-                f"Unknown WCS slot '{active_wcs}'. "
-                f"Valid options: {', '.join(REF_POINT_COMMANDS.keys())}"
+            logger.warning(
+                "Active WCS '%s' is not a Ruida reference point; "
+                "using MACHINE for job start.",
+                active_wcs,
             )
+            active_wcs = "MACHINE"
         binary.append(REF_POINT_COMMANDS[active_wcs])
         text.append(f"; Job Start - Ref Point: {active_wcs}")
 
     def _handle_job_end(
         self,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle JobEndCommand - send end-of-file marker."""
         binary.append(b"\xd7")
@@ -406,8 +411,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle LayerStartCommand - mark layer beginning."""
         uid = ops.layer_uid(idx)
@@ -418,8 +423,8 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        binary: List[bytes],
-        text: List[str],
+        binary: list[bytes],
+        text: list[str],
     ) -> None:
         """Handle LayerEndCommand - mark layer end."""
         binary.append(b"\xca\x00")
@@ -429,7 +434,7 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        text: List[str],
+        text: list[str],
     ) -> None:
         """Handle WorkpieceStartCommand - mark workpiece beginning."""
         uid = ops.workpiece_uid(idx)
@@ -439,7 +444,7 @@ class RuidaEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        text: List[str],
+        text: list[str],
     ) -> None:
         """Handle WorkpieceEndCommand - mark workpiece end."""
         text.append("; --- End Workpiece ---")

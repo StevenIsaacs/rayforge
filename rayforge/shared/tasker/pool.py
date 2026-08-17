@@ -10,12 +10,13 @@ import logging
 import os
 import threading
 import traceback
+from collections.abc import Callable
 from multiprocessing import get_context
 from multiprocessing.managers import DictProxy
 from multiprocessing.process import BaseProcess
 from multiprocessing.queues import Queue as MpQueue
 from queue import Empty
-from typing import Any, Callable, List, Optional, Set, Tuple
+from typing import Any
 
 from blinker import Signal
 
@@ -55,15 +56,15 @@ class _TaggedQueue:
         except Exception:
             # This can happen if the queue is closed during shutdown.
             # It's safe to ignore.
-            pass
+            logger.debug("Result queue closed during shutdown", exc_info=True)
 
 
 def _worker_main_loop(
     task_queue: MpQueue,
     result_queue: MpQueue,
     log_level: int,
-    initializer: Optional[Callable[..., None]],
-    initargs: Tuple[Any, ...],
+    initializer: Callable[..., None] | None,
+    initargs: tuple[Any, ...],
     adoption_signals: DictProxy[str, bool],
     shared_state: DictProxy[str, Any],
 ):
@@ -84,7 +85,7 @@ def _worker_main_loop(
     )
     # Set up a null translator for gettext in the subprocess.
     if not hasattr(builtins, "_"):
-        setattr(builtins, "_", lambda s: s)
+        builtins._ = lambda s: s  # type: ignore[attr-defined]
 
     # Force reconfiguration of logging for this new process.
     root_logger = logging.getLogger()
@@ -100,7 +101,7 @@ def _worker_main_loop(
     if initializer is not None:
         try:
             initializer(shared_state, *initargs)
-        except Exception:
+        except Exception:  # noqa: BLE001 - arbitrary worker initializer
             # If initialization fails, report it and exit immediately.
             error_info = traceback.format_exc()
             worker_logger.critical(
@@ -159,7 +160,7 @@ def _worker_main_loop(
         last_task_key = key
 
         cancel_key = f"cancel:{task_id}"
-        if cancel_key in adoption_signals and adoption_signals[cancel_key]:
+        if adoption_signals.get(cancel_key):
             worker_logger.debug(
                 f"Worker {os.getpid()} skipping cancelled task "
                 f"'{key}' (id: {task_id})."
@@ -229,23 +230,18 @@ def _worker_main_loop(
             # crashes), the entry remains so the health check can detect
             # the orphaned task.
             shared_state.pop(f"_wpool:{os.getpid()}", None)
-        except Exception:
+        except Exception:  # noqa: BLE001 - arbitrary user task function
             error_info = traceback.format_exc()
             worker_logger.error(
                 f"Worker {os.getpid()} task '{key}' failed:\n{error_info}"
             )
             # Also flush on error to send any last-known state
             proxy.flush()
-            try:
-                result_queue.put_nowait((key, task_id, "error", error_info))
-                # Clean up ONLY after error was successfully reported.
-                # If this raises (worker crashes), entry stays for
-                # health check detection.
-                shared_state.pop(f"_wpool:{os.getpid()}", None)
-            except Exception:
-                # Couldn't send error either. Worker will exit and
-                # the DictProxy entry stays for the health check.
-                raise
+            result_queue.put_nowait((key, task_id, "error", error_info))
+            # Clean up ONLY after error was successfully reported.
+            # If this raises (worker crashes), entry stays for
+            # health check detection.
+            shared_state.pop(f"_wpool:{os.getpid()}", None)
         worker_logger.debug(f"Worker {os.getpid()} finished task '{key}'.")
 
 
@@ -258,9 +254,9 @@ class WorkerPoolManager:
     def __init__(
         self,
         num_workers: int | None = None,
-        initializer: Optional[Callable[..., None]] = None,
-        initargs: Tuple[Any, ...] = (),
-        shared_state: Optional[DictProxy[str, Any]] = None,
+        initializer: Callable[..., None] | None = None,
+        initargs: tuple[Any, ...] = (),
+        shared_state: DictProxy[str, Any] | None = None,
     ):
         if num_workers is None:
             env_max = os.environ.get("RAYFORGE_MAX_WORKERS")
@@ -281,11 +277,11 @@ class WorkerPoolManager:
             self._shared_state = shared_state
         else:
             self._shared_state = self._manager.dict()
-        self._workers: List[BaseProcess] = []
-        self._cancelled_task_ids: Set[int] = set()
+        self._workers: list[BaseProcess] = []
+        self._cancelled_task_ids: set[int] = set()
         self._lock = threading.Lock()
         self._worker_shutdown_info: dict[int, tuple[int, Any | None]] = {}
-        self._worker_task_map: dict[int, Tuple[Any, int]] = {}
+        self._worker_task_map: dict[int, tuple[Any, int]] = {}
         self._pid_to_worker: dict[int, BaseProcess] = {}
         self._health_check_counter = 0
         self._shutting_down = False
@@ -328,16 +324,6 @@ class WorkerPoolManager:
             target=self._result_listener_loop, daemon=True
         )
         self._listener_thread.start()
-
-    def get_shared_state(self) -> Any:
-        """
-        Return the shared state dict for worker initialization.
-
-        This provides a generic mechanism for passing data to worker
-        processes. Callers can populate this dict with any data needed
-        during worker initialization.
-        """
-        return self._shared_state
 
     def submit(
         self,
@@ -693,8 +679,10 @@ class WorkerPoolManager:
             # named pipe / Unix socket resources.
             try:
                 self._manager.shutdown()
-            except Exception:
-                logger.debug("Manager shutdown failed (may already be gone).")
+            except (OSError, EOFError, ValueError) as e:
+                logger.debug(
+                    f"Manager shutdown failed (may already be gone): {e}"
+                )
 
             logger.info("Worker pool shutdown complete.")
         except KeyboardInterrupt:
@@ -705,4 +693,3 @@ class WorkerPoolManager:
             # At this point, the main process is exiting anyway.
             # The daemon processes will be terminated by the OS. We can just
             # pass and allow the exit to proceed cleanly.
-            pass

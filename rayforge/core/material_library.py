@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 import yaml
 
@@ -29,7 +29,7 @@ class MaterialLibrary:
         """
         self._directory = directory
         self._read_only = read_only
-        self._materials: Dict[str, Material] = {}
+        self._materials: dict[str, Material] = {}
         self._loaded = False
         self._display_name: str = ""
         self._library_id: str = ""
@@ -199,7 +199,7 @@ class MaterialLibrary:
             f"{self._directory.name}"
         )
 
-    def get_material(self, uid: str) -> Optional[Material]:
+    def get_material(self, uid: str) -> Material | None:
         """
         Get a material by UID.
 
@@ -214,7 +214,7 @@ class MaterialLibrary:
 
         return self._materials.get(uid)
 
-    def get_all_materials(self) -> List[Material]:
+    def get_all_materials(self) -> list[Material]:
         """
         Get all materials in the library.
 
@@ -295,6 +295,16 @@ class MaterialLibrary:
                 logger.info(f"Removed material file: {material.file_path}")
             except OSError as e:
                 logger.error(f"Failed to remove material file: {e}")
+                return False
+
+        # Remove the material's texture file if it exists
+        texture_path = material.get_texture_path()
+        if texture_path and texture_path.exists():
+            try:
+                texture_path.unlink()
+                logger.info(f"Removed material texture: {texture_path}")
+            except OSError as e:
+                logger.error(f"Failed to remove material texture: {e}")
                 return False
 
         # Remove from memory

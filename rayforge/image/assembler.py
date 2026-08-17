@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from raygeo.geo import Geometry
 from raygeo.geo.types import Rect
@@ -54,12 +54,12 @@ class ItemAssembler:
     def create_items(
         self,
         source_asset: SourceAsset,
-        layout_plan: List[LayoutItem],
+        layout_plan: list[LayoutItem],
         spec: VectorizationSpec,
         source_name: str,
-        geometries: Dict[Optional[str], Geometry],
-        document_bounds: Optional[Rect] = None,
-    ) -> List[DocItem]:
+        geometries: dict[str | None, Geometry],
+        document_bounds: Rect | None = None,
+    ) -> list[DocItem]:
         """
         Creates DocItems from the layout plan.
 
@@ -111,7 +111,7 @@ class ItemAssembler:
 
         # If we have multiple items, we generally wrap them in Layers (if
         # requested by spec) or return a list of WorkPieces.
-        items: List[DocItem] = []
+        items: list[DocItem] = []
 
         logger.debug(f"ItemAssembler: document_bounds={document_bounds}")
 
@@ -119,7 +119,7 @@ class ItemAssembler:
             # 1. Create the Segment
             # This links the WorkPiece to the specific subset of the source
             # file
-            geo: Optional[Geometry] = None
+            geo: Geometry | None = None
             if item.layer_id is not None:
                 # Split strategy: get geometry for the specific layer
                 geo = geometries.get(item.layer_id)
@@ -185,6 +185,8 @@ class ItemAssembler:
                 and spec.layer_import_mode != LayerImportMode.FLATTEN
             ):
                 layer = Layer(name=name)
+                if item.color:
+                    layer.set_color(item.color)
                 layer.add_child(wp)
                 # If the importer provided settings, pre-populate a step
                 # on the layer's workflow so that add_default_steps_for_layers
@@ -198,16 +200,30 @@ class ItemAssembler:
         return items
 
     @staticmethod
-    def _apply_settings(layer: Layer, settings: Dict[str, Any]) -> None:
-        """Create a configured step on the layer from importer settings."""
-        cls = step_registry.get("ContourStep")
+    def _apply_settings(layer: Layer, settings: dict[str, Any]) -> None:
+        """Create a configured step on the layer from importer settings.
+
+        Layers tagged ``_is_image_layer`` (e.g. LightBurn
+        ``CutSetting_Img``) get an ``EngraveStep``; everything else gets
+        a ``ContourStep``.
+
+        The settings dict uses the step's own attribute names
+        (canonicalised by the importer); the step applies the domain
+        settings it owns via :meth:`Step.apply_import_settings`. Only
+        the structural ``passes`` value (a transformer config) is
+        handled here.
+        """
+        is_image = bool(settings.get("_is_image_layer"))
+        if is_image:
+            step_name, typelabel = "EngraveStep", "Engrave"
+        else:
+            step_name, typelabel = "ContourStep", "Contour"
+        cls = step_registry.get(step_name)
         if cls is None:
             return
 
         try:
-            step = cls(typelabel="Contour", name=layer.name)
-            if cls.PRODUCER_CLASS is not None:
-                step.opsproducer_dict = cls.PRODUCER_CLASS().to_dict()
+            step = cls(typelabel=typelabel, name=layer.name)
             per_wp, per_step = cls.get_default_transformers_dicts()
             step.per_workpiece_transformers_dicts = per_wp
             step.per_step_transformers_dicts = per_step
@@ -215,26 +231,7 @@ class ItemAssembler:
             logger.exception("Failed to set up step from settings")
             return
 
-        power = settings.get("power")
-        if power is not None:
-            try:
-                step.set_power(power)
-            except Exception:
-                step.power = power
-
-        cut_speed = settings.get("cut_speed")
-        if cut_speed is not None:
-            try:
-                step.set_cut_speed(cut_speed)
-            except Exception:
-                step.cut_speed = cut_speed
-
-        kerf_mm = settings.get("kerf_mm")
-        if kerf_mm is not None:
-            try:
-                step.set_kerf_mm(kerf_mm)
-            except Exception:
-                step.kerf_mm = kerf_mm
+        step.apply_import_settings(settings)
 
         passes = settings.get("passes")
         if passes is not None:

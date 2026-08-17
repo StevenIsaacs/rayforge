@@ -1,10 +1,14 @@
-#!/usr/bin/env python3
 """Screenshot: Machine settings - G-code page."""
 
 import logging
 import time
 
-from utils import open_machine_settings, take_screenshot
+from utils import (
+    get_target,
+    open_machine_settings,
+    take_screenshot,
+    target_to_filename,
+)
 
 from rayforge.uiscript import app, win
 
@@ -13,10 +17,11 @@ PAGE = "gcode"
 
 
 def main():
+    target = get_target(f"machine-settings:{PAGE}")
     time.sleep(0.25)
     open_machine_settings(win, PAGE)
     time.sleep(0.25)
-    take_screenshot(f"machine-{PAGE}.png")
+    take_screenshot(target_to_filename(target))
     time.sleep(0.25)
     app.quit_idle()
 

@@ -1,11 +1,12 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Set
+from typing import TYPE_CHECKING
 
 from blinker import Signal
-from gi.repository import Gdk, GObject, Gtk
+from gi.repository import Gdk, Gtk
 
 from ...core.doc import Doc
+from ...core.item import DocItem
 from ...core.layer import Layer
 from ..icons import get_icon
 from .layer_column import _LAYER_UID_PREFIX, LayerColumn
@@ -24,7 +25,7 @@ class LayersTab(Gtk.Box):
         self._columns = []
         self._layer_drop_index = -1
         self._pan_offset_x = 0.0
-        self._selected_items: List = []
+        self._selected_items: list = []
 
         self.edit_item_requested = Signal()
         self.select_items_requested = Signal()
@@ -53,9 +54,7 @@ class LayersTab(Gtk.Box):
         self._pan_gesture.connect("drag-update", self._on_pan_update)
         self.scrolled.add_controller(self._pan_gesture)
 
-        drop_target = Gtk.DropTarget.new(
-            GObject.TYPE_STRING, Gdk.DragAction.MOVE
-        )
+        drop_target = Gtk.DropTarget.new(str, Gdk.DragAction.MOVE)
         drop_target.connect("accept", self._on_layer_drop_accept)
         drop_target.connect("enter", self._on_layer_drop_enter)
         drop_target.connect("drop", self._on_layer_drop)
@@ -155,16 +154,16 @@ class LayersTab(Gtk.Box):
             items = list(self._selected_items)
         self.editor.layer.move_items_to_layer(items, target_layer)
 
-    def update_row_selection(self, selected_uids: Set):
+    def update_row_selection(self, selected_uids: set):
         all_items = self.get_ordered_items()
         self._selected_items = [i for i in all_items if i.uid in selected_uids]
         for col in self._columns:
             col.update_row_selection(selected_uids)
 
-    def get_selected_items(self) -> List:
+    def get_selected_items(self) -> list:
         return list(self._selected_items)
 
-    def get_ordered_items(self) -> List:
+    def get_ordered_items(self) -> list:
         items = []
         for col in self._columns:
             child = col.listbox.get_first_child()
@@ -175,6 +174,13 @@ class LayersTab(Gtk.Box):
                         items.append(item)
                 child = child.get_next_sibling()
         return items
+
+    def start_item_rename(self, item: DocItem) -> bool:
+        """Starts in-place renaming of the given item in its layer column."""
+        for col in self._columns:
+            if col.start_item_rename(item):
+                return True
+        return False
 
     def _on_add_clicked(self, button):
         self.editor.layer.add_layer_and_set_active()

@@ -1,15 +1,16 @@
+# ruff: noqa: LOG015
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import ClassVar
 
 from blinker import Signal
 
 from .config import LOG_DIR
 
-_ui_formatter_instance: Optional[logging.Formatter] = None
-_ui_log_records: List[logging.LogRecord] = []
+_ui_formatter_instance: logging.Formatter | None = None
+_ui_log_records: list[logging.LogRecord] = []
 
 LOG_FILES_TO_KEEP = 5
 
@@ -35,7 +36,7 @@ class UILogFilter(logging.Filter):
     VERBOSE_CATEGORIES: Shown only when verbose mode is enabled
     """
 
-    UI_CATEGORIES = {
+    UI_CATEGORIES: ClassVar[set[str]] = {
         "MACHINE_EVENT",
         "ERROR",
         "WARNING",
@@ -43,7 +44,10 @@ class UILogFilter(logging.Filter):
         "USER_COMMAND",
     }
 
-    VERBOSE_CATEGORIES = {"STATUS_POLL", "MACHINE_RESPONSE"}
+    VERBOSE_CATEGORIES: ClassVar[set[str]] = {
+        "STATUS_POLL",
+        "MACHINE_RESPONSE",
+    }
 
     def filter(self, record: logging.LogRecord) -> bool:
         category = record.__dict__.get("log_category")
@@ -139,7 +143,7 @@ def _cleanup_old_logs(log_dir: Path, keep_count: int):
     """
     try:
         # Find all log files that match our session pattern
-        log_files: List[Path] = sorted(
+        log_files: list[Path] = sorted(
             log_dir.glob("session-*.log"),
             key=lambda p: p.stat().st_mtime,  # Sort by modification time
             reverse=True,  # Newest first
@@ -156,12 +160,12 @@ def _cleanup_old_logs(log_dir: Path, keep_count: int):
                     f.unlink()
                 except OSError as e:
                     logging.warning(f"Could not delete old log file {f}: {e}")
-    except Exception as e:
+    except OSError as e:
         # We don't want a logging failure to crash the app startup
         logging.error(f"An unexpected error occurred during log cleanup: {e}")
 
 
-def get_ui_log_records() -> List[logging.LogRecord]:
+def get_ui_log_records() -> list[logging.LogRecord]:
     """
     Returns the buffered UI log records.
     Used by the Console widget to populate history.
@@ -169,7 +173,7 @@ def get_ui_log_records() -> List[logging.LogRecord]:
     return _ui_log_records
 
 
-def get_ui_formatter() -> Optional[logging.Formatter]:
+def get_ui_formatter() -> logging.Formatter | None:
     """
     Returns the global instance of the Formatter used for the UI Log.
     """
@@ -214,7 +218,7 @@ def setup_logging(loglevel_str: str):
     _cleanup_old_logs(LOG_DIR, LOG_FILES_TO_KEEP)
 
     # 2. Session File Handler (for persistent, detailed logs)
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
     log_file = LOG_DIR / f"session-{timestamp}.log"
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)

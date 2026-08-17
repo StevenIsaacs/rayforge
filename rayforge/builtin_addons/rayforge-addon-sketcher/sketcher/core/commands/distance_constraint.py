@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING
 
 from ..entities import Line
 from ..types import EntityID
@@ -23,9 +23,9 @@ class DistanceConstraintCommand:
     @staticmethod
     def calculate_distance(
         registry: EntityRegistry,
-        point_ids: List[EntityID],
-        entity_ids: List[EntityID],
-    ) -> Optional[DistanceConstraintParams]:
+        point_ids: list[EntityID],
+        entity_ids: list[EntityID],
+    ) -> DistanceConstraintParams | None:
         if len(point_ids) == 2:
             p1 = registry.get_point(point_ids[0])
             p2 = registry.get_point(point_ids[1])

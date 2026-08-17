@@ -4,12 +4,60 @@ hookspec = pluggy.HookspecMarker("rayforge")
 hookimpl = pluggy.HookimplMarker("rayforge")
 
 MINIMUM_API_VERSION = 16
-PLUGIN_API_VERSION = 17
+PLUGIN_API_VERSION = 21
 
 
 """
 API Changelog
-============
+=============
+
+Version 21
+----------
+Renamed ``WorkOriginElement.set_coordinate_space(space)`` to
+``set_axis_direction(x_axis_right, y_axis_down)``. The element no longer
+accepts a MachineSpace; it consumes the two display-facing booleans
+exposed by ``MachinePanel``. Addons that configure the work-origin symbol
+must pass those booleans instead of a coordinate space.
+
+Version 20
+----------
+Removed the ``transformer_settings_loaded`` hook. Transformer settings
+widgets are now registered ahead of time via the new
+``register_transformer_widgets`` hook and the global
+``transformer_widget_registry``
+(``rayforge.ui_gtk.doceditor.post_processor.registry``); pages look up
+widget classes from the registry when building the post-processing UI
+instead of constructing them through the hook at page-build time.
+
+Removed the ``step_settings_loaded`` hook. Step settings page classes
+are now registered ahead of time via the new
+``register_step_settings_pages`` hook and the global
+``step_settings_page_registry``
+(``rayforge.ui_gtk.doceditor.step_settings.page_registry``). The step
+settings dialog looks up the page class by the step's assembler name
+and builds extra pages from the page class's ``extra_pages`` producer
+methods instead of constructing them through the hook at dialog-build
+time.
+
+Version 19
+----------
+The ``rayforge.ui_gtk.shared.unit_spin_row`` module was split into a
+package: ``rayforge.ui_gtk.shared.pref_rows``, with one module per
+widget (``base``, ``unit_spin_row``, ``length_spin_row``,
+``angle_spin_row``, ``speed_spin_row``, ``acceleration_spin_row``).
+Addons importing the old module path must update their imports. Added
+``LengthChoiceSpinRow``: a length row with a per-row unit dropdown
+(defaulting to the user's preferred unit).
+
+Version 18
+----------
+Added ``register_services`` hook: addons publish services under a
+string key via the global ``service_registry``, and other addons
+resolve them by key (no cross-package import). Added
+``register_settings_pages`` hook so addons can contribute pages to the
+main Settings dialog. Addon ``requires`` is now enforced at load time:
+dependencies are loaded before dependents, and an addon whose
+``requires`` is unsatisfied is skipped.
 
 Version 17
 ----------
@@ -186,17 +234,6 @@ class RayforgeSpecs:
         """
 
     @hookspec
-    def register_assemblers(self, assembler_registry):
-        """
-        Called to allow addons to register assembler functions.
-
-        .. versionadded:: 9
-
-        Args:
-            assembler_registry: The global AssemblerRegistry instance.
-        """
-
-    @hookspec
     def register_transformers(self, transformer_registry):
         """
         Called to allow addons to register custom ops transformers.
@@ -205,6 +242,19 @@ class RayforgeSpecs:
 
         Args:
             transformer_registry: The global TransformerRegistry instance.
+        """
+
+    @hookspec
+    def register_transformer_widgets(self, transformer_widget_registry):
+        """
+        Called to allow addons to register settings widget classes for
+        post-processor transformers.
+
+        .. versionadded:: 20
+
+        Args:
+            transformer_widget_registry: The global
+                TransformerWidgetRegistry instance.
         """
 
     @hookspec
@@ -219,32 +269,21 @@ class RayforgeSpecs:
         """
 
     @hookspec
-    def step_settings_loaded(self, dialog, step, producer):
+    def register_step_settings_pages(self, step_settings_page_registry):
         """
-        Called when a step settings dialog is being populated.
-        Addons can add custom widgets to the dialog based on the
-        step's producer type.
+        Called to allow addons to register step settings page classes.
 
-        .. versionadded:: 5
+        Page classes are keyed by the step's assembler name
+        (``step.ASSEMBLER_NAME``). A registered page class may declare
+        extra page producers via its ``extra_pages`` class attribute;
+        the dialog calls each producer method to build additional
+        settings pages.
+
+        .. versionadded:: 20
 
         Args:
-            dialog: The GeneralStepSettingsView instance to add widgets to.
-            step: The Step instance being configured.
-            producer: The OpsProducer instance, or None if not available.
-        """
-
-    @hookspec
-    def transformer_settings_loaded(self, dialog, step, transformer):
-        """
-        Called when post-processing settings are being populated.
-        Addons can add custom widgets for their transformers.
-
-        .. versionadded:: 5
-
-        Args:
-            dialog: The PostProcessingSettingsView instance to add widgets to.
-            step: The Step instance being configured.
-            transformer: The OpsTransformer instance.
+            step_settings_page_registry: The global
+                StepSettingsPageRegistry instance.
         """
 
     @hookspec
@@ -360,6 +399,41 @@ class RayforgeSpecs:
 
         Args:
             renderer_registry: The global RendererRegistry instance.
+        """
+
+    @hookspec
+    def register_settings_pages(self, settings_page_registry):
+        """
+        Called to allow addons to contribute pages to the Settings dialog.
+
+        Addons call
+        ``settings_page_registry.register(PageClass, addon_name=...)`` for
+        each page. A page class is a no-arg widget constructor exposing
+        ``get_title()`` and ``get_icon_name()`` (e.g. a
+        ``TrackedPreferencesPage`` subclass).
+
+        .. versionadded:: 18
+
+        Args:
+            settings_page_registry: The global SettingsPageRegistry
+              instance.
+        """
+
+    @hookspec
+    def register_services(self, service_registry):
+        """
+        Called to allow addons to publish services for cross-addon use.
+
+        Addons call
+        ``service_registry.register(key, service, addon_name=...)``.
+        Consumers resolve them via the global ``service_registry``
+        (``service_registry.get(key)``), avoiding a direct cross-package
+        import.
+
+        .. versionadded:: 18
+
+        Args:
+            service_registry: The global ServiceRegistry instance.
         """
 
     @hookspec

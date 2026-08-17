@@ -1,8 +1,7 @@
-from typing import Any, Dict, List, Optional, Set
-
-from raygeo.geo.types import Point as GeoPoint
+from typing import Any
 
 from raygeo.geo.shape.text import FontConfig
+from raygeo.geo.types import Point as GeoPoint
 
 from .entities.arc import Arc
 from .entities.bezier import Bezier
@@ -28,12 +27,12 @@ class EntityRegistry:
     """Stores all points and primitives."""
 
     def __init__(self) -> None:
-        self.points: List[Point] = []
-        self.entities: List[Entity] = []
-        self._entity_map: Dict[EntityID, Entity] = {}
+        self.points: list[Point] = []
+        self.entities: list[Entity] = []
+        self._entity_map: dict[EntityID, Entity] = {}
         self._id_counter: EntityID = 0
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the registry to a dictionary."""
         return {
             "points": [p.to_dict() for p in self.points],
@@ -42,7 +41,7 @@ class EntityRegistry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EntityRegistry":
+    def from_dict(cls, data: dict[str, Any]) -> "EntityRegistry":
         """Deserializes a dictionary into an EntityRegistry instance."""
         new_reg = cls()
         new_reg.points = [
@@ -82,8 +81,8 @@ class EntityRegistry:
         start_idx: EntityID,
         end_idx: EntityID,
         construction: bool = False,
-        cp1: Optional[GeoPoint] = None,
-        cp2: Optional[GeoPoint] = None,
+        cp1: GeoPoint | None = None,
+        cp2: GeoPoint | None = None,
     ) -> EntityID:
         eid = self._id_counter
         entity = Bezier(
@@ -156,7 +155,7 @@ class EntityRegistry:
         width_id: EntityID,
         height_id: EntityID,
         content: str = "",
-        font_config: Optional[FontConfig] = None,
+        font_config: FontConfig | None = None,
     ) -> EntityID:
         eid = self._id_counter
         entity = TextBoxEntity(
@@ -172,7 +171,7 @@ class EntityRegistry:
         self._id_counter += 1
         return eid
 
-    def remove_entities_by_id(self, entity_ids: List[EntityID]):
+    def remove_entities_by_id(self, entity_ids: list[EntityID]):
         """Removes one or more entities from the registry by their IDs."""
         ids_to_remove = set(entity_ids)
         self.entities = [e for e in self.entities if e.id not in ids_to_remove]
@@ -195,13 +194,13 @@ class EntityRegistry:
                 return p
         raise IndexError(f"Point with ID {idx} not found")
 
-    def get_entity(self, idx: EntityID) -> Optional[Entity]:
+    def get_entity(self, idx: EntityID) -> Entity | None:
         """Retrieves a geometric entity (Line/Arc/Circle) by ID in O(1)."""
         return self._entity_map.get(idx)
 
     def get_connected_entity_ids(
         self, start_entity_id: EntityID
-    ) -> Set[EntityID]:
+    ) -> set[EntityID]:
         """
         Finds all entities transitively connected to the start entity
         through shared points using BFS.
@@ -217,9 +216,9 @@ class EntityRegistry:
         if start_entity is None:
             return set()
 
-        connected_entities: Set[EntityID] = {start_entity_id}
-        points_to_visit: Set[EntityID] = set(start_entity.get_point_ids())
-        visited_points: Set[EntityID] = set()
+        connected_entities: set[EntityID] = {start_entity_id}
+        points_to_visit: set[EntityID] = set(start_entity.get_point_ids())
+        visited_points: set[EntityID] = set()
 
         while points_to_visit:
             pid = points_to_visit.pop()
@@ -241,7 +240,7 @@ class EntityRegistry:
 
     def get_rigidly_connected_points(
         self, point_id: EntityID
-    ) -> List[EntityID]:
+    ) -> list[EntityID]:
         """
         Returns point IDs that should move together with the given point
         as a rigid body during dragging. Iterates over all entities to find

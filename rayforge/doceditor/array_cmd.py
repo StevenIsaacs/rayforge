@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Sequence
 from gettext import gettext as _
-from typing import TYPE_CHECKING, List, Optional, Sequence
+from typing import TYPE_CHECKING
 
 from raygeo.geo import Matrix
 from raygeo.geo.types import Rect
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 class ArrayCmd:
     """Handles undoable creation of item arrays."""
 
-    def __init__(self, editor: "DocEditor"):
+    def __init__(self, editor: DocEditor):
         self._editor = editor
 
     # ------------------------------------------------------------------
@@ -42,7 +43,7 @@ class ArrayCmd:
     @staticmethod
     def _get_top_level_items(
         items: Sequence[DocItem],
-    ) -> List[DocItem]:
+    ) -> list[DocItem]:
         """Returns only the top-level items from a selection.
 
         If an item and one of its ancestors are both selected, only the
@@ -51,7 +52,7 @@ class ArrayCmd:
         if not items:
             return []
         item_set = set(items)
-        top_level: List[DocItem] = []
+        top_level: list[DocItem] = []
         for item in items:
             ancestor = item.parent
             while ancestor:
@@ -63,7 +64,7 @@ class ArrayCmd:
         return top_level
 
     @staticmethod
-    def _compute_unit_bbox(items: Sequence[DocItem]) -> Optional[Rect]:
+    def _compute_unit_bbox(items: Sequence[DocItem]) -> Rect | None:
         """Collective world-space bbox of the selection as one unit."""
         min_x = min_y = math.inf
         max_x = max_y = -math.inf
@@ -83,7 +84,7 @@ class ArrayCmd:
         self,
         source_items: Sequence[DocItem],
         params: ArrayParams,
-    ) -> List[Matrix]:
+    ) -> list[Matrix]:
         """Returns the list of world-space delta matrices for the array.
 
         This is pure: it neither reads nor mutates document state beyond
@@ -99,7 +100,7 @@ class ArrayCmd:
 
     def get_selection_bbox(
         self, source_items: Sequence[DocItem]
-    ) -> Optional[Rect]:
+    ) -> Rect | None:
         """Returns the collective world bbox of the selection, or None.
 
         Convenience wrapper for the live preview.
@@ -113,7 +114,7 @@ class ArrayCmd:
         self,
         source_items: Sequence[DocItem],
         params: ArrayParams,
-    ) -> List[DocItem]:
+    ) -> list[DocItem]:
         """Duplicates the selection into the array in one transaction.
 
         The original selection is kept in place as the first (identity)
@@ -131,7 +132,7 @@ class ArrayCmd:
             return []
 
         history = self._editor.history_manager
-        created: List[DocItem] = []
+        created: list[DocItem] = []
 
         with history.transaction(_("Create Array")) as t:
             for delta in deltas:

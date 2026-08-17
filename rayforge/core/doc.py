@@ -1,12 +1,8 @@
 import logging
+from collections.abc import Iterable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
-    Dict,
-    Iterable,
-    List,
-    Optional,
-    Set,
     TypeVar,
     cast,
 )
@@ -45,12 +41,12 @@ class Doc(DocItem):
         self.job_assembly_invalidated = Signal()
 
         # Asset Management
-        self.assets: Dict[str, IAsset] = {}
-        self.asset_order: List[str] = []
+        self.assets: dict[str, IAsset] = {}
+        self.asset_order: list[str] = []
 
         # A new document starts with three empty workpiece layers
         for i in range(3):
-            workpiece_layer = Layer(_(f"Layer {i + 1}"))
+            workpiece_layer = Layer(_("Layer {}").format(i + 1))
             workpiece_layer.color = COLOR_PALETTE[i % len(COLOR_PALETTE)]
             self.add_child(workpiece_layer)
 
@@ -58,7 +54,7 @@ class Doc(DocItem):
         self._active_layer_index: int = 0
 
     @classmethod
-    def from_dict(cls, data: Dict) -> "Doc":
+    def from_dict(cls, data: dict) -> "Doc":
         """Deserializes the document from a dictionary."""
         from raygeo.geo import Matrix
 
@@ -70,7 +66,7 @@ class Doc(DocItem):
         # --- Polymorphic Deserialization Factories ---
         item_class_map = {"layer": Layer, "stockitem": StockItem}
 
-        def _deserialize_asset(asset_data: Dict) -> IAsset:
+        def _deserialize_asset(asset_data: dict) -> IAsset:
             asset_type = asset_data.get("type")
             if not asset_type:
                 raise TypeError("Asset data missing 'type' field")
@@ -82,7 +78,7 @@ class Doc(DocItem):
                 return UnknownAsset.from_dict(asset_data)
             return asset_class.from_dict(asset_data)
 
-        def _deserialize_item(item_data: Dict) -> DocItem:
+        def _deserialize_item(item_data: dict) -> DocItem:
             item_type = item_data.get("type")
             item_class = None
             if item_type:
@@ -104,15 +100,15 @@ class Doc(DocItem):
 
         # Legacy Asset Loading (from separate dictionaries)
         stock_assets_data = data.get("stock_assets", {})
-        for _uid, sa_data in stock_assets_data.items():
+        for sa_data in stock_assets_data.values():
             doc.add_asset(StockAsset.from_dict(sa_data))
         sketches_data = data.get("sketches", {})
-        for _uid, s_data in sketches_data.items():
+        for s_data in sketches_data.values():
             sketch_cls = asset_type_registry.get("sketch")
             if sketch_cls:
                 doc.add_asset(sketch_cls.from_dict(s_data))
         source_assets_data = data.get("source_assets", {})
-        for _uid, src_data in source_assets_data.items():
+        for src_data in source_assets_data.values():
             doc.add_asset(SourceAsset.from_dict(src_data))
 
         # Load children (Layers and StockItems) from unified list
@@ -129,7 +125,7 @@ class Doc(DocItem):
                 asset = StockAsset(name=d.get("name", "Stock"))
                 asset.geometry = (
                     Geometry.from_dict(d["geometry"])
-                    if "geometry" in d and d["geometry"]
+                    if d.get("geometry")
                     else Geometry()
                 )
                 asset.thickness = d.get("thickness")
@@ -153,7 +149,7 @@ class Doc(DocItem):
         return doc
 
     @property
-    def stock_items(self) -> List["StockItem"]:
+    def stock_items(self) -> list["StockItem"]:
         """Returns a list of all child items that are StockItems."""
         from .stock import StockItem
 
@@ -161,13 +157,13 @@ class Doc(DocItem):
             child for child in self.children if isinstance(child, StockItem)
         ]
 
-    def get_source_asset_by_uid(self, uid: str) -> Optional[SourceAsset]:
+    def get_source_asset_by_uid(self, uid: str) -> SourceAsset | None:
         """
         Retrieves a SourceAsset from the document's registry by its UID.
         """
         return self.source_assets.get(uid)
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """Serializes the document and its children to a dictionary."""
         return {
             "uid": self.uid,
@@ -178,7 +174,7 @@ class Doc(DocItem):
         }
 
     def add_asset(
-        self, asset: IAsset, index: Optional[int] = None, silent: bool = False
+        self, asset: IAsset, index: int | None = None, silent: bool = False
     ):
         """
         Adds or updates an asset in the document's unified registry and
@@ -213,11 +209,11 @@ class Doc(DocItem):
         """Removes an asset from the document."""
         self.remove_asset_by_uid(asset.uid)
 
-    def get_asset_by_uid(self, uid: str) -> Optional[IAsset]:
+    def get_asset_by_uid(self, uid: str) -> IAsset | None:
         """Retrieves any asset from the document's registry by its UID."""
         return self.assets.get(uid)
 
-    def set_asset_order(self, new_order_uids: List[str]):
+    def set_asset_order(self, new_order_uids: list[str]):
         """Sets the canonical order for all assets."""
         if set(new_order_uids) != set(self.assets.keys()):
             raise ValueError(
@@ -226,13 +222,13 @@ class Doc(DocItem):
         self.asset_order = new_order_uids
         self.updated.send(self)
 
-    def get_all_assets(self) -> List[IAsset]:
+    def get_all_assets(self) -> list[IAsset]:
         """Returns a unified list of all assets in the canonical order."""
         return [
             self.assets[uid] for uid in self.asset_order if uid in self.assets
         ]
 
-    def get_assets_by_type(self, type_name: str) -> Dict[str, IAsset]:
+    def get_assets_by_type(self, type_name: str) -> dict[str, IAsset]:
         """
         Returns a dictionary of all assets of a specific type.
 
@@ -249,7 +245,7 @@ class Doc(DocItem):
         }
 
     @property
-    def source_assets(self) -> Dict[str, "SourceAsset"]:
+    def source_assets(self) -> dict[str, "SourceAsset"]:
         """
         Returns a dictionary of all SourceAssets for compatibility.
         NOTE: The order of this dictionary is not guaranteed.
@@ -261,7 +257,7 @@ class Doc(DocItem):
         }
 
     @property
-    def stock_assets(self) -> Dict[str, "StockAsset"]:
+    def stock_assets(self) -> dict[str, "StockAsset"]:
         """
         Returns a dictionary of all StockAssets for compatibility.
         NOTE: The order of this dictionary is not guaranteed.
@@ -280,12 +276,40 @@ class Doc(DocItem):
         return self
 
     @property
-    def layers(self) -> List[Layer]:
+    def layers(self) -> list[Layer]:
         """Returns a list of all child items that are Layers."""
         return [child for child in self.children if isinstance(child, Layer)]
 
+    @staticmethod
+    def is_default_layer_name(name: str) -> bool:
+        """
+        Returns True for names produced by this document's auto-naming
+        scheme, such as "Layer 1".
+
+        Layers created by :meth:`Doc.__init__` are named this way. They
+        were never manually renamed, so their names may be overwritten
+        with imported layer names.
+        """
+        base = _("Layer")
+        if name == base:
+            return True
+        if not name.startswith(base):
+            return False
+        return name[len(base) :].strip().isdigit()
+
     @property
-    def all_workpieces(self) -> List[WorkPiece]:
+    def has_rotary_layer(self) -> bool:
+        """Whether any layer has rotary mode enabled.
+
+        Doc-level fact used to skip the per-layer kinematic walk in
+        :meth:`KinematicMapping.apply_to_job_ops` for flat jobs, since
+        that walk forces a copy-on-write clone of the command array for
+        every layer even when the callback does nothing.
+        """
+        return any(layer.rotary_enabled for layer in self.layers)
+
+    @property
+    def all_workpieces(self) -> list[WorkPiece]:
         """
         Recursively finds and returns a flattened list of all WorkPiece
         objects contained within this document.
@@ -304,7 +328,7 @@ class Doc(DocItem):
         if workpiece.parent:
             workpiece.parent.remove_child(workpiece)
 
-    def get_top_level_items(self) -> List["DocItem"]:
+    def get_top_level_items(self) -> list["DocItem"]:
         """
         Returns a list of all top-level, user-facing items in the document by
         querying each layer for its content.
@@ -337,7 +361,7 @@ class Doc(DocItem):
         """Special-case bubbling for a non-standard signal."""
         self.job_assembly_invalidated.send(self)
 
-    def add_child(self, child: T, index: Optional[int] = None) -> T:
+    def add_child(self, child: T, index: int | None = None) -> T:
         if isinstance(child, Layer):
             child.per_step_transformer_changed.connect(
                 self._on_layer_per_step_transformer_changed
@@ -346,11 +370,10 @@ class Doc(DocItem):
         return child
 
     def remove_child(self, child: DocItem):
-        if isinstance(child, Layer):
-            if child.workflow:
-                child.per_step_transformer_changed.disconnect(
-                    self._on_layer_per_step_transformer_changed
-                )
+        if isinstance(child, Layer) and child.workflow:
+            child.per_step_transformer_changed.disconnect(
+                self._on_layer_per_step_transformer_changed
+            )
         super().remove_child(child)
 
     def set_children(self, new_children: Iterable[DocItem]):
@@ -405,7 +428,7 @@ class Doc(DocItem):
             # The active layer instance hasn't changed, so no change signal
             # needed.
 
-    def set_layers(self, layers: List[Layer]):
+    def set_layers(self, layers: list[Layer]):
         new_layers_list = list(layers)
 
         # A document must always have at least one workpiece layer.
@@ -454,7 +477,7 @@ class Doc(DocItem):
             for step in layer.workflow.steps
         )
 
-    def get_laser_uid_for_step(self, step_uid: str) -> Optional[str]:
+    def get_laser_uid_for_step(self, step_uid: str) -> str | None:
         """
         Look up the laser_uid for a step by its UID.
 
@@ -462,16 +485,16 @@ class Doc(DocItem):
             step_uid: The unique identifier of the step.
 
         Returns:
-            The selected_laser_uid for the step, or None if not found.
+            The selected_head_uid for the step, or None if not found.
         """
         for layer in self.layers:
             if layer.workflow:
                 for step in layer.workflow.steps:
                     if step.uid == step_uid:
-                        return step.selected_laser_uid
+                        return step.selected_head_uid
         return None
 
-    def get_layer_uid_for_step(self, step_uid: str) -> Optional[str]:
+    def get_layer_uid_for_step(self, step_uid: str) -> str | None:
         """
         Look up the layer_uid for a step by its UID.
 
@@ -489,15 +512,15 @@ class Doc(DocItem):
         return None
 
     @property
-    def missing_step_types(self) -> Set[str]:
+    def missing_step_types(self) -> set[str]:
         """Step type names referenced but not registered in step_registry."""
         from .step_registry import step_registry
 
-        missing: Set[str] = set()
+        missing: set[str] = set()
         for layer in self.layers:
             if layer.workflow:
                 for step in layer.workflow.steps:
                     name = type(step).__name__
                     if step_registry.get(name) is None:
-                        missing.add(name)
+                        missing.add(step.original_step_type or step.typelabel)
         return missing

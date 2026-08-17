@@ -1,4 +1,4 @@
-from typing import Any, List, Optional, Tuple
+from typing import Any
 
 from gi.repository import Adw, Gtk
 
@@ -9,6 +9,7 @@ from ....core.varset import (
     Var,
 )
 from ....machine.transport.serial import SerialTransport
+from ...shared.adwfix import ensure_row_min_width
 from .base import (
     NULL_CHOICE_LABEL,
     RowAdapter,
@@ -32,31 +33,38 @@ class ComboAdapter(RowAdapter):
     @classmethod
     def create(
         cls, var: Var, target_property: str
-    ) -> Tuple[Adw.PreferencesRow, "ComboAdapter"]:
+    ) -> tuple[Adw.PreferencesRow, "ComboAdapter"]:
         assert isinstance(var, ChoiceVar)
-        choices: List[str] = (
-            [NULL_CHOICE_LABEL] + var.choices
-            if var.allow_none
-            else list(var.choices)
+        null_label = var.null_label or NULL_CHOICE_LABEL
+        choices: list[str] = (
+            [null_label] + var.choices if var.allow_none else list(var.choices)
         )
         store = Gtk.StringList.new(choices)
         row = Adw.ComboRow(model=store, title=escape_title(var.label))
         if var.description:
             row.set_subtitle(var.description)
+        ensure_row_min_width(row)
         initial_val = getattr(var, target_property)
-        if initial_val and initial_val in choices:
-            row.set_selected(choices.index(initial_val))
+        if initial_val:
+            display_str = var.get_display_for_value(str(initial_val))
+            if display_str in choices:
+                row.set_selected(choices.index(display_str))
+            else:
+                row.set_selected(0)
         else:
             row.set_selected(0)
         return row, cls(row, var)
 
-    def get_value(self) -> Optional[Any]:
+    def get_value(self) -> Any | None:
         selected = self._row.get_selected_item()
         display_str = ""
         if selected:
             display_str = selected.get_string()  # type: ignore
 
-        if display_str == NULL_CHOICE_LABEL:
+        null_label = (
+            getattr(self._var, "null_label", None) or NULL_CHOICE_LABEL
+        )
+        if display_str == null_label:
             return None
         if isinstance(self._var, ChoiceVar):
             return self._var.get_value_for_display(display_str)
@@ -66,7 +74,10 @@ class ComboAdapter(RowAdapter):
         model = self._row.get_model()
         if not isinstance(model, Gtk.StringList):
             return
-        display_str = NULL_CHOICE_LABEL
+        null_label = (
+            getattr(self._var, "null_label", None) or NULL_CHOICE_LABEL
+        )
+        display_str = null_label
         if value is not None:
             if isinstance(self._var, ChoiceVar):
                 display_str = self._var.get_display_for_value(
@@ -98,7 +109,7 @@ class BaudRateAdapter(ComboAdapter):
     @classmethod
     def create(
         cls, var: Var, target_property: str
-    ) -> Tuple[Adw.PreferencesRow, "BaudRateAdapter"]:
+    ) -> tuple[Adw.PreferencesRow, "BaudRateAdapter"]:
         assert isinstance(var, BaudrateVar)
         choices_str = [str(rate) for rate in var.choices]
         store = Gtk.StringList.new(choices_str)
@@ -116,12 +127,12 @@ class SerialPortAdapter(ComboAdapter):
     @classmethod
     def create(
         cls, var: Var, target_property: str
-    ) -> Tuple[Adw.PreferencesRow, "SerialPortAdapter"]:
+    ) -> tuple[Adw.PreferencesRow, "SerialPortAdapter"]:
         initial_val = getattr(var, target_property)
         port_set = set(SerialTransport.list_ports())
         if initial_val:
             port_set.add(initial_val)
-        sorted_ports = sorted(list(port_set), key=natural_sort_key)
+        sorted_ports = sorted(port_set, key=natural_sort_key)
         choices = [NULL_CHOICE_LABEL] + sorted_ports
         store = Gtk.StringList.new(choices)
         row = Adw.ComboRow(model=store, title=escape_title(var.label))
@@ -140,7 +151,7 @@ class SerialPortAdapter(ComboAdapter):
             port_set = set(new_ports)
             if current_sel and current_sel != NULL_CHOICE_LABEL:
                 port_set.add(current_sel)
-            new_sorted = sorted(list(port_set), key=natural_sort_key)
+            new_sorted = sorted(port_set, key=natural_sort_key)
             new_choices = [NULL_CHOICE_LABEL] + new_sorted
 
             model = row.get_model()

@@ -68,7 +68,7 @@ La version de l'API ciblée par votre extension. Elle doit être au moins 1 (la 
 api_version: 9
 ```
 
-Consultez la documentation des [Hooks](./addon-hooks.md#api-version-history) pour savoir ce qui a changé dans chaque version.
+Consultez la documentation des [Hooks](./addon-hooks.md#historique-des-versions-de-lapi) pour savoir ce qui a changé dans chaque version.
 
 ### `author`
 
@@ -114,6 +114,14 @@ Le numéro de version de votre extension. Il est généralement déterminé auto
 
 ```yaml
 version: 1.0.0
+```
+
+### `maturity`
+
+Le niveau de maturité de votre extension. Utilisez `experimental` pour les extensions pas encore terminées pouvant présenter des problèmes non résolus. Les extensions expérimentales sont affichées avec une icône dédiée dans le gestionnaire d'extensions. La valeur par défaut est `stable` ; omettez le champ pour les extensions stables.
+
+```yaml
+maturity: experimental
 ```
 
 ## Points d'entrée

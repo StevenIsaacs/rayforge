@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING
 
 from raygeo.geo.types import Point
 
@@ -38,21 +38,19 @@ class DragConstraint(Constraint):
 
     @classmethod
     def can_apply_to(
-        cls, selection: "SketchSelection", sketch: Optional["Sketch"] = None
+        cls, selection: SketchSelection, sketch: Sketch | None = None
     ) -> bool:
         return False
 
-    def error(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> Point:
+    def error(self, reg: EntityRegistry, params: ParameterContext) -> Point:
         p = reg.get_point(self.point_id)
         err_x = (p.x - self.target_x) * self.weight
         err_y = (p.y - self.target_y) * self.weight
         return err_x, err_y
 
     def gradient(
-        self, reg: "EntityRegistry", params: "ParameterContext"
-    ) -> Dict[EntityID, List[Point]]:
+        self, reg: EntityRegistry, params: ParameterContext
+    ) -> dict[EntityID, list[Point]]:
         return {
             self.point_id: [(self.weight, 0.0), (0.0, self.weight)],
         }

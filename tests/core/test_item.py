@@ -1,5 +1,4 @@
 import math
-from typing import Dict, Optional
 
 import pytest
 from blinker import Signal
@@ -17,7 +16,7 @@ class GroupItem(Group):
     but is not a workpiece itself.
     """
 
-    def __init__(self, name: Optional[str] = None):
+    def __init__(self, name: str | None = None):
         super().__init__(name=name or "test")
 
 
@@ -27,11 +26,11 @@ class ConcreteItem(DocItem):
     This item is NOT a workpiece.
     """
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         return {"name": self.name}
 
     @classmethod
-    def from_dict(cls, data: Dict) -> "ConcreteItem":
+    def from_dict(cls, data: dict) -> "ConcreteItem":
         return cls(name=data.get("name", "ConcreteItem"))
 
 

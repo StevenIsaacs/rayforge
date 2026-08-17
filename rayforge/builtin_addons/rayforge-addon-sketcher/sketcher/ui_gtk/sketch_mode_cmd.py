@@ -35,7 +35,7 @@ class SketchModeCmd:
     def __init__(self, win: "MainWindow", editor: "DocEditor"):
         self._win = win
         self._editor = editor
-        self.active_sketch_workpiece: Optional[WorkPiece] = None
+        self.active_sketch_workpiece: WorkPiece | None = None
         self._is_editing_new_sketch = False
 
     def enter_sketch_mode(
@@ -45,7 +45,7 @@ class SketchModeCmd:
         sketch = None
         if workpiece.geometry_provider_uid:
             sketch = cast(
-                Optional[Sketch],
+                Sketch | None,
                 self._editor.doc.get_asset_by_uid(
                     workpiece.geometry_provider_uid
                 ),
@@ -70,10 +70,8 @@ class SketchModeCmd:
             self._win.menubar.set_menu_model(sketch_studio.menu_model)
             self._win.insert_action_group("sketch", sketch_studio.action_group)
             self._win.add_controller(sketch_studio.shortcut_controller)
-        except Exception as e:
-            logger.error(
-                f"Failed to load sketch for editing: {e}", exc_info=True
-            )
+        except Exception:
+            logger.exception("Failed to load sketch for editing")
 
     def exit_sketch_mode(self):
         """Returns to the main 2D/3D view from the SketchStudio."""
@@ -104,11 +102,8 @@ class SketchModeCmd:
             self._win.menubar.set_menu_model(sketch_studio.menu_model)
             self._win.insert_action_group("sketch", sketch_studio.action_group)
             self._win.add_controller(sketch_studio.shortcut_controller)
-        except Exception as e:
-            logger.error(
-                f"Failed to load sketch definition for editing: {e}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception("Failed to load sketch definition for editing")
 
     def on_sketch_definition_activated(self, sender, *, sketch: Sketch):
         """Handles activation of a sketch definition from the sketch list."""

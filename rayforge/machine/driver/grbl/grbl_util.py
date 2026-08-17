@@ -1,14 +1,29 @@
 import asyncio
 import re
+from collections.abc import Callable
 from copy import copy, deepcopy
 from dataclasses import dataclass, field
 from gettext import gettext as _
-from typing import Callable, Dict, List, Optional, Tuple, cast
+from typing import cast
 
 from ....core.varset import Var, VarSet
+from ....shared.units.system import UnitSystem, inches_to_mm
 from ..driver import DeviceError, DeviceState, DeviceStatus, Pos
 
+# GRBL $13 setting key: "Report in inches" (boolean).
+GRBL_REPORT_INCHES_KEY = "13"
+
 _gcode_comment_re = re.compile(r"\([^)]*\)")
+
+
+def _pos_from_inches(pos: Pos) -> Pos:
+    """
+    Convert a position tuple reported in inches to millimeters.
+
+    ``None`` entries are preserved so partially-known positions
+    remain valid.
+    """
+    return tuple(None if v is None else inches_to_mm(v) for v in pos)
 
 
 def strip_gcode_comments(line: str) -> str:
@@ -32,8 +47,8 @@ class CommandRequest:
     """A request to send a command and await its full response."""
 
     command: str
-    op_index: Optional[int] = None
-    response_lines: List[str] = field(default_factory=list)
+    op_index: int | None = None
+    response_lines: list[str] = field(default_factory=list)
     finished: asyncio.Event = field(default_factory=asyncio.Event)
 
     @property
@@ -485,7 +500,7 @@ def alarm_code_to_device_error(alarm_code: str) -> DeviceError:
 
 
 # GRBL WCS Helper
-def gcode_to_p_number(wcs_slot: str) -> Optional[int]:
+def gcode_to_p_number(wcs_slot: str) -> int | None:
     """Converts a G-code WCS name (e.g., "G54") to its P-number."""
     try:
         # Check format, e.g. "G54"
@@ -503,7 +518,7 @@ def gcode_to_p_number(wcs_slot: str) -> Optional[int]:
 
 
 # GRBL State Parsers
-def parse_ver(line: str) -> Optional[Tuple[str, Optional[str]]]:
+def parse_ver(line: str) -> tuple[str, str | None] | None:
     """
     Parse a ``[VER:...]`` line into ``(version, build_name)``.
 
@@ -527,8 +542,8 @@ def parse_ver(line: str) -> Optional[Tuple[str, Optional[str]]]:
 
 
 def parse_version(
-    response_lines: List[str],
-) -> Optional[str]:
+    response_lines: list[str],
+) -> str | None:
     """
     Parses '$I' output to extract the GRBL firmware version string.
 
@@ -546,9 +561,9 @@ def parse_version(
     return None
 
 
-def parse_grbl_settings(lines: List[str]) -> Dict[str, float]:
+def parse_grbl_settings(lines: list[str]) -> dict[str, float]:
     """Parse ``$$`` response lines into a ``{key: value}`` dict."""
-    settings: Dict[str, float] = {}
+    settings: dict[str, float] = {}
     for line in lines:
         match = grbl_setting_re.search(line)
         if match:
@@ -556,7 +571,40 @@ def parse_grbl_settings(lines: List[str]) -> Dict[str, float]:
     return settings
 
 
-def parse_msg(line: str) -> Optional[Tuple[str, str]]:
+def detect_unit_system_from_settings(
+    settings_lines: list[str],
+) -> UnitSystem | None:
+    """
+    Inspect GRBL ``$$`` response lines and infer the device's unit
+    system from the ``$13`` (Report in inches) setting.
+
+    Returns ``UnitSystem.IMPERIAL`` when ``$13`` is non-zero,
+    ``UnitSystem.METRIC`` when ``$13`` is zero, or ``None`` when the
+    ``$13`` setting is absent from the response.
+    """
+    settings = parse_grbl_settings(settings_lines)
+    report_inches = settings.get(GRBL_REPORT_INCHES_KEY)
+    if report_inches is None:
+        return None
+    if int(report_inches):
+        return UnitSystem.IMPERIAL
+    return UnitSystem.METRIC
+
+
+def is_report_in_inches(settings_lines: list[str]) -> bool:
+    """
+    Return True when GRBL's ``$13`` (Report in inches) flag is set.
+
+    When True, status reports, probe results and ``$#`` WCS offsets are
+    reported in inches and must be converted back to mm.
+    """
+    report_inches = parse_grbl_settings(settings_lines).get(
+        GRBL_REPORT_INCHES_KEY
+    )
+    return bool(report_inches)
+
+
+def parse_msg(line: str) -> tuple[str, str] | None:
     """
     Parse a ``[MSG:key:value]`` line into ``(key, value)``.
 
@@ -572,7 +620,7 @@ def parse_msg(line: str) -> Optional[Tuple[str, str]]:
     return (key.strip(), value.strip())
 
 
-def extract_device_name(build_info: List[str]) -> str:
+def extract_device_name(build_info: list[str]) -> str:
     """
     Extract a human-readable device name from build info lines.
 
@@ -617,7 +665,7 @@ def version_supports_single_axis_homing(
     return False
 
 
-def _parse_pos(pos: str) -> Optional[Pos]:
+def _parse_pos(pos: str) -> Pos | None:
     match = pos_re.search(pos)
     if not match:
         return None
@@ -651,7 +699,7 @@ def error_code_to_device_error(error_code: str) -> DeviceError:
         )
 
 
-def parse_opt_info(line: str) -> Optional[int]:
+def parse_opt_info(line: str) -> int | None:
     """
     Extract the RX buffer size from an OPT response line.
 
@@ -673,7 +721,7 @@ def parse_opt_info(line: str) -> Optional[int]:
     return None
 
 
-def parse_grbl_parser_state(response_lines: List[str]) -> Optional[str]:
+def parse_grbl_parser_state(response_lines: list[str]) -> str | None:
     """
     Parses the response from a '$G' command to find the active WCS.
     Example response: '[G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]'
@@ -708,7 +756,7 @@ def _split_status_line(state_str: str) -> tuple[str, list[str]]:
     return status or "", attribs
 
 
-def _parse_status_part(status_part: str) -> tuple[DeviceStatus, Optional[str]]:
+def _parse_status_part(status_part: str) -> tuple[DeviceStatus, str | None]:
     """
     Parse status part into DeviceStatus and optional error code.
 
@@ -738,7 +786,7 @@ def _parse_status_part(status_part: str) -> tuple[DeviceStatus, Optional[str]]:
     return status, error_code
 
 
-def _parse_position_attribute(attrib: str, pos_type: str) -> Optional[Pos]:
+def _parse_position_attribute(attrib: str, pos_type: str) -> Pos | None:
     """
     Parse a position attribute (MPos, WPos, or WCO).
 
@@ -754,7 +802,7 @@ def _parse_position_attribute(attrib: str, pos_type: str) -> Optional[Pos]:
     return _parse_pos(attrib)
 
 
-def _parse_feed_rate(attrib: str) -> Optional[int]:
+def _parse_feed_rate(attrib: str) -> int | None:
     """
     Parse feed rate from FS attribute.
 
@@ -776,7 +824,7 @@ def _parse_feed_rate(attrib: str) -> Optional[int]:
         return None
 
 
-def _parse_buffer_state(attrib: str) -> Optional[tuple[int, int]]:
+def _parse_buffer_state(attrib: str) -> tuple[int, int] | None:
     """
     Parse buffer state from Bf attribute.
 
@@ -837,36 +885,45 @@ def _recalculate_positions(
 
     # 1. Infer WCO if explicitly missing but both MPos and WPos exist.
     # WCO = MPos - WPos
-    if mpos_found and wpos_found and not wco_found:
-        if all(v is not None for v in machine_pos) and all(
-            v is not None for v in work_pos
-        ):
-            m_float = cast(Tuple[float, ...], machine_pos)
-            w_float = cast(Tuple[float, ...], work_pos)
-            wco = tuple(m_float[i] - w_float[i] for i in range(n))
+    if (
+        mpos_found
+        and wpos_found
+        and not wco_found
+        and all(v is not None for v in machine_pos)
+        and all(v is not None for v in work_pos)
+    ):
+        m_float = cast(tuple[float, ...], machine_pos)
+        w_float = cast(tuple[float, ...], work_pos)
+        wco = tuple(m_float[i] - w_float[i] for i in range(n))
 
     # 2. Recalculate missing positions based on what we have.
     # If MPos is known, calculate WPos.
-    if mpos_found and all(v is not None for v in machine_pos):
-        if all(v is not None for v in wco):
-            m_float = cast(Tuple[float, ...], machine_pos)
-            wco_float = cast(Tuple[float, ...], wco)
-            return (
-                machine_pos,
-                tuple(m_float[i] - wco_float[i] for i in range(n)),
-                wco,
-            )
+    if (
+        mpos_found
+        and all(v is not None for v in machine_pos)
+        and all(v is not None for v in wco)
+    ):
+        m_float = cast(tuple[float, ...], machine_pos)
+        wco_float = cast(tuple[float, ...], wco)
+        return (
+            machine_pos,
+            tuple(m_float[i] - wco_float[i] for i in range(n)),
+            wco,
+        )
 
     # If WPos is known (and MPos isn't), calculate MPos.
-    elif wpos_found and all(v is not None for v in work_pos):
-        if all(v is not None for v in wco):
-            w_float = cast(Tuple[float, ...], work_pos)
-            wco_float = cast(Tuple[float, ...], wco)
-            return (
-                tuple(w_float[i] + wco_float[i] for i in range(n)),
-                work_pos,
-                wco,
-            )
+    elif (
+        wpos_found
+        and all(v is not None for v in work_pos)
+        and all(v is not None for v in wco)
+    ):
+        w_float = cast(tuple[float, ...], work_pos)
+        wco_float = cast(tuple[float, ...], wco)
+        return (
+            tuple(w_float[i] + wco_float[i] for i in range(n)),
+            work_pos,
+            wco,
+        )
 
     return machine_pos, work_pos, wco
 
@@ -874,7 +931,8 @@ def _recalculate_positions(
 def parse_state(
     state_str: str,
     default: DeviceState,
-    logger: Optional[Callable] = None,
+    logger: Callable | None = None,
+    report_in_inches: bool = False,
 ) -> DeviceState:
     """
     Parse GRBL status string into DeviceState.
@@ -883,6 +941,8 @@ def parse_state(
         state_str: Status string like '<Idle|MPos:10.0,20.0,30.0|WPos:0,0,0>'
         default: Default DeviceState to use as base
         logger: Optional logger function for debugging
+        report_in_inches: When True (GRBL $13 set), positions in the
+            status report are in inches and are converted back to mm.
 
     Returns:
         Parsed DeviceState
@@ -934,6 +994,14 @@ def parse_state(
                         state.buffer_available,
                         state.buffer_rx_available,
                     ) = buffer_state
+
+        if report_in_inches:
+            if mpos_found:
+                state.machine_pos = _pos_from_inches(state.machine_pos)
+            if wpos_found:
+                state.work_pos = _pos_from_inches(state.work_pos)
+            if wco_found:
+                state.wco = _pos_from_inches(state.wco)
 
         state.machine_pos, state.work_pos, state.wco = _recalculate_positions(
             state.machine_pos,
@@ -1200,7 +1268,7 @@ _AXIS_TRAVEL_VARS = [
 ]
 
 
-def get_grbl_setting_varsets() -> List["VarSet"]:
+def get_grbl_setting_varsets() -> list["VarSet"]:
     """
     Returns a list of VarSet instances populated with the standard GRBL setting
     definitions, grouped into sensible categories.

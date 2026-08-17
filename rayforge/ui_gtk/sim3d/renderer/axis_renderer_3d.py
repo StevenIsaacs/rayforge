@@ -10,33 +10,43 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Optional, Tuple
 
 import numpy as np
 from OpenGL import GL
-from raygeo.geo.types import Point3D
 
-from ..gl_utils import (
-    BaseRenderer,
-    RenderContext,
-    Shader,
-    set_line_width,
-)
+from ..gl_utils import ShaderSet, set_line_width
+from ..render_context import RenderContext
+from .base import BaseRenderer
 from .plane_renderer import PlaneRenderer
 from .text_renderer import TextRenderer
 
 logger = logging.getLogger(__name__)
 
+# Depth layering along Z (grid = bed plane, z=0):
+#   background/bed plane  -0.002  (below the grid)
+#   grid lines            +0.001  (on the bed, above the background)
+#   WCS marker            +0.002  (above the grid; dynamically lifted by
+#                                 stock_top_z for no-Z machines so it
+#                                 sits on the work plane)
+#   extent frame          +0.003  (on top)
+BACKGROUND_Z = -0.002
+GRID_Z = 0.001
+WCS_MARKER_Z = 0.002
+EXTENT_FRAME_Z = 0.003
+
 
 class AxisRenderer3D(BaseRenderer):
     """Renders a 3D grid with axes, background, and labels on the XY plane."""
+
+    visibility_key = "show_grid"
 
     def __init__(
         self,
         width_mm: float,
         height_mm: float,
         grid_size_mm: float = 10.0,
-        font_family: Optional[str] = None,
+        font_family: str | None = None,
+        grid_unit_factor: float = 1.0,
     ):
         """Initializes the AxisRenderer3D with scene dimensions.
 
@@ -46,11 +56,15 @@ class AxisRenderer3D(BaseRenderer):
             grid_size_mm: The spacing between grid lines in mm.
             font_family: The name of the font to use for labels
             (e.g. "Cantarell").
+            grid_unit_factor: The number of mm in one user-preferred length
+            unit. Grid spacing is expressed as a multiple of this factor and
+            labels are shown in the corresponding unit.
         """
         super().__init__()
         self.width_mm = float(width_mm)
         self.height_mm = float(height_mm)
         self.grid_size_mm = float(grid_size_mm)
+        self.grid_unit_factor = float(grid_unit_factor)
         self.font_family = font_family
 
         # Colors
@@ -73,11 +87,11 @@ class AxisRenderer3D(BaseRenderer):
             width=self.width_mm,
             height=self.height_mm,
             color=self.background_color,
-            z_offset=-0.002,
+            z_offset=BACKGROUND_Z,
         )
         self._add_child_renderer(self.background_renderer)
 
-        self.text_renderer: Optional[TextRenderer] = None
+        self.text_renderer: TextRenderer | None = None
 
         # Grid and Axes resources
         self.grid_vao, self.grid_vbo, self.grid_vertex_count = 0, 0, 0
@@ -93,20 +107,47 @@ class AxisRenderer3D(BaseRenderer):
             self.extent_frame_vertex_count,
         ) = (0, 0, 0)
 
-    def set_background_color(self, color: Tuple[float, float, float, float]):
+    def set_background_color(self, color: tuple[float, float, float, float]):
         """Sets the color for the background plane."""
         self.background_color = color
         self.background_renderer.color = color
 
-    def set_grid_color(self, color: Tuple[float, float, float, float]):
+    def set_grid_color(self, color: tuple[float, float, float, float]):
         """Sets the color for the grid lines."""
         self.grid_color = color
 
-    def set_axis_color(self, color: Tuple[float, float, float, float]):
+    def set_grid_size(self, grid_size_mm: float) -> None:
+        """Sets the grid spacing and rebuilds the grid geometry if needed."""
+        grid_size_mm = float(grid_size_mm)
+        if math.isclose(self.grid_size_mm, grid_size_mm):
+            return
+        self.grid_size_mm = grid_size_mm
+        if self.grid_vao:
+            self._clear_line_resources()
+            self._init_grid_and_axes()
+
+    def _clear_line_resources(self) -> None:
+        """Deletes the grid/axis/marker/frame buffers before rebuilding."""
+        self._delete_owned(vao=self.grid_vao, vbo=self.grid_vbo)
+        self.grid_vao, self.grid_vbo = 0, 0
+        self._delete_owned(vao=self.axes_vao, vbo=self.axes_vbo)
+        self.axes_vao, self.axes_vbo = 0, 0
+        self._delete_owned(vao=self.wcs_marker_vao, vbo=self.wcs_marker_vbo)
+        self.wcs_marker_vao, self.wcs_marker_vbo = 0, 0
+        self._delete_owned(
+            vao=self.extent_frame_vao, vbo=self.extent_frame_vbo
+        )
+        self.extent_frame_vao, self.extent_frame_vbo = 0, 0
+
+    def set_grid_unit_factor(self, grid_unit_factor: float) -> None:
+        """Sets the number of mm in one user-preferred length unit."""
+        self.grid_unit_factor = float(grid_unit_factor)
+
+    def set_axis_color(self, color: tuple[float, float, float, float]):
         """Sets the color for the main X and Y axis lines."""
         self.axis_color = color
 
-    def set_label_color(self, color: Tuple[float, float, float, float]):
+    def set_label_color(self, color: tuple[float, float, float, float]):
         """Sets the color for the axis labels."""
         self.label_color = color
 
@@ -139,9 +180,20 @@ class AxisRenderer3D(BaseRenderer):
         # Initialize self-managed components using base class helpers
         self._init_grid_and_axes()
 
+    def prepare(self, ctx: RenderContext) -> None:
+        """No per-frame state to prepare."""
+
     def _init_grid_and_axes(self):
-        """Creates VAOs/VBOs for the grid and axis lines."""
-        grid_z_pos = -0.001
+        """Creates VAOs/VBOs for the grid and axis lines.
+
+        Depth layering along Z (grid = bed plane, z=0):
+        grid lines at +0.001 sit on the bed, the WCS marker at
+        +0.002 is above the grid (and dynamically lifted by
+        ``stock_top_z`` for no-Z machines), and the extent frame
+        at +0.003 sits on top. The background/bed plane stays below
+        at -0.002.
+        """
+        grid_z_pos = GRID_Z
         w, h = self.width_mm, self.height_mm
 
         # Grid vertices
@@ -156,7 +208,7 @@ class AxisRenderer3D(BaseRenderer):
 
         # WCS Marker vertices (a cross)
         marker_size = self.grid_size_mm * 0.5
-        marker_z_pos = 0.001  # Slightly above the axes
+        marker_z_pos = WCS_MARKER_Z  # Above the grid lines
         wcs_marker_verts = [
             -marker_size,
             0.0,
@@ -224,7 +276,7 @@ class AxisRenderer3D(BaseRenderer):
 
     def _update_extent_frame_buffer(self):
         """Creates or updates the VAO/VBO for the extent frame."""
-        extent_z_pos = 0.002
+        extent_z_pos = EXTENT_FRAME_Z
         x, y = self.extent_x_mm, self.extent_y_mm
         w, h = self.extent_width_mm, self.extent_height_mm
 
@@ -276,32 +328,17 @@ class AxisRenderer3D(BaseRenderer):
     def render(
         self,
         ctx: RenderContext,
-        line_shader: Shader,
-        text_shader: Shader,
-        scene_mvp: np.ndarray,
-        text_mvp: np.ndarray,
-        origin_offset_mm: Point3D = (0.0, 0.0, 0.0),
-        x_right: bool = False,
-        y_down: bool = False,
-        x_negative: bool = False,
-        y_negative: bool = False,
+        shaders: ShaderSet,
+        **kwargs,
     ) -> None:
         """
         Orchestrates the rendering of all components in the correct order.
 
         Args:
-            line_shader: The shader program for drawing lines/solids.
-            text_shader: The shader program for drawing text.
-            scene_mvp: The final MVP matrix for the grid and background.
-            text_mvp: The MVP matrix for the text labels (no model transform).
-            view_matrix: The view matrix, used for billboarding text.
-            model_matrix: The model matrix for coordinate system transforms.
-            origin_offset_mm: The (x, y, z) offset for the work coordinate
-              system.
-            x_right: True if the machine origin is on the right side.
-            y_down: True if the machine origin is at the top.
-            x_negative: True if the X-axis counts down from the origin.
-            y_negative: True if the Y-axis counts down from the origin.
+            ctx: The current render context; carries the shaders, scene and
+              text MVPs, and the viewport origin/axis flags.
+            shaders: The shader set; ``main`` for lines and ``text`` for
+              labels.
         """
         if not all(
             (
@@ -313,16 +350,28 @@ class AxisRenderer3D(BaseRenderer):
         ):
             return
 
+        line_shader = shaders.main
+        text_shader = shaders.text
+        if line_shader is None or text_shader is None:
+            return
+
+        text_mvp = ctx.camera.mvp_ui
+        origin_offset_mm = (
+            ctx.viewport.wcs_offset_mm
+            if ctx.viewport.wcs_offset_mm is not None
+            else (0.0, 0.0, 0.0)
+        )
+
         # 1. Calculate the world-space position of the WCS origin.
         # origin_offset_mm is in grid coordinates (workarea-relative).
         # For negative axes, flip the offset direction.
         off_x, off_y, off_z = origin_offset_mm
 
         offset_vec = np.array([off_x, off_y, off_z, 1.0], dtype=np.float32)
-        world_offset_vec = ctx.model_matrix @ offset_vec
+        world_offset_vec = ctx.viewport.model_matrix @ offset_vec
 
         # 2. Construct the MVP for the static grid/axes.
-        grid_mvp = ctx.model_matrix.T @ text_mvp
+        grid_mvp = text_mvp @ ctx.viewport.model_matrix
 
         # Enable blending for transparent objects
         GL.glEnable(GL.GL_BLEND)
@@ -332,9 +381,16 @@ class AxisRenderer3D(BaseRenderer):
         line_shader.set_int("uExecutedVertexCount", -1)
         line_shader.set_float("uAlphaPending", 0.2)
 
-        # Draw background plane
+        # Draw background plane (translucent bed tint; writes no depth so
+        # the stock can sit over it).
         GL.glDepthMask(GL.GL_FALSE)
-        self.background_renderer.render(ctx, line_shader, grid_mvp)
+        self.background_renderer.render(ctx, shaders)
+
+        # The plan lines (grid, axes, markers, extent frame) WRITE depth so
+        # they stay visible over coplanar stock top faces: the stock is
+        # drawn afterwards with a polygon offset pushing it away from the
+        # camera, and the plan at z=+GRID_Z wins the depth test. Without
+        # the depth write the stock simply overwrites them.
         GL.glDepthMask(GL.GL_TRUE)
 
         # Draw grid
@@ -352,9 +408,11 @@ class AxisRenderer3D(BaseRenderer):
         GL.glDrawArrays(GL.GL_LINES, 0, self.axes_vertex_count)
 
         # 3. Draw the WCS origin marker
+        z_lift = ctx.kinematics.z_lift
         wcs_translation_matrix = np.identity(4, dtype=np.float32)
         wcs_translation_matrix[:3, 3] = world_offset_vec[:3]
-        wcs_marker_mvp = wcs_translation_matrix.T @ text_mvp
+        wcs_translation_matrix[2, 3] += z_lift
+        wcs_marker_mvp = text_mvp @ wcs_translation_matrix
 
         line_shader.set_mat4("uMVP", wcs_marker_mvp)
         line_shader.set_vec4("uColor", self.wcs_marker_color)
@@ -369,41 +427,32 @@ class AxisRenderer3D(BaseRenderer):
             GL.glBindVertexArray(self.extent_frame_vao)
             GL.glDrawArrays(GL.GL_LINES, 0, self.extent_frame_vertex_count)
 
-        GL.glBindVertexArray(0)
-
         # 5. Pass the correct world-space offset vector to the label renderer.
-        self._render_axis_labels(
-            ctx,
-            text_shader,
-            text_mvp,
-            origin_offset_mm=origin_offset_mm,
-            x_right=x_right,
-            y_down=y_down,
-            x_negative=x_negative,
-            y_negative=y_negative,
-        )
-        GL.glDisable(GL.GL_BLEND)
+        self._render_axis_labels(ctx, shaders)
 
     def _render_axis_labels(
         self,
         ctx: RenderContext,
-        text_shader: Shader,
-        text_mvp_matrix: np.ndarray,
-        origin_offset_mm: Point3D,
-        x_right: bool = False,
-        y_down: bool = False,
-        x_negative: bool = False,
-        y_negative: bool = False,
+        shaders: ShaderSet,
     ) -> None:
         """Helper method to render text labels along the axes."""
         if not self.text_renderer:
             return
-        model_matrix = ctx.model_matrix
+        self.text_renderer.begin_batch()
+        model_matrix = ctx.viewport.model_matrix
         label_height_mm = 2.5
         x_axis_label_y_offset = label_height_mm * 1.2
         y_axis_label_x_offset = label_height_mm * 0.6
 
         # origin_offset_mm is in grid coordinates (workarea-relative)
+        origin_offset_mm = (
+            ctx.viewport.wcs_offset_mm
+            if ctx.viewport.wcs_offset_mm is not None
+            else (0.0, 0.0, 0.0)
+        )
+        x_right = ctx.viewport.x_right
+        x_negative = ctx.viewport.x_negative
+        y_negative = ctx.viewport.y_negative
         wcs_local_x, wcs_local_y, _ = origin_offset_mm
 
         # X-axis labels
@@ -438,16 +487,16 @@ class AxisRenderer3D(BaseRenderer):
             # This holds true regardless of origin corner (x_right) because
             # delta is defined in the flipped local space.
             label_val = -delta if x_negative else delta
-            label_text = str(int(round(label_val)))
+            label_val = label_val / self.grid_unit_factor
+            label_text = str(round(label_val))
 
-            self.text_renderer.render_text(
+            self.text_renderer.render(
                 ctx,
-                text_shader,
-                label_text,
-                pos_final,
-                label_height_mm,
-                self.label_color,
-                text_mvp_matrix,
+                shaders,
+                text=label_text,
+                position=pos_final,
+                height_in_world_units=label_height_mm,
+                color=self.label_color,
             )
 
         # Y-axis labels
@@ -474,15 +523,17 @@ class AxisRenderer3D(BaseRenderer):
 
             # Label value logic: same as X
             label_val = -delta if y_negative else delta
-            label_text = str(int(round(label_val)))
+            label_val = label_val / self.grid_unit_factor
+            label_text = str(round(label_val))
 
-            self.text_renderer.render_text(
+            self.text_renderer.render(
                 ctx,
-                text_shader,
-                label_text,
-                pos_final,
-                label_height_mm,
-                self.label_color,
-                text_mvp_matrix,
+                shaders,
+                text=label_text,
+                position=pos_final,
+                height_in_world_units=label_height_mm,
+                color=self.label_color,
                 align=y_label_align,
             )
+
+        self.text_renderer.end_batch()

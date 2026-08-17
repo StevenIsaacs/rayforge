@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import enum
 from gettext import gettext as _
-from typing import Optional, Type
 
 
 class ValidationStatus(enum.Enum):
@@ -51,8 +50,8 @@ class TypeMismatchInfo(ErrorInfo):
     def __init__(
         self,
         operator: str,
-        left_type: Type,
-        right_type: Type,
+        left_type: type,
+        right_type: type,
     ):
         self.operator = operator
         self.left_type = left_type.__name__
@@ -70,7 +69,7 @@ class ValidationResult:
     def __init__(
         self,
         status: ValidationStatus,
-        error_info: Optional[ErrorInfo] = None,
+        error_info: ErrorInfo | None = None,
     ):
         self.status = status
         self.error_info = error_info

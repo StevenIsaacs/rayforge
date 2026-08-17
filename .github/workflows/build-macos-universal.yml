@@ -23,7 +23,7 @@ jobs:
       version: ${{ steps.set-version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -60,13 +60,13 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
@@ -100,7 +100,7 @@ jobs:
           ditto -c -k --keepParent "$APP_PATH" "$ZIP_NAME"
 
       - name: Upload Intel app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rayforge-${{ env.VERSION }}-macos-intel-app.zip
           path: rayforge-${{ env.VERSION }}-macos-intel-app.zip
@@ -114,13 +114,13 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: "pip"
@@ -154,7 +154,7 @@ jobs:
           ditto -c -k --keepParent "$APP_PATH" "$ZIP_NAME"
 
       - name: Upload ARM app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rayforge-${{ env.VERSION }}-macos-arm-app.zip
           path: rayforge-${{ env.VERSION }}-macos-arm-app.zip
@@ -168,13 +168,13 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Download Intel app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-${{ env.VERSION }}-macos-intel-app.zip
           path: artifacts/intel
 
       - name: Download ARM app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-${{ env.VERSION }}-macos-arm-app.zip
           path: artifacts/arm
@@ -294,14 +294,14 @@ jobs:
           done
 
       - name: Upload universal app artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rayforge-${{ env.VERSION }}-macos-universal-app.zip
           path: rayforge-${{ env.VERSION }}-macos-universal-app.zip
           compression-level: 9
 
       - name: Upload universal DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rayforge-${{ env.VERSION }}-macos-universal-dmg
           path: rayforge-${{ env.VERSION }}-macos-universal.dmg
@@ -328,27 +328,27 @@ jobs:
           fi
 
       - name: Download Intel app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-${{ needs.version.outputs.version }}-macos-intel-app.zip
 
       - name: Download ARM app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-${{ needs.version.outputs.version }}-macos-arm-app.zip
 
       - name: Download universal app artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-${{ needs.version.outputs.version }}-macos-universal-app.zip
 
       - name: Download universal DMG artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: rayforge-${{ needs.version.outputs.version }}-macos-universal-dmg
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             rayforge-${{ needs.version.outputs.version }}-macos-intel-app.zip

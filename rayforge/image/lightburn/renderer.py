@@ -1,6 +1,6 @@
 import logging
 import warnings
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Optional
 from xml.etree import ElementTree as ET
 
 from ..base_renderer import Renderer, RenderSpecification
@@ -27,7 +27,7 @@ class LightBurnRenderer(Renderer):
     def compute_render_spec(
         self,
         segment: Optional["SourceAssetSegment"],
-        target_size: Tuple[int, int],
+        target_size: tuple[int, int],
         source_context: "RenderContext",
     ) -> "RenderSpecification":
         kwargs = {
@@ -46,7 +46,7 @@ class LightBurnRenderer(Renderer):
         import_result: "ImportResult",
         target_width: int,
         target_height: int,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         if not import_result.payload:
             return None
 
@@ -65,7 +65,7 @@ class LightBurnRenderer(Renderer):
         width: int,
         height: int,
         **kwargs,
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         if data and data.startswith(b"<svg"):
             return self._render_svg_image(data, width, height)
 
@@ -94,7 +94,7 @@ class LightBurnRenderer(Renderer):
 
     def _render_svg_image(
         self, svg_data: bytes, width: int, height: int
-    ) -> Optional[pyvips.Image]:
+    ) -> pyvips.Image | None:
         try:
             root = ET.fromstring(svg_data)
         except ET.ParseError:
@@ -109,7 +109,8 @@ class LightBurnRenderer(Renderer):
             surface = render_svg_to_cairo(svg_bytes, width, height)
             if surface:
                 return cairo_surface_to_vips(surface)
-        except (pyvips.Error, Exception):
+        except pyvips.Error as e:
+            logger.warning(f"Failed to render SVG image: {e}")
             return None
         return None
 

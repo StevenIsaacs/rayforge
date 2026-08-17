@@ -1,6 +1,7 @@
 import json
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from collections.abc import Callable
+from datetime import datetime, timezone
+from typing import Any
 
 from .var import Var
 
@@ -24,15 +25,17 @@ class OAuthFlowVar(Var[str]):
         self,
         key: str,
         label: str,
-        authorize_url: Optional[str] = None,
-        token_url: Optional[str] = None,
-        client_id: Optional[str] = None,
-        client_secret: Optional[str] = None,
-        scopes: Optional[List[str]] = None,
+        authorize_url: str | None = None,
+        token_url: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+        scopes: list[str] | None = None,
         redirect_port: int = 8765,
-        description: Optional[str] = None,
-        default: Optional[str] = None,
-        value: Optional[str] = None,
+        description: str | None = None,
+        default: str | None = None,
+        value: str | None = None,
+        *,
+        visible_when: "Callable[[dict[str, Any]], bool] | None" = None,
     ):
         self.authorize_url = authorize_url
         self.token_url = token_url
@@ -47,9 +50,10 @@ class OAuthFlowVar(Var[str]):
             description=description,
             default=default or "",
             value=value,
+            visible_when=visible_when,
         )
 
-    def get_tokens(self) -> Optional[Dict[str, Any]]:
+    def get_tokens(self) -> dict[str, Any] | None:
         """Return parsed token dict, or None if not authenticated."""
         val = self.value
         if not val:
@@ -65,9 +69,7 @@ class OAuthFlowVar(Var[str]):
             return False
         if not tokens.get("access_token"):
             return False
-        if self._is_expired(tokens):
-            return False
-        return True
+        return not self._is_expired(tokens)
 
     def is_expired(self) -> bool:
         tokens = self.get_tokens()
@@ -75,27 +77,27 @@ class OAuthFlowVar(Var[str]):
             return False
         return self._is_expired(tokens)
 
-    def get_refresh_token(self) -> Optional[str]:
+    def get_refresh_token(self) -> str | None:
         tokens = self.get_tokens()
         if tokens:
             return tokens.get("refresh_token")
         return None
 
     @staticmethod
-    def _is_expired(tokens: Dict[str, Any]) -> bool:
+    def _is_expired(tokens: dict[str, Any]) -> bool:
         expires_at_str = tokens.get("expires_at")
         if not expires_at_str:
             return False
         try:
             expires_at = datetime.fromisoformat(expires_at_str)
-            return datetime.now() >= expires_at
+            return datetime.now(tz=timezone.utc) >= expires_at
         except (ValueError, TypeError):
             return False
 
     def resolve_config(
         self,
-        overrides: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        overrides: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """
         Build a resolved config dict with all ``{key}`` placeholders
         substituted from sibling Var values.
@@ -104,11 +106,11 @@ class OAuthFlowVar(Var[str]):
         entry rows in the adapter) that takes precedence over the
         var's own fields.
         """
-        sibling_values: Dict[str, Any] = {}
+        sibling_values: dict[str, Any] = {}
         if self._varset is not None:
             sibling_values = self._varset.get_values()
 
-        merged: Dict[str, Any] = {
+        merged: dict[str, Any] = {
             "authorize_url": self.authorize_url,
             "token_url": self.token_url,
             "client_id": self.client_id,
@@ -135,7 +137,7 @@ class OAuthFlowVar(Var[str]):
         merged["client_secret"] = _resolve(merged["client_secret"])
         return merged
 
-    def to_dict(self, include_value: bool = False) -> Dict[str, Any]:
+    def to_dict(self, include_value: bool = False) -> dict[str, Any]:
         data = super().to_dict(include_value=include_value)
         data["authorize_url"] = self.authorize_url
         data["token_url"] = self.token_url

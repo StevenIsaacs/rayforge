@@ -15,8 +15,10 @@ try:
     import gi
 
     gi.require_version("Gtk", "4.0")
+    gi.require_version("Gdk", "4.0")
+    gi.require_version("Graphene", "1.0")
     gi.require_version("Adw", "1")
-    import gi.repository.Adw  # noqa: F401, check availability
+    import gi.repository.Adw
 except (ValueError, ImportError):
     _gtk_available = False
 

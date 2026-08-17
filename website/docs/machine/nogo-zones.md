@@ -8,7 +8,7 @@ No-go zones define restricted areas on the work surface that the laser should
 not enter. When enabled, they are checked as part of the
 [job sanity checks](../features/sanity-checks.md) before running or exporting.
 
-![No-Go Zones](/screenshots/machine-nogo-zones.png)
+![No-Go Zones](/screenshots/machine-settings-nogo-zones.png)
 
 ## Adding a No-Go Zone
 
@@ -27,7 +27,8 @@ Each zone has the following settings:
 
 No-go zones are displayed on both the 2D and 3D canvas as semi-transparent
 overlays. Use the no-go zone toggle button in the canvas overlay to show or
-hide them. The visibility setting is remembered between sessions.
+hide them. The toggle is only shown when at least one no-go zone is
+configured. The visibility setting is remembered between sessions.
 
 ---
 

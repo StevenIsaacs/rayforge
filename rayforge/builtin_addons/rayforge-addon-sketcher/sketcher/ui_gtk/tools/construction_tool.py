@@ -1,6 +1,6 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, ClassVar, Union
 
 from ...core.commands import ToggleConstructionCommand
 from ...core.entities import Entity, Point
@@ -15,12 +15,12 @@ logger = logging.getLogger(__name__)
 class ConstructionTool(SketchTool):
     ICON = "sketch-construction-symbolic"
     LABEL = _("Construction")
-    SHORTCUTS = ["gn"]
+    SHORTCUTS: ClassVar[list[str]] = ["gn"]
 
     def is_available(
         self,
-        target: Optional[Union[Point, Entity, "Constraint"]],
-        target_type: Optional[str],
+        target: Union[Point, Entity, "Constraint"] | None,
+        target_type: str | None,
     ) -> bool:
         return len(self.element.selection.entity_ids) > 0
 

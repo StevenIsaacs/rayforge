@@ -2,7 +2,7 @@ import logging
 import math
 from collections import defaultdict
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Optional, Set
+from typing import TYPE_CHECKING
 
 import cairo
 from raygeo.geo import Geometry, Matrix
@@ -449,7 +449,7 @@ class SketchRenderer:
             else:
                 ctx.set_source_rgb(0.0, 0.0, 0.0)
 
-    def _safe_get_point(self, pid: EntityID) -> Optional[Point]:
+    def _safe_get_point(self, pid: EntityID) -> Point | None:
         try:
             return self.element.sketch.registry.get_point(pid)
         except IndexError:
@@ -625,16 +625,15 @@ class SketchRenderer:
             # Filter specific constraints on text box points to reduce clutter
             if isinstance(
                 constr, (CoincidentConstraint, PointOnLineConstraint)
-            ):
-                if constr.depends_on_points(text_box_point_ids):
-                    continue
+            ) and constr.depends_on_points(text_box_point_ids):
+                continue
 
             # Hide constraints referencing construction geometry when hidden
-            if construction_entity_ids or construction_point_ids:
-                if constr.depends_on_entities(
-                    construction_entity_ids
-                ) or constr.depends_on_points(construction_point_ids):
-                    continue
+            if (construction_entity_ids or construction_point_ids) and (
+                constr.depends_on_entities(construction_entity_ids)
+                or constr.depends_on_points(construction_point_ids)
+            ):
+                continue
 
             is_sel = idx == self.element.selection.constraint_idx
             is_hovered = idx == hovered_constraint_idx
@@ -657,8 +656,8 @@ class SketchRenderer:
         self,
         ctx: cairo.Context,
         to_screen: Callable[[GeoPoint], GeoPoint],
-        text_box_point_ids: Set[int],
-        construction_point_ids: Set[int] | None = None,
+        text_box_point_ids: set[int],
+        construction_point_ids: set[int] | None = None,
     ) -> None:
         if construction_point_ids is None:
             construction_point_ids = set()
@@ -733,7 +732,7 @@ class SketchRenderer:
         ctx.stroke_preserve()
         ctx.restore()
 
-    def _get_entity_by_id(self, eid: EntityID) -> Optional[Entity]:
+    def _get_entity_by_id(self, eid: EntityID) -> Entity | None:
         return self.element.sketch.registry.get_entity(eid)
 
     # --- Points ---
@@ -935,11 +934,11 @@ class SketchRenderer:
         if isinstance(tool, PathTool):
             preview_state = tool.get_preview_state()
 
-        if isinstance(preview_state, BezierPreviewState):
-            if not preview_state.is_line_preview:
-                self._draw_bezier_preview_handles(
-                    ctx, to_screen, preview_state
-                )
+        if (
+            isinstance(preview_state, BezierPreviewState)
+            and not preview_state.is_line_preview
+        ):
+            self._draw_bezier_preview_handles(ctx, to_screen, preview_state)
 
         selected_bezier_ids: set[int] = set()
         selected_point_ids: set[int] = set()

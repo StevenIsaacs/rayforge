@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Tuple, Type, Union
+from typing import Any
 
 import numpy as np
 from raygeo.geo.types import Rect
@@ -23,26 +23,26 @@ class RenderContext:
     perform a render of a workpiece view.
     """
 
-    pixels_per_mm: Tuple[float, float]
+    pixels_per_mm: tuple[float, float]
     show_travel_moves: bool
     margin_px: int
-    color_set_dict: Dict[str, Any]
-    laser_color_sets: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    layer_color_sets: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    color_set_dict: dict[str, Any]
+    laser_color_sets: dict[str, dict[str, Any]] = field(default_factory=dict)
+    layer_color_sets: dict[str, dict[str, Any]] = field(default_factory=dict)
     ops_color_mode: Any = None
 
     def __post_init__(self):
         if self.ops_color_mode is None:
             self.ops_color_mode = _get_ops_color_mode_enum().LASER
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the context to a dictionary."""
         d = asdict(self)
         d["ops_color_mode"] = self.ops_color_mode.value
         return d
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "RenderContext":
+    def from_dict(cls, data: dict[str, Any]) -> RenderContext:
         """Deserializes a RenderContext from a dictionary."""
         OpsColorMode = _get_ops_color_mode_enum()
         mode = data.get("ops_color_mode", OpsColorMode.LASER.value)
@@ -74,13 +74,12 @@ class RenderContext:
         )
 
     def _compare_color_sets(
-        self, dict1: Dict[str, Any], dict2: Dict[str, Any]
+        self, dict1: dict[str, Any], dict2: dict[str, Any]
     ) -> bool:
         """Compare two color set dictionaries for equality."""
         if dict1.keys() != dict2.keys():
             return False
-        for key in dict1:
-            val1 = dict1[key]
+        for key, val1 in dict1.items():
             val2 = dict2.get(key)
             if isinstance(val1, dict) and isinstance(val2, dict):
                 if not self._compare_color_sets(val1, val2):
@@ -91,21 +90,19 @@ class RenderContext:
 
 
 class WorkPieceViewArtifactHandle(BaseArtifactHandle):
-    """A handle for a WorkPieceViewArtifact."""
-
     def __init__(
         self,
         bbox_mm: Rect,
-        workpiece_size_mm: Tuple[float, float],
-        shm_name: str,
+        workpiece_size_mm: tuple[float, float],
+        key: str,
         handle_class_name: str,
         artifact_type_name: str,
         generation_id: int,
-        array_metadata: Union[Dict[str, Any], None] = None,
+        array_metadata: dict[str, Any] | None = None,
         **_kwargs,
     ):
         super().__init__(
-            shm_name=shm_name,
+            key=key,
             handle_class_name=handle_class_name,
             artifact_type_name=artifact_type_name,
             generation_id=generation_id,
@@ -125,7 +122,7 @@ class WorkPieceViewArtifact(BaseArtifact):
         self,
         bitmap_data: np.ndarray,
         bbox_mm: Rect,
-        workpiece_size_mm: Tuple[float, float],
+        workpiece_size_mm: tuple[float, float],
         generation_id: int,
     ):
         super().__init__()
@@ -134,47 +131,12 @@ class WorkPieceViewArtifact(BaseArtifact):
         self.workpiece_size_mm = workpiece_size_mm
         self.generation_id = generation_id
 
-    def create_handle(
-        self,
-        shm_name: str,
-        array_metadata: Dict[str, Dict[str, Any]],
-    ) -> WorkPieceViewArtifactHandle:
-        """Creates the appropriate, typed handle for this artifact."""
+    def build_handle(self, key: str) -> WorkPieceViewArtifactHandle:
         return WorkPieceViewArtifactHandle(
-            shm_name=shm_name,
+            key=key,
             handle_class_name=WorkPieceViewArtifactHandle.__name__,
             artifact_type_name=self.__class__.__name__,
             generation_id=self.generation_id,
-            array_metadata=array_metadata,
             bbox_mm=self.bbox_mm,
             workpiece_size_mm=self.workpiece_size_mm,
-        )
-
-    def get_arrays_for_storage(self) -> Dict[str, np.ndarray]:
-        """
-        Gets a dictionary of all NumPy arrays that need to be stored in
-        shared memory for this artifact.
-        """
-        return {"bitmap_data": self.bitmap_data}
-
-    @classmethod
-    def from_storage(
-        cls: Type[WorkPieceViewArtifact],
-        handle: BaseArtifactHandle,
-        arrays: Dict[str, np.ndarray],
-    ) -> WorkPieceViewArtifact:
-        """
-        Reconstructs an artifact instance from its handle and a dictionary of
-        NumPy array views from shared memory.
-        """
-        if not isinstance(handle, WorkPieceViewArtifactHandle):
-            raise TypeError(
-                "WorkPieceViewArtifact requires a WorkPieceViewArtifactHandle"
-            )
-
-        return cls(
-            bitmap_data=arrays["bitmap_data"].copy(),
-            bbox_mm=handle.bbox_mm,
-            workpiece_size_mm=handle.workpiece_size_mm,
-            generation_id=handle.generation_id,
         )

@@ -2,72 +2,79 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 from ...pipeline.artifact.handle import create_handle_from_dict
 from ...pipeline.artifact.job import JobArtifact
-from ...pipeline.artifact.store import (
-    ArtifactStore,
-    SharedMemoryNotFoundError,
-)
-from ...shared.tasker.proxy import ExecutionContextProxy
+from ...pipeline.artifact.store import ArtifactStore
+from .compiled_scene import CompiledSceneArtifact
 from .render_config import RenderConfig3D
 from .scene_compiler import compile_scene
+from .stock_compiler import compile_stock_layers
 
 logger = logging.getLogger(__name__)
 
 
-def compile_scene_in_subprocess(
-    proxy: ExecutionContextProxy,
+def compile_scene_from_job(
     artifact_store: ArtifactStore,
-    job_handle_dict: Dict[str, Any],
+    job_handle_dict: dict[str, Any],
     render_config_dict: dict,
-) -> Optional[Dict[str, Any]]:
-    config = RenderConfig3D.from_dict(render_config_dict)
+) -> CompiledSceneArtifact | None:
+    """Compile a 3D scene from a job artifact.
 
-    if proxy.is_cancelled():
-        return None
+    Runs synchronously on the calling thread; the caller owns threading.
+    The compiled artifact is returned directly, avoiding pickling of
+    raygeo ``Ops`` objects through multiprocessing queues.
+    """
+    config = RenderConfig3D.from_dict(render_config_dict)
 
     try:
         handle = create_handle_from_dict(job_handle_dict)
         artifact = artifact_store.get(handle)
-    except (SharedMemoryNotFoundError, RuntimeError) as e:
-        logger.warning(f"Job artifact SHM no longer available: {e}. Aborting.")
-        return None
-    except Exception as e:
-        logger.error(f"Failed to load job artifact: {e}")
+    except (ValueError, TypeError, RuntimeError) as e:
+        logger.warning(f"Job artifact no longer available. Aborting: {e}")
         return None
 
     if not isinstance(artifact, JobArtifact):
         logger.error(f"Expected JobArtifact, got {type(artifact).__name__}.")
         return None
 
-    ops = artifact.mapped_ops if artifact.mapped_ops else artifact.ops
+    ops = artifact.preview_ops
     if ops is None or ops.is_empty():
         logger.debug("Job artifact ops are empty.")
         return None
 
     t_start = time.perf_counter()
-    compiled = compile_scene(ops, config)
+    compiled = compile_scene(ops, config, generation_id=artifact.generation_id)
     elapsed = (time.perf_counter() - t_start) * 1000
-    logger.info(
-        f"[SCENE_COMPILER] Compilation took {elapsed:.1f}ms "
-        f"(commands={len(ops)})"
+    logger.debug(f"Compilation took {elapsed:.1f}ms (commands={len(ops)})")
+    return compiled
+
+
+def compile_stock_scene(
+    render_config_dict: dict,
+) -> CompiledSceneArtifact | None:
+    """Compile a stock-only 3D scene without a job artifact.
+
+    Used when the document has no assembled job (e.g. no visible
+    steps with workpieces) so the configured stock still renders.
+    Runs synchronously on the calling thread; the caller owns
+    threading.
+    """
+    config = RenderConfig3D.from_dict(render_config_dict)
+    stock_w2v = (
+        config.stock_world_to_visual
+        if config.stock_world_to_visual is not None
+        else config.world_to_visual
     )
-
-    compiled_handle = artifact_store.put(compiled, creator_tag="scene3d")
-    logger.debug(f"Stored compiled scene: {compiled_handle.shm_name}")
-
-    acked = proxy.send_event_and_wait(
-        "scene_compiled",
-        {"handle_dict": compiled_handle.to_dict()},
-        logger=logger,
+    stock_layers = compile_stock_layers(config.stock_specs or [], stock_w2v)
+    if not stock_layers:
+        return None
+    return CompiledSceneArtifact(
+        generation_id=0,
+        vertex_layers=[],
+        texture_layers=[],
+        overlay_layers=[],
+        laser_uid_order=[],
+        stock_layers=stock_layers,
     )
-
-    if acked:
-        artifact_store.forget(compiled_handle)
-    else:
-        logger.warning("Scene artifact not acknowledged. Releasing handle.")
-        artifact_store.release(compiled_handle)
-
-    return None

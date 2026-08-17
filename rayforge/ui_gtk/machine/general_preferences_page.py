@@ -5,11 +5,20 @@ from gi.repository import Adw, Gtk
 
 from ...machine.driver import drivers, get_driver_cls
 from ...machine.models.machine import Machine
+from ...shared.units.system import UnitSystem
+from ..icons import get_icon
+from ..shared.pref_rows.acceleration_spin_row import AccelerationSpinRow
+from ..shared.pref_rows.speed_spin_row import SpeedSpinRow
 from ..shared.preferences_page import TrackedPreferencesPage
-from ..shared.unit_spin_row import UnitSpinRowHelper
 from ..varset.varsetwidget import VarSetWidget
 
 logger = logging.getLogger(__name__)
+
+UNIT_SYSTEM_LABELS = {
+    UnitSystem.METRIC: _("Metric (mm)"),
+    UnitSystem.IMPERIAL: _("Imperial (inches)"),
+}
+UNIT_SYSTEM_ORDER = [UnitSystem.METRIC, UnitSystem.IMPERIAL]
 
 
 class GeneralPreferencesPage(TrackedPreferencesPage):
@@ -131,74 +140,82 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         self.add(speeds_group)
 
         # Max Travel Speed
-        travel_speed_adjustment = Gtk.Adjustment(
-            lower=0,
+        self.travel_speed_row = SpeedSpinRow(
+            _("Max Travel Speed"),
+            _("Maximum rapid movement speed"),
             upper=60000,  # Increased upper limit for mm/min
-            step_increment=10,
-            page_increment=100,
+            digits=0,
         )
-        travel_speed_row = Adw.SpinRow(
-            title=_("Max Travel Speed"),
-            subtitle=_("Maximum rapid movement speed"),
-            adjustment=travel_speed_adjustment,
-        )
-        self.travel_speed_helper = UnitSpinRowHelper(
-            spin_row=travel_speed_row,
-            quantity="speed",
-        )
-        self.travel_speed_helper.set_value_in_base_units(
+        self.travel_speed_row.set_value_in_base_units(
             self.machine.max_travel_speed
         )
-        self.travel_speed_helper.changed.connect(self.on_travel_speed_changed)
-        self.travel_speed_row = travel_speed_row
-        speeds_group.add(travel_speed_row)
+        self.travel_speed_row.value_changed.connect(
+            self.on_travel_speed_changed
+        )
+        speeds_group.add(self.travel_speed_row)
 
         # Max Cut Speed
-        cut_speed_adjustment = Gtk.Adjustment(
-            lower=0,
+        self.cut_speed_row = SpeedSpinRow(
+            _("Max Cut Speed"),
+            _("Maximum cutting speed"),
             upper=60000,  # Increased upper limit for mm/min
-            step_increment=10,
-            page_increment=100,
+            digits=0,
         )
-        cut_speed_row = Adw.SpinRow(
-            title=_("Max Cut Speed"),
-            subtitle=_("Maximum cutting speed"),
-            adjustment=cut_speed_adjustment,
-        )
-        self.cut_speed_helper = UnitSpinRowHelper(
-            spin_row=cut_speed_row,
-            quantity="speed",
-        )
-        self.cut_speed_helper.set_value_in_base_units(
-            self.machine.max_cut_speed
-        )
-        self.cut_speed_helper.changed.connect(self.on_cut_speed_changed)
-        speeds_group.add(cut_speed_row)
+        self.cut_speed_row.set_value_in_base_units(self.machine.max_cut_speed)
+        self.cut_speed_row.value_changed.connect(self.on_cut_speed_changed)
+        speeds_group.add(self.cut_speed_row)
 
         # Acceleration
-        acceleration_adjustment = Gtk.Adjustment(
-            lower=1,
-            upper=100000,
-            step_increment=10,
-            page_increment=100,
-        )
-        acceleration_row = Adw.SpinRow(
-            title=_("Acceleration"),
-            subtitle=_(
+        self.acceleration_row = AccelerationSpinRow(
+            _("Acceleration"),
+            _(
                 "Used for time estimations and calculating the "
                 "default overscan distance"
             ),
-            adjustment=acceleration_adjustment,
+            lower=1,
+            upper=100000,
+            digits=0,
         )
-        self.acceleration_helper = UnitSpinRowHelper(
-            spin_row=acceleration_row,
-            quantity="acceleration",
-        )
-        self.acceleration_helper.set_value_in_base_units(
+        self.acceleration_row.set_value_in_base_units(
             self.machine.acceleration
         )
-        self.acceleration_helper.changed.connect(self.on_acceleration_changed)
-        speeds_group.add(acceleration_row)
+        self.acceleration_row.value_changed.connect(
+            self.on_acceleration_changed
+        )
+        speeds_group.add(self.acceleration_row)
+
+        # Machine Unit System group
+        units_group = Adw.PreferencesGroup(title=_("Unit System"))
+        units_group.set_description(
+            _(
+                "The unit system used when emitting G-code and "
+                "communicating with the device. This setting is independent "
+                "of the units used in the user interface."
+            )
+        )
+        self.add(units_group)
+
+        # Unit system selector
+        unit_labels = [UNIT_SYSTEM_LABELS[u] for u in UNIT_SYSTEM_ORDER]
+        self.unit_system_row = Adw.ComboRow(
+            title=_("Machine Unit System"),
+            model=Gtk.StringList.new(unit_labels),
+        )
+        current_idx = UNIT_SYSTEM_ORDER.index(self.machine.unit_system)
+        self.unit_system_row.set_selected(current_idx)
+        self.unit_system_row.connect(
+            "notify::selected", self.on_unit_system_changed
+        )
+        units_group.add(self.unit_system_row)
+
+        # Preamble mismatch warning row
+        self.unit_warning_row = Adw.ActionRow(
+            activatable=False,
+        )
+        self.unit_warning_row.add_prefix(get_icon("warning-symbolic"))
+        self.unit_warning_row.add_css_class("warning")
+        self.unit_warning_row.set_visible(False)
+        units_group.add(self.unit_warning_row)
 
         # Initial check for errors
         self._update_error_state()
@@ -208,6 +225,7 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
 
         # Update controls based on driver features
         self._update_travel_speed_state()
+        self._update_unit_warning()
 
     def _on_machine_changed(self, sender, **kwargs):
         """
@@ -228,6 +246,23 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
 
         # Update controls based on new driver features
         self._update_travel_speed_state()
+        self._sync_unit_system_widgets()
+        self._update_unit_warning()
+
+    def _sync_unit_system_widgets(self):
+        """
+        Synchronizes the unit system selector with the machine model
+        without triggering change handlers.
+        """
+        was_initializing = self._is_initializing
+        self._is_initializing = True
+        try:
+            idx = UNIT_SYSTEM_ORDER.index(self.machine.unit_system)
+            self.unit_system_row.set_selected(idx)
+        except ValueError:
+            pass
+        finally:
+            self._is_initializing = was_initializing
 
     def _on_destroy(self, *args):
         """Disconnects signals to prevent memory leaks."""
@@ -299,25 +334,25 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         """Update the machine name when the text changes."""
         self.machine.set_name(entry_row.get_text())
 
-    def on_travel_speed_changed(self, helper: UnitSpinRowHelper):
+    def on_travel_speed_changed(self, row: SpeedSpinRow):
         """Update the max travel speed when the value changes."""
         if self._is_initializing:
             return
-        value = helper.get_value_in_base_units()
+        value = row.get_value_in_base_units()
         self.machine.set_max_travel_speed(int(value))
 
-    def on_cut_speed_changed(self, helper: UnitSpinRowHelper):
+    def on_cut_speed_changed(self, row: SpeedSpinRow):
         """Update the max cut speed when the value changes."""
         if self._is_initializing:
             return
-        value = helper.get_value_in_base_units()
+        value = row.get_value_in_base_units()
         self.machine.set_max_cut_speed(int(value))
 
-    def on_acceleration_changed(self, helper: UnitSpinRowHelper):
+    def on_acceleration_changed(self, row: AccelerationSpinRow):
         """Update the acceleration when the value changes."""
         if self._is_initializing:
             return
-        value = helper.get_value_in_base_units()
+        value = row.get_value_in_base_units()
         self.machine.set_acceleration(int(value))
 
     def _update_travel_speed_state(self):
@@ -327,11 +362,60 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
 
         if self.machine.dialect and self.machine.dialect.can_g0_with_speed:
             self.travel_speed_row.set_sensitive(True)
-            self.travel_speed_helper.set_subtitle_format(
+            self.travel_speed_row.set_subtitle(
                 _("Maximum rapid movement speed")
             )
         else:
             self.travel_speed_row.set_sensitive(False)
-            self.travel_speed_helper.set_subtitle_format(
+            self.travel_speed_row.set_subtitle(
                 _("Not supported by the driver")
             )
+
+    def on_unit_system_changed(self, combo_row, _):
+        if self._is_initializing:
+            return
+        idx = combo_row.get_selected()
+        if 0 <= idx < len(UNIT_SYSTEM_ORDER):
+            self.machine.set_unit_system(UNIT_SYSTEM_ORDER[idx])
+            self._update_unit_warning()
+
+    def _update_unit_warning(self):
+        """
+        Show a warning when the dialect preamble's G20/G21 unit
+        command does not match the configured machine unit system.
+        """
+        dialect = self.machine.dialect
+        if dialect is None:
+            self.unit_warning_row.set_visible(False)
+            return
+
+        preamble = " ".join(dialect.preamble)
+        has_g20 = "G20" in preamble
+        has_g21 = "G21" in preamble
+        is_imperial = self.machine.unit_system == UnitSystem.IMPERIAL
+
+        mismatch = (is_imperial and has_g21 and not has_g20) or (
+            not is_imperial and has_g20 and not has_g21
+        )
+        if mismatch:
+            if is_imperial:
+                self.unit_warning_row.set_title(
+                    _(
+                        "The preamble contains G21 (millimeters) but "
+                        "the machine unit system is set to imperial. "
+                        "G-code values will be emitted in inches — "
+                        "ensure your preamble matches."
+                    )
+                )
+            else:
+                self.unit_warning_row.set_title(
+                    _(
+                        "The preamble contains G20 (inches) but the "
+                        "machine unit system is set to metric. G-code "
+                        "values will be emitted in millimeters — "
+                        "ensure your preamble matches."
+                    )
+                )
+            self.unit_warning_row.set_visible(True)
+        else:
+            self.unit_warning_row.set_visible(False)

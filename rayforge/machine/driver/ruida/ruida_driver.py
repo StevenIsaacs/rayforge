@@ -1,26 +1,20 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
 )
 
 from ....context import RayforgeContext
-from ....core.capability import PWMCapability
 from ....core.varset import HostnameVar, PortVar, VarSet
 from ....core.varset.hostnamevar import is_valid_hostname_or_ip
 from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
 from ...models.coordinate_system import CoordinateSystem
-from ...models.laser import LaserType
+from ...models.laser import LaserHead, LaserType
 from ...transport import TransportStatus
 from ...transport.udp import UdpTransport
 from ..driver import (
@@ -31,6 +25,7 @@ from ..driver import (
     DriverPrecheckError,
     DriverSetupError,
     Pos,
+    PWMParams,
 )
 from .ruida_client import RuidaClient
 from .ruida_encoder import RuidaEncoder
@@ -40,6 +35,7 @@ if TYPE_CHECKING:
     from raygeo.ops import Ops
 
     from ....core.doc import Doc
+    from ...models.head import Head
     from ...models.laser import Laser
     from ...models.machine import Machine
 
@@ -79,7 +75,7 @@ class RuidaDriver(Driver):
         self._jog_udp_transport = None
         self._client = None
         self._response_received = asyncio.Event()
-        self._connection_task: Optional[asyncio.Task] = None
+        self._connection_task: asyncio.Task | None = None
         self._keep_running = False
         self._is_connected = False
 
@@ -92,13 +88,13 @@ class RuidaDriver(Driver):
         return _("Machine Coordinates")
 
     @property
-    def supported_wcs(self) -> List[str]:
+    def supported_wcs(self) -> list[str]:
         if not self._client:
             return [self.machine_space_wcs]
         return list(self._client.ref_points)
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         if self.host:
             return f"udp://{self.host}:{self.port} (jog: {self.jog_port})"
         return None
@@ -141,18 +137,21 @@ class RuidaDriver(Driver):
             ]
         )
 
-    def get_laser_capabilities(self, laser: "Laser"):
-        if laser.laser_type != LaserType.DIODE:
-            return (
-                PWMCapability(
-                    frequency=laser.pwm_frequency,
-                    max_frequency=laser.max_pwm_frequency,
-                    pulse_width=laser.pulse_width,
-                    min_pulse_width=laser.min_pulse_width,
-                    max_pulse_width=laser.max_pulse_width,
-                ),
-            )
-        return ()
+    def supports_pwm(self, head: "Head") -> bool:
+        return (
+            isinstance(head, LaserHead) and head.laser_type != LaserType.DIODE
+        )
+
+    def get_pwm_params(self, head: "Head") -> PWMParams | None:
+        if not isinstance(head, LaserHead) or not self.supports_pwm(head):
+            return None
+        return PWMParams(
+            frequency=head.pwm_frequency,
+            max_frequency=head.max_pwm_frequency,
+            pulse_width=head.pulse_width,
+            min_pulse_width=head.min_pulse_width,
+            max_pulse_width=head.max_pulse_width,
+        )
 
     @classmethod
     def create_encoder(cls, machine: "Machine") -> "OpsEncoder":
@@ -335,7 +334,7 @@ class RuidaDriver(Driver):
             except asyncio.CancelledError:
                 logger.debug("Connection loop cancelled")
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - connection loop boundary
                 logger.error(f"Connection error: {e}")
                 self._update_connection_status(TransportStatus.ERROR, str(e))
                 await self._disconnect_transports()
@@ -350,17 +349,17 @@ class RuidaDriver(Driver):
         if self._client:
             try:
                 await self._client.disconnect()
-            except Exception as e:
+            except OSError as e:
                 logger.debug(f"Error disconnecting client: {e}")
         if self._jog_udp_transport:
             try:
                 await self._jog_udp_transport.disconnect()
-            except Exception as e:
+            except OSError as e:
                 logger.debug(f"Error disconnecting jog transport: {e}")
         if self._ruida_transport:
             try:
                 await self._ruida_transport.disconnect()
-            except Exception as e:
+            except OSError as e:
                 logger.debug(f"Error disconnecting ruida transport: {e}")
 
     async def _poll_position(self) -> None:
@@ -371,7 +370,7 @@ class RuidaDriver(Driver):
         try:
             logger.debug("Polling position from controller")
             await self._client.get_position()
-        except Exception as e:
+        except (OSError, asyncio.TimeoutError) as e:
             logger.debug(f"Error polling position: {e}")
 
     async def _poll_ref_point_mode(self) -> None:
@@ -384,7 +383,7 @@ class RuidaDriver(Driver):
             if mode and mode != self._machine.active_wcs:
                 logger.debug(f"Ref point mode changed: {mode}")
                 self._machine.set_active_wcs(mode)
-        except Exception as e:
+        except (OSError, asyncio.TimeoutError) as e:
             logger.debug(f"Error polling ref point mode: {e}")
 
     async def run(
@@ -392,9 +391,7 @@ class RuidaDriver(Driver):
         encoded: EncodedOutput,
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         binary_data = encoded.driver_data.get("binary", b"")
         text_lines = [
@@ -403,9 +400,7 @@ class RuidaDriver(Driver):
         op_map = encoded.op_map
 
         if on_command_done is not None:
-            num_ops = 0
-            if op_map and op_map.op_to_machine_code:
-                num_ops = max(op_map.op_to_machine_code.keys()) + 1
+            num_ops = op_map.op_count if op_map else 0
 
             for op_index in range(num_ops):
                 result = on_command_done(op_index)
@@ -452,10 +447,10 @@ class RuidaDriver(Driver):
         assert self._client
         await self._client.stop_process()
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         return True
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         assert self._client
         if axes is None:
             logger.info("Home All", extra=self._log_extra("MACHINE_EVENT"))
@@ -497,7 +492,7 @@ class RuidaDriver(Driver):
         await asyncio.sleep(0)
         self.settings_read.send(self, settings=[])
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return [VarSet(title=_("No settings"))]
 
     async def write_setting(self, key: str, value: Any) -> None:
@@ -516,7 +511,7 @@ class RuidaDriver(Driver):
     async def set_focus_power(self, head: "Laser", percent: float) -> None:
         await self.set_power(head, percent)
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         return True
 
     async def jog(self, speed: int, **deltas: float) -> None:
@@ -530,7 +525,7 @@ class RuidaDriver(Driver):
                 await self._client.rapid_move_axis(0x01, delta_um)
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         """
         Set a reference point offset on the controller.
@@ -555,13 +550,13 @@ class RuidaDriver(Driver):
         await self._client.set_ref_point_offset(wcs_slot, x_um, y_um)
         self.wcs_updated.send(self, offsets={wcs_slot: (x, y, z)})
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         """
         Read reference point offsets from the controller.
 
         Returns offsets for REF0 and REF1 in mm. MACHINE is always zero.
         """
-        offsets: Dict[str, Pos] = {"MACHINE": (0.0, 0.0, 0.0)}
+        offsets: dict[str, Pos] = {"MACHINE": (0.0, 0.0, 0.0)}
 
         if not self._client or not self._is_connected:
             self.wcs_updated.send(self, offsets=offsets)
@@ -578,7 +573,7 @@ class RuidaDriver(Driver):
         self.wcs_updated.send(self, offsets=offsets)
         return offsets
 
-    async def read_parser_state(self) -> Optional[str]:
+    async def read_parser_state(self) -> str | None:
         if not self._client or not self._is_connected:
             return None
         return await self._client.get_ref_point_mode()
@@ -596,7 +591,7 @@ class RuidaDriver(Driver):
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         self.probe_status_changed.send(self, message="Probe not supported")
         return None
 
@@ -617,7 +612,7 @@ class RuidaDriver(Driver):
                 f"Identified: {device}",
                 extra=self._log_extra("MACHINE_EVENT"),
             )
-        except Exception as e:
+        except (OSError, asyncio.TimeoutError) as e:
             logger.debug(f"Could not fetch card info: {e}")
 
     def _on_state_changed(self, sender) -> None:

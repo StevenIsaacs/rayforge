@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional, Tuple, TypeGuard, cast
+from typing import Any, TypeGuard, cast
 
 import numpy as np
 from gi.repository import Gdk, Gtk
@@ -32,7 +32,7 @@ def _is_gradient_spec(val: Any) -> TypeGuard[GradientSpec]:
     )
 
 
-def _is_spec_with_alpha(val: Any) -> TypeGuard[Tuple[ColorAtom, float]]:
+def _is_spec_with_alpha(val: Any) -> TypeGuard[tuple[ColorAtom, float]]:
     """
     Checks if a value conforms to the (ColorAtom, float) variant of ColorSpec.
     """
@@ -54,7 +54,7 @@ class GtkColorResolver:
 
     def __init__(self, widget: Gtk.Widget):
         self._context = widget.get_style_context()
-        self._color_cache: Dict[ColorAtom, Gdk.RGBA] = {}
+        self._color_cache: dict[ColorAtom, Gdk.RGBA] = {}
 
     def resolve(self, spec_dict: ColorSpecDict) -> ColorSet:
         """
@@ -92,7 +92,7 @@ class GtkColorResolver:
         """
         Resolves a single ColorSpec into a concrete (r, g, b, a) tuple.
         """
-        alpha_override: Optional[float] = None
+        alpha_override: float | None = None
         atom: ColorAtom
         if _is_spec_with_alpha(spec):  # Tuple[ColorAtom, float]
             atom, alpha_override = spec

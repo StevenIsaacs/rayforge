@@ -2,19 +2,18 @@ import importlib.resources
 import logging
 import pathlib
 from functools import lru_cache
-from typing import Dict, List, Union
 
-from gi.repository import GdkPixbuf, Gio, Gtk
+from gi.repository import GdkPixbuf, Gio, GLib, Gtk
 
 from ..resources import icons  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-_icon_search_paths: List[pathlib.Path] = []
+_icon_search_paths: list[pathlib.Path] = []
 
 # Global cache for loaded icons to avoid repeated expensive operations
 # We cache the Gio.Icon or icon name, not the Gtk.Image widget itself
-_icon_cache: Dict[str, Union[Gio.Icon, str]] = {}
+_icon_cache: dict[str, Gio.Icon | str] = {}
 
 
 def register_icon_path(path):
@@ -68,7 +67,7 @@ def get_icon(icon_name: str) -> Gtk.Image:
             icon = Gio.FileIcon.new(icon_file)
             _icon_cache[icon_name] = icon
             return Gtk.Image.new_from_gicon(icon)
-        except Exception as e:
+        except GLib.Error as e:
             logger.error(f"Failed to load local icon '{icon_name}': {e}")
             # Continue to fallback...
 
@@ -78,7 +77,7 @@ def get_icon(icon_name: str) -> Gtk.Image:
     return Gtk.Image.new_from_icon_name(icon_name)
 
 
-@lru_cache()
+@lru_cache
 def get_icon_pixbuf(icon_name: str, size: int = 24):
     """
     Retrieve a GdkPixbuf for Cairo rendering, prioritizing a local file
@@ -100,7 +99,7 @@ def get_icon_pixbuf(icon_name: str, size: int = 24):
                 str(path), size, size, True
             )
             return pixbuf
-        except Exception as e:
+        except GLib.Error as e:
             logger.error(f"Failed to load local icon '{icon_name}': {e}")
 
     # Return None if icon couldn't be loaded

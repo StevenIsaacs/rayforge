@@ -1,6 +1,5 @@
 import logging
 from gettext import gettext as _
-from typing import Optional
 
 from gi.repository import Adw, Gtk
 
@@ -15,10 +14,10 @@ logger = logging.getLogger(__name__)
 
 
 class CameraProperties(Adw.PreferencesGroup):
-    def __init__(self, controller: Optional[CameraController], **kwargs):
+    def __init__(self, controller: CameraController | None, **kwargs):
         super().__init__(**kwargs)
-        self._controller: Optional[CameraController] = None
-        self._camera: Optional[Camera] = None
+        self._controller: CameraController | None = None
+        self._camera: Camera | None = None
         self._updating_ui: bool = False
 
         self.set_title(_("Camera Properties"))
@@ -53,6 +52,24 @@ class CameraProperties(Adw.PreferencesGroup):
         self.enabled_row.add_suffix(self.enabled_switch)
         self.enabled_row.set_activatable_widget(self.enabled_switch)
         self.add(self.enabled_row)
+
+        # Camera Wizard — runs the full guided setup (image settings,
+        # lens calibration, alignment) in one flow.
+        self.wizard_button = Gtk.Button(
+            label=_("Start"), valign=Gtk.Align.CENTER
+        )
+        self.wizard_button.add_css_class("suggested-action")
+        self.wizard_button.connect("clicked", self.on_wizard_button_clicked)
+        wizard_row = Adw.ActionRow(
+            title=_("Camera Wizard"),
+            subtitle=_(
+                "Guided setup: image settings, lens calibration, "
+                "and alignment."
+            ),
+        )
+        wizard_row.add_suffix(self.wizard_button)
+        wizard_row.set_activatable_widget(self.wizard_button)
+        self.add(wizard_row)
 
         # Image Settings button
         self.image_settings_button = Gtk.Button(
@@ -120,7 +137,7 @@ class CameraProperties(Adw.PreferencesGroup):
 
         self.set_controller(controller)
 
-    def set_controller(self, controller: Optional[CameraController]):
+    def set_controller(self, controller: CameraController | None):
         if self._camera:
             self._camera.changed.disconnect(self._on_camera_changed)
 
@@ -150,6 +167,7 @@ class CameraProperties(Adw.PreferencesGroup):
             self.image_settings_button.set_sensitive(self._camera.enabled)
             self.lens_calibration_button.set_sensitive(self._camera.enabled)
             self.image_alignment_button.set_sensitive(self._camera.enabled)
+            self.wizard_button.set_sensitive(self._camera.enabled)
             self._update_status_icons()
         finally:
             self._updating_ui = False
@@ -195,6 +213,7 @@ class CameraProperties(Adw.PreferencesGroup):
         self.image_settings_button.set_sensitive(False)
         self.lens_calibration_button.set_sensitive(False)
         self.image_alignment_button.set_sensitive(False)
+        self.wizard_button.set_sensitive(False)
 
     def _on_camera_changed(self, camera, *args):
         logger.debug("Camera model changed, updating UI for %s", camera.name)
@@ -222,6 +241,18 @@ class CameraProperties(Adw.PreferencesGroup):
         if isinstance(window, Gtk.Window):
             dialog = CameraImageSettingsDialog(window, self._controller)
             dialog.present()
+
+    def on_wizard_button_clicked(self, button):
+        """Launch the guided camera wizard."""
+        if not self._controller:
+            return
+        window = self.get_ancestor(Gtk.Window)
+        if not isinstance(window, Gtk.Window):
+            return
+        from .wizard.wizard import CameraWizard
+
+        wizard = CameraWizard(window, self._controller)
+        wizard.present()
 
     def on_lens_calibration_button_clicked(self, button):
         if not self._controller:

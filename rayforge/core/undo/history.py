@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Iterator, List, Optional
 
 from blinker import Signal
 
 from .command import Command
 from .composite_cmd import CompositeCommand
+
+logger = logging.getLogger(__name__)
 
 # Maximum time in seconds between two commands to be considered for coalescing.
 COALESCE_THRESHOLD = 0.5
@@ -44,20 +47,20 @@ class HistoryManager:
     """
 
     def __init__(self):
-        self.undo_stack: List[Command] = []
-        self.redo_stack: List[Command] = []
+        self.undo_stack: list[Command] = []
+        self.redo_stack: list[Command] = []
         self.changed = Signal()
 
         # State for explicit, manual transactions
         self.in_transaction: bool = False
-        self.transaction_commands: List[Command] = []
+        self.transaction_commands: list[Command] = []
         self.transaction_name: str = ""
 
         # Track a checkpoint: None means the current state is at the
         # checkpoint (no changes since checkpoint was set).
         # A Command reference means that command and all commands below it
         # in the undo stack represent the checkpointed state.
-        self._checkpoint: Optional[Command] = None
+        self._checkpoint: Command | None = None
 
     def execute(self, command: Command):
         """
@@ -137,7 +140,7 @@ class HistoryManager:
                 except Exception:
                     # Best effort: log this secondary error. For now, we
                     # continue.
-                    pass
+                    logger.exception("Secondary error during undo")
             self.abort_transaction()
             # The state has changed due to the undos, so we signal.
             self.changed.send(self, command=None)
@@ -194,7 +197,7 @@ class HistoryManager:
         self.transaction_commands = []
         self.transaction_name = ""
 
-    def _coalesce_commands(self, commands: List[Command]) -> Optional[Command]:
+    def _coalesce_commands(self, commands: list[Command]) -> Command | None:
         """
         Internal helper to optimize a list of commands from an explicit
         transaction. If there's only one command, it returns it directly.

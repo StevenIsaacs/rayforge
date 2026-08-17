@@ -1,14 +1,14 @@
 import importlib
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
 class RegistryEntry:
-    hook_name: str
+    hook_name: str | None
     param_name: str
     module_path: str
     attr_name: str
@@ -26,10 +26,10 @@ REGISTRY_TABLE = [
         needs_window=False,
     ),
     RegistryEntry(
-        "register_assemblers",
-        "assembler_registry",
-        "rayforge.pipeline.assembler.registry",
-        "assembler_registry",
+        "register_services",
+        "service_registry",
+        "rayforge.core.service_registry",
+        "service_registry",
         worker_ok=True,
         needs_window=False,
     ),
@@ -97,6 +97,57 @@ REGISTRY_TABLE = [
         worker_ok=False,
         needs_window=True,
     ),
+    RegistryEntry(
+        "register_settings_pages",
+        "settings_page_registry",
+        "rayforge.ui_gtk.settings.registry",
+        "settings_page_registry",
+        worker_ok=False,
+        needs_window=False,
+    ),
+    RegistryEntry(
+        "register_transformer_widgets",
+        "transformer_widget_registry",
+        "rayforge.ui_gtk.doceditor.post_processor.registry",
+        "transformer_widget_registry",
+        worker_ok=False,
+        needs_window=False,
+    ),
+    RegistryEntry(
+        "register_step_settings_pages",
+        "step_settings_page_registry",
+        "rayforge.ui_gtk.doceditor.step_settings.page_registry",
+        "step_settings_page_registry",
+        worker_ok=False,
+        needs_window=False,
+    ),
+    # Extension registries have no dedicated hook: addons populate them
+    # as a side effect of other registration hooks. They are still
+    # listed here so the addon manager can clean them up on unload.
+    RegistryEntry(
+        None,
+        "action_extension_registry",
+        "rayforge.ui_gtk.actions",
+        "action_extension_registry",
+        worker_ok=False,
+        needs_window=False,
+    ),
+    RegistryEntry(
+        None,
+        "context_menu_extension_registry",
+        "rayforge.ui_gtk.canvas2d.context_menu",
+        "context_menu_extension_registry",
+        worker_ok=False,
+        needs_window=False,
+    ),
+    RegistryEntry(
+        None,
+        "property_provider_registry",
+        "rayforge.ui_gtk.doceditor.property_providers",
+        "property_provider_registry",
+        worker_ok=False,
+        needs_window=False,
+    ),
 ]
 
 LAZY_MANAGERS = {
@@ -116,39 +167,25 @@ def _import_registry(entry: RegistryEntry) -> Any:
     return getattr(module, entry.attr_name)
 
 
-def get_registries(headless: bool = False) -> Dict[str, Any]:
+def get_registries(headless: bool = False) -> dict[str, Any]:
     """
     Import and return a dict of all active registries.
 
     The returned dict maps param_name -> registry instance for all
     registries appropriate for the given mode.
     """
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     for entry in REGISTRY_TABLE:
         if headless and not entry.worker_ok:
             continue
         result[entry.param_name] = _import_registry(entry)
-    if not headless:
-        from rayforge.ui_gtk.actions import action_extension_registry
-        from rayforge.ui_gtk.canvas2d.context_menu import (
-            context_menu_extension_registry,
-        )
-        from rayforge.ui_gtk.doceditor.property_providers import (
-            property_provider_registry,
-        )
-
-        result["action_extension_registry"] = action_extension_registry
-        result["context_menu_extension_registry"] = (
-            context_menu_extension_registry
-        )
-        result["property_provider_registry"] = property_provider_registry
     return result
 
 
 def call_registration_hooks(
     plugin_mgr,
     headless: bool = False,
-    registries: Optional[Dict[str, Any]] = None,
+    registries: dict[str, Any] | None = None,
     window_required: bool = False,
 ):
     """
@@ -170,6 +207,8 @@ def call_registration_hooks(
     """
     registries = registries or {}
     for entry in REGISTRY_TABLE:
+        if entry.hook_name is None:
+            continue
         if window_required and not entry.needs_window:
             continue
         if not window_required and entry.needs_window:

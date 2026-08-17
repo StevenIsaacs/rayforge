@@ -1,5 +1,6 @@
 import math
-from typing import TYPE_CHECKING, Iterator, Optional
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 from raygeo.geo.types import Point as GeoPoint
 
@@ -69,7 +70,7 @@ class OnEntityProducer(SnapLineProducer):
         x: float,
         y: float,
         threshold: float,
-    ) -> Optional[GeoPoint]:
+    ) -> GeoPoint | None:
         p1 = registry.get_point(line.p1_idx)
         p2 = registry.get_point(line.p2_idx)
         if not p1 or not p2:
@@ -103,7 +104,7 @@ class OnEntityProducer(SnapLineProducer):
         x: float,
         y: float,
         threshold: float,
-    ) -> Optional[GeoPoint]:
+    ) -> GeoPoint | None:
         center = registry.get_point(arc.center_idx)
         start = registry.get_point(arc.start_idx)
         if not center or not start:
@@ -137,7 +138,7 @@ class OnEntityProducer(SnapLineProducer):
         x: float,
         y: float,
         threshold: float,
-    ) -> Optional[GeoPoint]:
+    ) -> GeoPoint | None:
         center = registry.get_point(circle.center_idx)
         radius_pt = registry.get_point(circle.radius_pt_idx)
         if not center or not radius_pt:

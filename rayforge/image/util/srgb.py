@@ -6,15 +6,13 @@ functions (create_lut_from_color, resize_linear_nd) have no raygeo
 equivalents and are kept in Python.
 """
 
-from typing import Tuple
-
 import cv2
 import numpy as np
 from raygeo.image.srgb import linear_to_srgb, srgb_to_linear
 
 
 def create_lut_from_color(
-    color: Tuple[float, float, float, float],
+    color: tuple[float, float, float, float],
 ) -> np.ndarray:
     """
     Create a 256x4 LUT from a single color (grayscale to color gradient).
@@ -36,6 +34,25 @@ def create_lut_from_color(
         lut[:, c] = ch_uint8.astype(np.float32) / 255.0
 
     lut[:, 3] = a * t
+    return lut
+
+
+def create_alpha_lut_from_color(
+    color: tuple[float, float, float, float],
+) -> np.ndarray:
+    """
+    Create a 256x4 LUT with a constant color and a linear alpha ramp.
+
+    Power is encoded as opacity instead of darkening, so low-power
+    regions read as faint tints of the color rather than near-black
+    shades.  The output values are float32 in [0, 1] sRGB space.
+    """
+    r, g, b, a = color
+    lut = np.zeros((256, 4), dtype=np.float32)
+    lut[:, 0] = r
+    lut[:, 1] = g
+    lut[:, 2] = b
+    lut[:, 3] = a * np.linspace(0, 1, 256, dtype=np.float32)
     return lut
 
 

@@ -18,6 +18,7 @@ module.exports = {
         'application-settings/machines',
         'application-settings/materials',
         'application-settings/recipes',
+        'application-settings/color-rules',
         'application-settings/ai-provider',
         'application-settings/addons',
       ],
@@ -26,7 +27,6 @@ module.exports = {
       type: 'category',
       label: 'Machine Setup',
       items: [
-        'machine/config-wizard',
         'machine/general',
         'machine/hardware',
         'machine/advanced',

@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable
 from gettext import gettext as _
-from typing import Callable, List, Optional, Tuple, Union
+from typing import ClassVar
 
 import cairo
 
@@ -31,20 +32,20 @@ class PathTool(SnapMixin, SketchTool):
 
     ICON = "sketch-bezier-symbolic"
     LABEL = _("Path")
-    SHORTCUTS = ["gp", "gl"]
+    SHORTCUTS: ClassVar[list[str]] = ["gp", "gl"]
     CURSOR_ICON = "sketch-line-symbolic"
 
     def __init__(self, element):
         super().__init__(element)
-        self._preview_state: Optional[BezierPreviewState] = None
-        self._press_pos: Optional[Tuple[float, float]] = None
-        self._waypoint_model_pos: Optional[Tuple[float, float]] = None
-        self._snapped_pid: Optional[int] = None
+        self._preview_state: BezierPreviewState | None = None
+        self._press_pos: tuple[float, float] | None = None
+        self._waypoint_model_pos: tuple[float, float] | None = None
+        self._snapped_pid: int | None = None
         self._dragging: bool = False
         self._in_press: bool = False
-        self._mirror_cp_offset: Optional[Tuple[float, float]] = None
+        self._mirror_cp_offset: tuple[float, float] | None = None
         self._release_handled: bool = False
-        self.hovered_point_id: Optional[int] = None
+        self.hovered_point_id: int | None = None
 
     def is_available(self, target, target_type) -> bool:
         return target is None
@@ -54,7 +55,7 @@ class PathTool(SnapMixin, SketchTool):
 
     def get_active_shortcuts(
         self,
-    ) -> List[Tuple[Union[str, List[str]], str, Optional[Callable[[], bool]]]]:
+    ) -> list[tuple[str | list[str], str, Callable[[], bool] | None]]:
         shortcuts = []
         if self._preview_state is not None:
             shortcuts.extend(
@@ -72,7 +73,7 @@ class PathTool(SnapMixin, SketchTool):
         )
         return shortcuts
 
-    def get_preview_state(self) -> Optional[BezierPreviewState]:
+    def get_preview_state(self) -> BezierPreviewState | None:
         return self._preview_state
 
     def on_deactivate(self):
@@ -183,7 +184,7 @@ class PathTool(SnapMixin, SketchTool):
         self.element.mark_dirty()
         return False
 
-    def _constrain_to_axis(self, mx: float, my: float) -> Tuple[float, float]:
+    def _constrain_to_axis(self, mx: float, my: float) -> tuple[float, float]:
         """Constrain model position to horizontal or vertical from start."""
         if self._preview_state is None:
             return mx, my

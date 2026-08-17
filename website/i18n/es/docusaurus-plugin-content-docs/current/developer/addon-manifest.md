@@ -68,7 +68,7 @@ La versión de API que tu addon utiliza. Debe ser al menos 1 (la versión mínim
 api_version: 9
 ```
 
-Consulta la documentación de [Hooks](./addon-hooks.md#api-version-history) para ver qué cambió en cada versión.
+Consulta la documentación de [Hooks](./addon-hooks.md#historial-de-versiones-de-api) para ver qué cambió en cada versión.
 
 ### `author`
 
@@ -114,6 +114,14 @@ El número de versión de tu addon. Típicamente se determina automáticamente d
 
 ```yaml
 version: 1.0.0
+```
+
+### `maturity`
+
+El nivel de madurez de tu addon. Usa `experimental` para addons que aún no están terminados y pueden tener problemas sin resolver. Los addons experimentales se muestran con un icono dedicado en el administrador de addons. El valor predeterminado es `stable`; omite el campo para addons estables.
+
+```yaml
+maturity: experimental
 ```
 
 ## Puntos de Entrada

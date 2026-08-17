@@ -1,13 +1,12 @@
 import asyncio
 import logging
 import webbrowser
+from collections.abc import Callable, Coroutine
 from concurrent.futures import Future
 from gettext import gettext as _
 from pathlib import Path
-from typing import Callable, Coroutine, List, Optional, Tuple
 
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
-from raygeo.ops.axis import Axis
 
 from .. import __version__, const
 from ..addon_mgr.update_cmd import UpdateCommand
@@ -16,9 +15,7 @@ from ..core.asset_registry import asset_type_registry
 from ..core.group import Group
 from ..core.item import DocItem
 from ..core.registration import call_registration_hooks
-from ..core.step_registry import step_registry
 from ..core.undo import Command, HistoryManager
-from ..core.workpiece import WorkPiece
 from ..doceditor.editor import DocEditor
 from ..machine.cmd import MachineCmd
 from ..machine.driver.driver import DeviceState, DeviceStatus
@@ -26,8 +23,9 @@ from ..machine.driver.dummy import NoDeviceDriver
 from ..machine.models.machine import Machine
 from ..machine.sanity import CheckMode, SanityChecker
 from ..machine.transport import TransportStatus
-from ..pipeline.artifact import JobArtifact, JobArtifactHandle
-from ..pipeline.encoder.gcode import MachineCodeOpMap
+from ..pipeline.artifact import JobArtifact
+from ..pipeline.artifact.handle import BaseArtifactHandle
+from ..pipeline.encoder import MachineCodeOpMap
 from ..shared.tasker import task_mgr
 from ..shared.util.time_format import format_hours_to_hm
 from ..updater import AppUpdateChecker
@@ -57,7 +55,6 @@ from .main_menu import MainMenu
 from .project_cmd import ProjectCmd
 from .settings.settings_dialog import SettingsWindow
 from .shared.gtk import get_monitor_geometry
-from .shared.playback_overlay import PlaybackOverlay
 from .shared.progress_bar import ProgressBar
 from .shared.sanity_check_dialog import SanityCheckDialog
 from .shared.time_estimate_overlay import TimeEstimateOverlay
@@ -66,6 +63,7 @@ from .shared.visibility_overlay import VisibilityOverlay
 from .sim3d import Canvas3D
 from .sim3d import initialized as canvas3d_initialized
 from .sim3d.camera import ViewDirection
+from .sim3d.playback_overlay import PlaybackOverlay
 from .sim3d.viewport import ViewportConfig
 from .toolbar import MainToolbar
 from .view_mode_cmd import ViewModeCmd
@@ -115,23 +113,40 @@ dropdown.machine-dropdown button {
 """
 
 
+class CappedWidthBox(Gtk.Box):
+    """A Gtk.Box whose natural width is capped to a maximum value."""
+
+    def __init__(self, max_natural_width: int, **kwargs):
+        super().__init__(**kwargs)
+        self._max_natural_width = max_natural_width
+
+    def do_measure(self, orientation, for_size):
+        minimum, natural, min_baseline, nat_baseline = super().do_measure(
+            orientation, for_size
+        )
+        if orientation == Gtk.Orientation.HORIZONTAL:
+            minimum = min(minimum, self._max_natural_width)
+            natural = min(natural, self._max_natural_width)
+        return minimum, natural, min_baseline, nat_baseline
+
+
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.set_title(const.APP_NAME)
-        self._current_machine: Optional[Machine] = None  # For signal handling
+        self._current_machine: Machine | None = None  # For signal handling
         self._last_bottom_panel_height = 200
         self._saved_bottom_panel_visible = False
         self._old_doc = None  # Track previous document for signal reconnection
-        self.canvas3d: Optional[Canvas3D] = None
-        self._canvas3d_time_overlay: Optional[TimeEstimateOverlay] = None
+        self.canvas3d: Canvas3D | None = None
+        self._canvas3d_time_overlay: TimeEstimateOverlay | None = None
         self._is_syncing_3d = False
 
         # The ToastOverlay will wrap the main content box
         self.toast_overlay = Adw.ToastOverlay()
         self.set_content(self.toast_overlay)
         # Track active toasts so they can be cleared programmatically
-        self._active_toasts: List[Adw.Toast] = []
+        self._active_toasts: list[Adw.Toast] = []
 
         # The main content box is now the child of the ToastOverlay
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -303,7 +318,6 @@ class MainWindow(Adw.ApplicationWindow):
         self.doc_editor.notification_requested.connect(
             self._on_editor_notification
         )
-        self.doc_editor.document_settled.connect(self._on_document_settled)
         self.doc_editor.saved_state_changed.connect(
             self.project_cmd.on_saved_state_changed
         )
@@ -330,9 +344,11 @@ class MainWindow(Adw.ApplicationWindow):
                 and any(c.enabled for c in config.machine.cameras)
             ),
             show_tabs=True,
+            show_stock=True,
+            show_nogo_zones=bool(config.machine and config.machine.nogo_zones),
             shortcuts=SHORTCUTS,
         )
-        self._surface_vis_overlay.set_margin_end(424)
+        self._surface_vis_overlay.set_margin_end(454)
         self.surface_overlay.add_overlay(self._surface_vis_overlay)
         self._time_estimate_overlay = TimeEstimateOverlay()
         self.surface_overlay.add_overlay(self._time_estimate_overlay)
@@ -374,8 +390,10 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Create a vertical box to organize the content within the
         # ScrolledWindow.
-        right_pane_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        right_pane_box.set_size_request(400, -1)
+        right_pane_box = CappedWidthBox(
+            430, orientation=Gtk.Orientation.VERTICAL
+        )
+        right_pane_box.set_size_request(430, -1)
         self._right_pane.set_child(right_pane_box)
 
         # The WorkflowView will be updated when a layer is activated.
@@ -384,7 +402,6 @@ class MainWindow(Adw.ApplicationWindow):
         self.workflowview = WorkflowView(
             self.doc_editor,
             initial_workflow,
-            step_factories=step_registry.get_factories(),
         )
         self.workflowview.set_margin_top(6)
         self.workflowview.set_margin_end(12)
@@ -470,7 +487,11 @@ class MainWindow(Adw.ApplicationWindow):
             self.on_asset_activated
         )
 
-        self.bottom_panel.set_get_bounds_callback(self._get_selection_bounds)
+        self.bottom_panel.set_get_bounds_callback(
+            self.surface.get_selection_bounds
+        )
+
+        self.doc_editor.document_settled.connect(self._on_document_settled)
 
         self.view_stack.connect(
             "notify::visible-child-name", self._on_view_stack_changed
@@ -492,6 +513,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.doc_editor.pipeline.job_time_updated.connect(
             self._on_job_time_updated
+        )
+        self.doc_editor.pipeline.job_generation_finished.connect(
+            self._on_job_generation_finished_for_preview
         )
 
         # Set up config signals.
@@ -558,53 +582,6 @@ class MainWindow(Adw.ApplicationWindow):
         """Handle click-to-zero mode cancellation."""
         self.bottom_panel.set_click_to_zero_mode(False)
 
-    def _get_selection_bounds(
-        self,
-    ) -> Optional[Tuple[float, float, float, float]]:
-        """
-        Get the bounding box of selected items or workarea bounds.
-
-        Returns:
-            A tuple (min_x, min_y, max_x, max_y) in world coordinates,
-            or None if there is no machine configured.
-        """
-        selected_elements = self.surface.get_selected_elements()
-
-        if selected_elements:
-            workpieces = []
-            for elem in selected_elements:
-                if isinstance(elem.data, WorkPiece):
-                    workpieces.append(elem.data)
-                elif isinstance(elem.data, Group):
-                    workpieces.extend(elem.data.get_descendants(WorkPiece))
-
-            bboxes = []
-            for wp in workpieces:
-                bbox = wp.get_geometry_world_bbox()
-                if bbox is not None:
-                    bboxes.append(bbox)
-
-            if bboxes:
-                min_x = min(b[0] for b in bboxes)
-                min_y = min(b[1] for b in bboxes)
-                max_x = max(b[2] for b in bboxes)
-                max_y = max(b[3] for b in bboxes)
-                return (min_x, min_y, max_x, max_y)
-
-        config = get_context().config
-        machine = config.machine
-        if not machine:
-            return None
-
-        space = machine.get_coordinate_space()
-        workarea_origin_machine = space.get_workarea_origin_in_machine()
-        min_x, min_y = space.machine_point_to_world(*workarea_origin_machine)
-        workarea_w, workarea_h = space.workarea_size
-        max_x = min_x + workarea_w
-        max_y = min_y + workarea_h
-
-        return (min_x, min_y, max_x, max_y)
-
     def _apply_saved_visibility_state(self):
         """
         Applies the saved visibility state for control panel.
@@ -652,7 +629,7 @@ class MainWindow(Adw.ApplicationWindow):
         if child:
             self.main_stack.remove(child)
 
-    def get_stack_page(self, name: str) -> Optional[Gtk.Widget]:
+    def get_stack_page(self, name: str) -> Gtk.Widget | None:
         """Get a page widget from the main stack by name.
 
         Args:
@@ -766,8 +743,8 @@ class MainWindow(Adw.ApplicationWindow):
         try:
             # Check for exceptions during job assembly or submission.
             future.result()
-        except Exception as e:
-            logger.error(f"Job submission failed: {e}", exc_info=True)
+        except Exception:
+            logger.exception("Job submission failed")
             # If the submission failed, the driver's 'job_finished' signal
             # will never fire, so we must stop the live view here to prevent
             # the UI from getting stuck.
@@ -799,8 +776,8 @@ class MainWindow(Adw.ApplicationWindow):
 
         # 2. If 3D playback is active, sync the slider.
         op_map = self.bottom_panel.gcode_viewer.op_map
-        if op_map and line_number in op_map.machine_code_to_op:
-            op_index = op_map.machine_code_to_op[line_number]
+        op_index = op_map.op_for_line(line_number) if op_map else None
+        if op_index is not None:
             self._is_syncing_3d = True
             self._canvas3d_playback.set_playback_position(op_index)
             if self.canvas3d:
@@ -845,7 +822,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.canvas3d.update_scene_from_doc()
 
     def _update_gcode_preview(
-        self, gcode_string: Optional[str], op_map: Optional[MachineCodeOpMap]
+        self, gcode_string: str | None, op_map: MachineCodeOpMap | None
     ):
         """Updates the G-code preview panel from a pre-generated string."""
         if gcode_string is None:
@@ -857,7 +834,7 @@ class MainWindow(Adw.ApplicationWindow):
             self.bottom_panel.gcode_viewer.set_op_map(op_map)
 
     def on_show_3d_view(
-        self, action: Gio.SimpleAction, value: Optional[GLib.Variant]
+        self, action: Gio.SimpleAction, value: GLib.Variant | None
     ):
         """Delegates the view switching logic to the command module."""
         self.view_cmd.toggle_3d_view(action, value)
@@ -926,6 +903,40 @@ class MainWindow(Adw.ApplicationWindow):
         action.set_state(value)
         config = get_context().config
         config.canvas_view.show_grid = is_visible
+        config.changed.send(config)
+
+    def on_show_ops_underlay_state_change(
+        self, action: Gio.SimpleAction, value: GLib.Variant
+    ):
+        is_visible = value.get_boolean()
+        if self.canvas3d is not None:
+            self.canvas3d.set_show_ops_underlay(is_visible)
+        action.set_state(value)
+        config = get_context().config
+        config.canvas_view.show_ops_underlay = is_visible
+        config.changed.send(config)
+
+    def on_show_stock_state_change(
+        self, action: Gio.SimpleAction, value: GLib.Variant
+    ):
+        is_visible = value.get_boolean()
+        self.surface.set_stock_visible(is_visible)
+        if self.canvas3d is not None:
+            self.canvas3d.set_show_stock(is_visible)
+        action.set_state(value)
+        config = get_context().config
+        config.canvas_view.show_stock = is_visible
+        config.changed.send(config)
+
+    def on_show_workpiece_image_state_change(
+        self, action: Gio.SimpleAction, value: GLib.Variant
+    ):
+        is_visible = value.get_boolean()
+        if self.canvas3d is not None:
+            self.canvas3d.set_show_workpiece_image(is_visible)
+        action.set_state(value)
+        config = get_context().config
+        config.canvas_view.show_workpiece_image = is_visible
         config.changed.send(config)
 
     def on_view_top(self, action, param):
@@ -1022,6 +1033,30 @@ class MainWindow(Adw.ApplicationWindow):
             GLib.Variant.new_boolean(cv.show_grid),
         )
 
+        am.get_action("show_ops_underlay").set_state(
+            GLib.Variant.new_boolean(not cv.show_ops_underlay)
+        )
+        self.on_show_ops_underlay_state_change(
+            am.get_action("show_ops_underlay"),
+            GLib.Variant.new_boolean(cv.show_ops_underlay),
+        )
+
+        am.get_action("show_stock").set_state(
+            GLib.Variant.new_boolean(not cv.show_stock)
+        )
+        self.on_show_stock_state_change(
+            am.get_action("show_stock"),
+            GLib.Variant.new_boolean(cv.show_stock),
+        )
+
+        am.get_action("show_workpiece_image").set_state(
+            GLib.Variant.new_boolean(not cv.show_workpiece_image)
+        )
+        self.on_show_workpiece_image_state_change(
+            am.get_action("show_workpiece_image"),
+            GLib.Variant.new_boolean(cv.show_workpiece_image),
+        )
+
         am.get_action("show_tabs").set_state(
             GLib.Variant.new_boolean(not cv.show_tabs)
         )
@@ -1056,8 +1091,7 @@ class MainWindow(Adw.ApplicationWindow):
         if not config.machine:
             return
 
-        # 'param' is likely "all" string from the action setup
-        axes_to_zero = Axis.X | Axis.Y | Axis.Z
+        axes_to_zero = config.machine.available_axes
 
         async def zero_func(ctx):
             # Explicitly check again to satisfy type checker
@@ -1087,18 +1121,22 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_machine_status_changed(self, machine: Machine, state: DeviceState):
         """Called when the active machine's state changes."""
         config = get_context().config
-        if self.needs_homing and config.machine and config.machine.driver:
-            if state.status == DeviceStatus.IDLE:
-                self.needs_homing = False
-                driver = config.machine.driver
-                task_mgr.add_coroutine(lambda ctx: driver.home())
+        if (
+            self.needs_homing
+            and config.machine
+            and config.machine.driver
+            and state.status == DeviceStatus.IDLE
+        ):
+            self.needs_homing = False
+            driver = config.machine.driver
+            task_mgr.add_coroutine(lambda ctx: driver.home())
         self._update_actions_and_ui()
 
     def _on_connection_status_changed(
         self,
         machine: Machine,
         status: TransportStatus,
-        message: Optional[str] = None,
+        message: str | None = None,
     ):
         """Called when the active machine's connection status changes."""
         if (
@@ -1258,8 +1296,8 @@ class MainWindow(Adw.ApplicationWindow):
         sender,
         message: str,
         persistent: bool = False,
-        action_label: Optional[str] = None,
-        action_callback: Optional[Callable] = None,
+        action_label: str | None = None,
+        action_callback: Callable | None = None,
     ):
         """
         Shows a toast when requested by the DocEditor.
@@ -1303,8 +1341,8 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_assembly_for_preview_finished(
         self,
-        handle: Optional[JobArtifactHandle],
-        error: Optional[Exception],
+        handle: BaseArtifactHandle | None,
+        error: Exception | None,
     ):
         """Callback for when the job assembly for previews is complete."""
         if error:
@@ -1314,23 +1352,21 @@ class MainWindow(Adw.ApplicationWindow):
             )
             # Release handle on error if it exists
             if handle:
-                self.doc_editor.pipeline.artifact_manager.release_handle(
-                    handle
-                )
+                self.doc_editor.pipeline.artifact_store.release(handle)
             handle = None
 
         # Schedule the UI update on the main thread, passing the handle.
         # The handle will be released in the main thread callback.
         GLib.idle_add(self._on_previews_ready, handle)
 
-    def _on_previews_ready(self, handle: Optional[JobArtifactHandle]):
+    def _on_previews_ready(self, handle: BaseArtifactHandle | None):
         """
         Main-thread callback to distribute assembled Ops to all consumers.
         This method is responsible for releasing the artifact handle.
         """
-        artifact_manager = self.doc_editor.pipeline.artifact_manager
+        artifact_store = self.doc_editor.pipeline.artifact_store
 
-        with artifact_manager.checkout_handle(handle) as final_artifact:
+        with artifact_store.checkout_handle(handle) as final_artifact:
             if final_artifact is None:
                 if handle is None:
                     self._update_gcode_preview(None, None)
@@ -1385,8 +1421,9 @@ class MainWindow(Adw.ApplicationWindow):
                 when_done=self._on_assembly_for_preview_finished
             )
 
-    def _refresh_gcode_preview(self, sender=None, **kwargs):
-        """Refresh G-code preview when machine settings change."""
+    def _on_job_generation_finished_for_preview(self, sender, **kwargs):
+        """Refresh G-code preview after the pipeline finishes a
+        rebuild (e.g. triggered by a machine setting change)."""
         if self.bottom_panel.is_item_visible("gcode"):
             self.refresh_previews()
 
@@ -1401,23 +1438,34 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self._canvas3d_overlay = Gtk.Overlay()
         self._canvas3d_overlay.set_child(self.canvas3d)
+        machine = get_context().config.machine
         self._canvas3d_vis_overlay = VisibilityOverlay(
             show_workpiece=False,
             show_models=True,
             show_grid=True,
+            show_ops_underlay=True,
+            show_stock=True,
+            show_workpiece_image=True,
+            show_nogo_zones=bool(machine and machine.nogo_zones),
             shortcuts=SHORTCUTS,
         )
-        self._canvas3d_vis_overlay.set_margin_end(424)
+        self._canvas3d_vis_overlay.set_margin_end(454)
         self._canvas3d_overlay.add_overlay(self._canvas3d_vis_overlay)
         self._canvas3d_playback = PlaybackOverlay()
         self.canvas3d.set_playback_overlay(self._canvas3d_playback)
-        self._canvas3d_overlay.add_overlay(self._canvas3d_playback)
         self._canvas3d_playback.step_changed.connect(
             self._on_3d_playback_step_changed
         )
         self._canvas3d_time_overlay = TimeEstimateOverlay()
         self._canvas3d_overlay.add_overlay(self._canvas3d_time_overlay)
-        self.view_stack.add_named(self._canvas3d_overlay, "3d")
+
+        # The playback bar lives below the canvas instead of overlapping it,
+        # so the canvas area stays unobstructed.
+        self._canvas3d_overlay.set_vexpand(True)
+        self._canvas3d_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._canvas3d_page.append(self._canvas3d_overlay)
+        self._canvas3d_page.append(self._canvas3d_playback)
+        self.view_stack.add_named(self._canvas3d_page, "3d")
 
     def _on_document_settled(self, sender):
         """
@@ -1430,8 +1478,8 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_selection_changed(
         self,
         sender,
-        elements: List[CanvasElement],
-        active_element: Optional[CanvasElement],
+        elements: list[CanvasElement],
+        active_element: CanvasElement | None,
     ):
         """Handles the 'selection-changed' signal from the WorkSurface."""
         # Get all selected DocItems (WorkPieces, Groups, etc.)
@@ -1478,6 +1526,12 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self._surface_vis_overlay.set_camera_visible(has_cameras)
 
+        # Show/hide no-go zone toggle based on whether the machine has any
+        has_nogo_zones = bool(config.machine and config.machine.nogo_zones)
+        self._surface_vis_overlay.set_nogo_visible(has_nogo_zones)
+        if self.canvas3d is not None:
+            self._canvas3d_vis_overlay.set_nogo_visible(has_nogo_zones)
+
         self.surface.update_from_doc()
         self._update_macros_menu()
 
@@ -1501,9 +1555,6 @@ class MainWindow(Adw.ApplicationWindow):
                 self._on_job_finished
             )
             self._current_machine.changed.disconnect(self._update_macros_menu)
-            self._current_machine.changed.disconnect(
-                self._refresh_gcode_preview
-            )
             self._current_machine.machine_hours.changed.disconnect(
                 self._on_machine_hours_changed
             )
@@ -1515,7 +1566,8 @@ class MainWindow(Adw.ApplicationWindow):
             # controller (and its signal) is already gone, so there is
             # nothing left to detach.
             if self._current_machine.has_controller:
-                self._current_machine.controller.laser_power_changed.disconnect(  # noqa: E501
+                controller = self._current_machine.controller
+                controller.laser_power_changed.disconnect(
                     self._on_laser_power_changed
                 )
 
@@ -1531,7 +1583,6 @@ class MainWindow(Adw.ApplicationWindow):
             )
             self._current_machine.job_finished.connect(self._on_job_finished)
             self._current_machine.changed.connect(self._update_macros_menu)
-            self._current_machine.changed.connect(self._refresh_gcode_preview)
             self._current_machine.machine_hours.changed.connect(
                 self._on_machine_hours_changed
             )
@@ -1558,6 +1609,7 @@ class MainWindow(Adw.ApplicationWindow):
             style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         else:  # "system" or any other invalid value
             style_manager.set_color_scheme(Adw.ColorScheme.DEFAULT)
+        get_context().theme.bind(self)
 
     def on_running_tasks_changed(self, sender, tasks, progress):
         self._update_actions_and_ui()
@@ -1733,9 +1785,9 @@ class MainWindow(Adw.ApplicationWindow):
                 )
 
             # Update focus button sensitivity
-            head = active_machine.get_default_head()
+            head = active_machine.get_default_laser_head()
             can_focus = (
-                head
+                head is not None
                 and head.focus_power_percent > 0
                 and not is_job_or_task_active
             )
@@ -1783,6 +1835,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
         am.get_action("select_all").set_enabled(doc.has_workpiece())
         am.get_action("duplicate").set_enabled(has_selection)
+        am.get_action("rename-item").set_enabled(has_selection)
         am.get_action("remove").set_enabled(has_selection)
         am.get_action("clear").set_enabled(doc.has_workpiece())
 
@@ -1948,9 +2001,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         existing = self.doc_editor.pipeline.get_existing_job_handle()
         if existing is not None:
-            artifact_manager = self.doc_editor.pipeline.artifact_manager
+            artifact_store = self.doc_editor.pipeline.artifact_store
             try:
-                with artifact_manager.checkout_handle(existing) as artifact:
+                with artifact_store.checkout_handle(existing) as artifact:
                     if isinstance(artifact, JobArtifact):
                         _handle_ops(artifact.ops)
                         return
@@ -1964,8 +2017,8 @@ class MainWindow(Adw.ApplicationWindow):
                 proceed_callback()
                 return
             try:
-                artifact_manager = self.doc_editor.pipeline.artifact_manager
-                with artifact_manager.checkout_handle(handle) as artifact:
+                artifact_store = self.doc_editor.pipeline.artifact_store
+                with artifact_store.checkout_handle(handle) as artifact:
                     if isinstance(artifact, JobArtifact):
                         _handle_ops(artifact.ops)
                         return
@@ -2146,7 +2199,10 @@ class MainWindow(Adw.ApplicationWindow):
             return
 
         is_focus_on = value.get_boolean()
-        head = config.machine.get_default_head()
+        head = config.machine.get_default_laser_head()
+        if head is None:
+            action.set_state(GLib.Variant.new_boolean(False))
+            return
 
         if is_focus_on:
             self.machine_cmd.set_focus_power(head, head.focus_power_percent)
@@ -2167,7 +2223,7 @@ class MainWindow(Adw.ApplicationWindow):
         is_on = percent > 0
         focus_action.set_state(GLib.Variant.new_boolean(is_on))
 
-    def on_elements_deleted(self, sender, elements: List[CanvasElement]):
+    def on_elements_deleted(self, sender, elements: list[CanvasElement]):
         """Handles the deletion signal from the WorkSurface."""
         items_to_delete = [
             elem.data for elem in elements if isinstance(elem.data, DocItem)
@@ -2177,12 +2233,12 @@ class MainWindow(Adw.ApplicationWindow):
                 items_to_delete, "Delete item(s)"
             )
 
-    def on_cut_requested(self, sender, items: List[DocItem]):
+    def on_cut_requested(self, sender, items: list[DocItem]):
         """Handles the 'cut-requested' signal from the WorkSurface."""
         self.doc_editor.edit.cut_items(items)
         self._update_actions_and_ui()
 
-    def on_copy_requested(self, sender, items: List[DocItem]):
+    def on_copy_requested(self, sender, items: list[DocItem]):
         """
         Handles the 'copy-requested' signal from the WorkSurface.
         """
@@ -2211,7 +2267,7 @@ class MainWindow(Adw.ApplicationWindow):
         """
         self.surface.select_all()
 
-    def on_duplicate_requested(self, sender, items: List[DocItem]):
+    def on_duplicate_requested(self, sender, items: list[DocItem]):
         """
         Handles the 'duplicate-requested' signal from the WorkSurface.
         """
@@ -2238,6 +2294,20 @@ class MainWindow(Adw.ApplicationWindow):
                 list(selection)
             )
             self.surface.select_items(newly_duplicated)
+
+    def on_menu_rename(self, action, param):
+        selection = self.surface.get_selected_items()
+        if not selection:
+            return
+        item = selection[0]
+        if not isinstance(item, DocItem):
+            return
+        # Make sure the user can see the rename editor.
+        self.bottom_panel.set_visible(True)
+        area = self.bottom_panel.dock_layout.find_item_area("layers")
+        if area:
+            area.set_active_item("layers")
+        self.bottom_panel.layers_tab.start_item_rename(item)
 
     def on_menu_remove(self, action, param):
         items = self.surface.get_selected_items()

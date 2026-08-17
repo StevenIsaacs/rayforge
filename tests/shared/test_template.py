@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import pytest
 
@@ -22,7 +22,7 @@ class TestTemplateFormatter:
         class MockMachine:
             name = "MyLaser"
             axis_extents = (200, 150)
-            macros = {
+            macros: ClassVar[dict[str, MockMacro]] = {
                 "macro1_uid": MockMacro(
                     name="First Macro", code=["G0 X10 Y10"]
                 ),
@@ -183,8 +183,10 @@ class TestTemplateFormatter:
         macro = Macro(name="Circular1", code=["@include(Circular2)"])
         result = formatter.expand_macro(macro)
         assert result == [
-            "; ERROR: Circular dependency detected. Macro 'Circular1'"
-            " was included again."
+            (
+                "; ERROR: Circular dependency detected. Macro 'Circular1'"
+                " was included again."
+            )
         ]
 
     def test_float_formatting_locale_independent(self, context_and_machine):

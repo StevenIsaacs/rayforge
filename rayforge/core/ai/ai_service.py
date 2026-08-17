@@ -1,5 +1,4 @@
 import logging
-from typing import Dict, List, Optional
 
 from blinker import Signal
 
@@ -23,23 +22,23 @@ class AIService:
     """
 
     def __init__(self):
-        self._providers: Dict[str, AIProvider] = {}
-        self._configs: Dict[str, AIProviderConfig] = {}
-        self._default_provider_id: Optional[str] = None
+        self._providers: dict[str, AIProvider] = {}
+        self._configs: dict[str, AIProviderConfig] = {}
+        self._default_provider_id: str | None = None
         self.changed = Signal()
 
     @property
-    def providers(self) -> Dict[str, AIProviderConfig]:
+    def providers(self) -> dict[str, AIProviderConfig]:
         """Return a copy of provider configs."""
         return dict(self._configs)
 
     @property
-    def default_provider_id(self) -> Optional[str]:
+    def default_provider_id(self) -> str | None:
         """Return the ID of the default provider."""
         return self._default_provider_id
 
     @default_provider_id.setter
-    def default_provider_id(self, value: Optional[str]):
+    def default_provider_id(self, value: str | None):
         if value and value not in self._configs:
             raise ValueError(f"Unknown provider: {value}")
         self._default_provider_id = value
@@ -92,7 +91,7 @@ class AIService:
             else:
                 loop.run_until_complete(old_provider.close())
         except Exception:
-            pass
+            logger.debug("Failed to close old AI provider", exc_info=True)
 
         provider = self._create_provider(config)
         self._providers[config.id] = provider
@@ -121,7 +120,7 @@ class AIService:
             else:
                 loop.run_until_complete(provider.close())
         except Exception:
-            pass
+            logger.debug("Failed to close AI provider", exc_info=True)
 
         del self._providers[provider_id]
         del self._configs[provider_id]
@@ -139,8 +138,8 @@ class AIService:
         raise ValueError(f"Unknown provider type: {config.provider_type}")
 
     def get_provider(
-        self, provider_id: Optional[str] = None
-    ) -> Optional[AIProvider]:
+        self, provider_id: str | None = None
+    ) -> AIProvider | None:
         """
         Get a provider by ID, or the default provider.
 
@@ -157,13 +156,13 @@ class AIService:
                 return self._providers[pid]
         return None
 
-    def get_config(self, provider_id: str) -> Optional[AIProviderConfig]:
+    def get_config(self, provider_id: str) -> AIProviderConfig | None:
         """Get a provider configuration by ID."""
         return self._configs.get(provider_id)
 
     async def chat(
-        self, messages: List, provider_id: Optional[str] = None, **kwargs
-    ) -> Optional[ChatResponse]:
+        self, messages: list, provider_id: str | None = None, **kwargs
+    ) -> ChatResponse | None:
         """
         Send a chat request using the specified or default provider.
 
@@ -181,7 +180,7 @@ class AIService:
         return await provider.chat(messages, **kwargs)
 
     async def chat_stream(
-        self, messages: List, provider_id: Optional[str] = None, **kwargs
+        self, messages: list, provider_id: str | None = None, **kwargs
     ):
         """
         Stream a chat response using the specified or default provider.
@@ -200,7 +199,7 @@ class AIService:
         async for chunk in provider.chat_stream(messages, **kwargs):
             yield chunk
 
-    def load_from_config(self, data: Dict):
+    def load_from_config(self, data: dict):
         """
         Load providers from persisted configuration.
 
@@ -212,14 +211,14 @@ class AIService:
             try:
                 config = AIProviderConfig.from_dict(provider_data)
                 self.add_provider(config)
-            except Exception as e:
+            except ValueError as e:
                 logger.error(f"Failed to load provider: {e}")
 
         default_id = data.get("default_provider")
         if default_id and default_id in self._configs:
             self._default_provider_id = default_id
 
-    def to_dict(self) -> Dict:
+    def to_dict(self) -> dict:
         """
         Serialize service state for persistence.
 
@@ -236,5 +235,5 @@ class AIService:
         for provider in self._providers.values():
             try:
                 await provider.close()
-            except Exception as e:
+            except (OSError, TimeoutError, ValueError) as e:
                 logger.warning(f"Error closing provider: {e}")

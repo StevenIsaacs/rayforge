@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any
 
 from raygeo.geo.types import Point
 
@@ -24,7 +24,7 @@ class PreviewState:
     after calling cleanup_preview().
     """
 
-    def get_preview_point_ids(self) -> Set[int]:
+    def get_preview_point_ids(self) -> set[int]:
         """
         Returns IDs of temporary preview points that shouldn't be snapped to.
 
@@ -38,7 +38,7 @@ class PreviewState:
         """
         return set()
 
-    def get_hidden_point_ids(self) -> Set[int]:
+    def get_hidden_point_ids(self) -> set[int]:
         """
         Returns IDs of points that should be hidden during preview.
 
@@ -51,9 +51,7 @@ class PreviewState:
         """
         return set()
 
-    def get_dimensions(
-        self, registry: "EntityRegistry"
-    ) -> List["DimensionData"]:
+    def get_dimensions(self, registry: EntityRegistry) -> list[DimensionData]:
         """
         Returns dimension data for live preview rendering.
 
@@ -76,20 +74,18 @@ class SketchChangeCommand(Command):
     Includes functionality to snapshot geometry state for precise undo.
     """
 
-    def __init__(self, sketch: "Sketch", name: str):
+    def __init__(self, sketch: Sketch, name: str):
         super().__init__(name)
         self.sketch = sketch
         # Stores ( {point_id: (x, y)}, {entity_id: state_dict} )
-        self._snapshot: Optional[tuple[Dict[int, Point], Dict[int, Any]]] = (
-            None
-        )
+        self._snapshot: tuple[dict[int, Point], dict[int, Any]] | None = None
 
     @staticmethod
     def start_preview(
-        registry: "EntityRegistry",
+        registry: EntityRegistry,
         x: float,
         y: float,
-        snapped_pid: Optional[int] = None,
+        snapped_pid: int | None = None,
         **kwargs,
     ) -> PreviewState:
         """
@@ -112,7 +108,7 @@ class SketchChangeCommand(Command):
 
     @staticmethod
     def update_preview(
-        registry: "EntityRegistry",
+        registry: EntityRegistry,
         preview_state: PreviewState,
         x: float,
         y: float,
@@ -132,7 +128,7 @@ class SketchChangeCommand(Command):
 
     @staticmethod
     def cleanup_preview(
-        registry: "EntityRegistry", preview_state: PreviewState
+        registry: EntityRegistry, preview_state: PreviewState
     ) -> None:
         """
         Removes all preview entities and points from the registry.

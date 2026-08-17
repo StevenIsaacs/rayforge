@@ -1,6 +1,5 @@
 import logging
 import math
-from typing import Dict, Optional, Tuple
 
 import cairo
 from gi.repository import Gdk, GLib
@@ -11,9 +10,9 @@ from .region import ROTATE_HANDLES, ElementRegion
 
 logger = logging.getLogger(__name__)
 
-_cursor_cache: Dict[int, Gdk.Cursor] = {}
-_arc_cursor_cache: Dict[int, Gdk.Cursor] = {}
-_tool_cursor_cache: Dict[Tuple[str, ColorRGBA], Gdk.Cursor] = {}
+_cursor_cache: dict[int, Gdk.Cursor] = {}
+_arc_cursor_cache: dict[int, Gdk.Cursor] = {}
+_tool_cursor_cache: dict[tuple[str, ColorRGBA], Gdk.Cursor] = {}
 
 # This map defines the base angle for each resize handle, using a standard
 # counter-clockwise (CCW) convention where 0 degrees is to the right.
@@ -41,9 +40,9 @@ _region_angles = {
 
 def get_tool_cursor(
     icon_name: str,
-    color: Optional[ColorRGBA] = None,
+    color: ColorRGBA | None = None,
     fallback_cursor_name: str = "crosshair",
-) -> Optional[Gdk.Cursor]:
+) -> Gdk.Cursor | None:
     """
     Creates or retrieves from cache a custom cursor with a tool icon.
     The cursor consists of a crosshair with the specified icon at the
@@ -287,7 +286,7 @@ def get_rotated_arc_cursor(angle_deg: float) -> Gdk.Cursor:
 
 def get_cursor_for_region(
     region: ElementRegion, angle: float, absolute: bool = False
-) -> Optional[Gdk.Cursor]:
+) -> Gdk.Cursor | None:
     base_angle = _region_angles.get(region, 0) if not absolute else 0
     if region is None or region == ElementRegion.NONE:
         return Gdk.Cursor.new_from_name("default")

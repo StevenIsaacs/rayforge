@@ -1,6 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, ClassVar, Dict, Optional, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from blinker import Signal
 
@@ -21,9 +21,9 @@ class IAsset(Protocol):
     is_draggable_to_canvas: ClassVar[bool]
     type_display_name: ClassVar[str]
     can_edit: ClassVar[bool]
-    add_action: ClassVar[Optional[str]]
-    activate_action: ClassVar[Optional[str]]
-    edit_item_action: ClassVar[Optional[str]]
+    add_action: ClassVar[str | None]
+    activate_action: ClassVar[str | None]
+    edit_item_action: ClassVar[str | None]
 
     @property
     def uid(self) -> str:
@@ -43,12 +43,12 @@ class IAsset(Protocol):
         """Signal emitted when the asset changes."""
         ...
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes the asset to a dictionary."""
         ...
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IAsset":
+    def from_dict(cls, data: dict[str, Any]) -> "IAsset":
         """Deserializes the asset from a dictionary."""
         ...
 
@@ -57,7 +57,7 @@ class IAsset(Protocol):
         """Indicates if this asset should be hidden from UI."""
         return False
 
-    def get_thumbnail(self, size: int) -> Optional[bytes]:
+    def get_thumbnail(self, size: int) -> bytes | None:
         """
         Returns PNG thumbnail bytes at the given max pixel size,
         or None if no thumbnail is available.
@@ -76,18 +76,18 @@ class UnknownAsset(IAsset):
     is_draggable_to_canvas: ClassVar[bool] = False
     type_display_name: ClassVar[str] = "Unknown Asset"
     can_edit: ClassVar[bool] = False
-    add_action: ClassVar[Optional[str]] = None
-    activate_action: ClassVar[Optional[str]] = None
-    edit_item_action: ClassVar[Optional[str]] = None
+    add_action: ClassVar[str | None] = None
+    activate_action: ClassVar[str | None] = None
+    edit_item_action: ClassVar[str | None] = None
 
     _original_type: str = field(init=False)
-    _data: Dict[str, Any] = field(init=False, default_factory=dict)
+    _data: dict[str, Any] = field(init=False, default_factory=dict)
     _uid: str = field(init=False, default_factory=lambda: str(uuid.uuid4()))
     _name: str = field(init=False)
     _updated: Signal = field(init=False, default_factory=Signal)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "UnknownAsset":
+    def from_dict(cls, data: dict[str, Any]) -> "UnknownAsset":
         """Deserializes a dictionary into an UnknownAsset instance."""
         instance = cls.__new__(cls)
         instance._original_type = data.get("type", "unknown")
@@ -117,10 +117,10 @@ class UnknownAsset(IAsset):
         self._name = value
         self._data["name"] = value
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serializes UnknownAsset to the original dictionary."""
         return self._data
 
-    def get_thumbnail(self, size: int) -> Optional[bytes]:
+    def get_thumbnail(self, size: int) -> bytes | None:
         """No thumbnail available for unknown assets."""
         return None

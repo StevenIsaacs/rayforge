@@ -40,13 +40,13 @@ class TestCompileLineTo:
         assert len(artifact.vertex_layers) == 1
         vl = artifact.vertex_layers[0]
         assert not vl.is_rotary
-        pv = vl.powered_verts.reshape(-1, 3)
+        pv = vl.powered_verts.to_numpy().reshape(-1, 3)
         assert pv.shape[0] == 2
         np.testing.assert_allclose(pv[0], [1.0, 2.0, 0.0])
         np.testing.assert_allclose(pv[1], [4.0, 6.0, 0.0])
 
-        pvv = vl.power_values
-        assert pvv.shape[0] == 2
+        pv_attr = vl.powered_attrib.to_numpy()
+        assert pv_attr.size == 8
 
     def test_travel_move(self):
         ops = Ops()
@@ -61,7 +61,7 @@ class TestCompileLineTo:
         assert len(artifact.vertex_layers) == 1
         vl = artifact.vertex_layers[0]
         assert not vl.is_rotary
-        tv = vl.travel_verts.reshape(-1, 3)
+        tv = vl.travel_verts.to_numpy().reshape(-1, 3)
         assert tv.shape[0] == 2
         np.testing.assert_allclose(tv[0], [1.0, 0.0, 0.01])
         np.testing.assert_allclose(tv[1], [5.0, 0.0, 0.01])
@@ -80,13 +80,13 @@ class TestCompileScanline:
         artifact = compile_scene(assembled, config)
 
         vl = artifact.vertex_layers[0]
-        zpv = vl.zero_power_verts.reshape(-1, 3)
+        zpv = vl.zero_power_verts.to_numpy().reshape(-1, 3)
         assert zpv.shape[0] == 4
 
         assert len(artifact.overlay_layers) == 1
         ol = artifact.overlay_layers[0]
         assert not ol.is_rotary
-        ov_pos = ol.positions.reshape(-1, 3)
+        ov_pos = ol.positions.to_numpy().reshape(-1, 3)
         assert ov_pos.shape[0] == 2
 
     def test_scanline_overlay_power_values(self):
@@ -102,9 +102,9 @@ class TestCompileScanline:
 
         assert len(artifact.overlay_layers) == 1
         ol = artifact.overlay_layers[0]
-        ov_pow = ol.power_values
-        assert ov_pow.shape[0] == 2
-        assert all(p > 0 for p in ov_pow)
+        ov_attr = ol.overlay_attrib.to_numpy()
+        assert ov_attr.size == 8
+        assert all(p > 0 for p in ov_attr[0::4])
 
 
 class TestCompileRotary:
@@ -123,11 +123,13 @@ class TestCompileRotary:
         assert len(artifact.vertex_layers) == 1
         vl = artifact.vertex_layers[0]
         assert vl.is_rotary
-        pv = vl.powered_verts.reshape(-1, 3)
+        pv = vl.powered_verts.to_numpy().reshape(-1, 3)
         assert pv.shape[0] == 2
 
         assert abs(pv[0, 1]) < 1e-5
-        assert abs(pv[0, 2] - diameter / 2) < 1e-3
+        # Toolpath lines wrap at radius + MAX_SAGITTA (0.05mm) so the
+        # chords stay on/above the faceted cylinder surface.
+        assert abs(pv[0, 2] - (diameter / 2 + 0.05)) < 1e-3
 
 
 class TestCompileCancel:
@@ -170,6 +172,47 @@ class TestCompileEmpty:
         assert len(artifact.overlay_layers) == 0
 
 
+class TestTextureLineWidth:
+    """End-to-end: the generated texture scales with the laser dot width."""
+
+    def _scanline_ops(self, head_uid="head1"):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start("layer1")
+        ops.set_head(head_uid)
+        for y in range(0, 30, 5):
+            ops.move_to(0.0, y, 0.0)
+            ops.scan_to(20.0, y, 0.0, bytearray([255] * 20))
+        ops.layer_end("layer1")
+        ops.job_end()
+        return ops
+
+    def _compile(self, dot_width=None, head_uid="head1"):
+        config = make_test_config(
+            layer_configs={"layer1": make_flat_layer_config()},
+        )
+        if dot_width is not None:
+            config.laser_dot_widths_mm = {head_uid: dot_width}
+        return compile_scene(self._scanline_ops(head_uid), config)
+
+    @staticmethod
+    def _interior_thickness(texture):
+        tex = np.asarray(texture)
+        col = np.argwhere(tex[:, 0].astype(bool))
+        runs = np.split(col[:, 0], np.where(np.diff(col[:, 0]) > 1)[0] + 1)
+        return max(len(run) for run in runs)
+
+    def test_texture_line_width_uses_default_without_config(self):
+        artifact = self._compile()
+        assert len(artifact.texture_layers) == 1
+        assert (
+            self._interior_thickness(
+                artifact.texture_layers[0].power_texture.to_numpy()
+            )
+            > 1
+        )
+
+
 class TestCompileMultiLayer:
     def test_flat_and_rotary_separated(self):
         ops_flat = Ops()
@@ -199,13 +242,16 @@ class TestCompileMultiLayer:
 
         assert len(artifact.vertex_layers) == 2
 
-        flat_vl = [vl for vl in artifact.vertex_layers if not vl.is_rotary][0]
-        pv_flat = flat_vl.powered_verts.reshape(-1, 3)
+        flat_vl = next(vl for vl in artifact.vertex_layers if not vl.is_rotary)
+        pv_flat = flat_vl.powered_verts.to_numpy().reshape(-1, 3)
         assert pv_flat[0, 2] == 0.0
 
-        rot_vl = [vl for vl in artifact.vertex_layers if vl.is_rotary][0]
-        pv_rot = rot_vl.powered_verts.reshape(-1, 3)
-        assert abs(pv_rot[0, 2] - 25.0) < 1e-3
+        rot_vl = next(vl for vl in artifact.vertex_layers if vl.is_rotary)
+        pv_rot = rot_vl.powered_verts.to_numpy().reshape(-1, 3)
+        # Rotary toolpath lines are wrapped at radius + MAX_SAGITTA
+        # (0.05mm) so their chords stay on/above the faceted cylinder
+        # surface in orthographic views.
+        assert abs(pv_rot[0, 2] - 25.05) < 1e-3
 
 
 class TestPoweredOffsets:
@@ -290,8 +336,8 @@ class TestPoweredOffsets:
         artifact = compile_scene(assembled, config)
 
         vl = artifact.vertex_layers[0]
-        n_powered = vl.powered_verts.size // 3
-        n_travel = vl.travel_verts.size // 3
+        n_powered = vl.powered_verts.to_numpy().size // 3
+        n_travel = vl.travel_verts.to_numpy().size // 3
         assert vl.powered_cmd_offsets[-1] == n_powered
         assert vl.travel_cmd_offsets[-1] == n_travel
 
@@ -325,7 +371,7 @@ class TestOverlayOffsets:
         assert len(artifact.overlay_layers) == 1
         ol = artifact.overlay_layers[0]
 
-        ov_pos = ol.positions.reshape(-1, 3)
+        ov_pos = ol.positions.to_numpy().reshape(-1, 3)
         assert ov_pos.shape[0] == 4
 
         off = ol.cmd_offsets
@@ -365,5 +411,5 @@ class TestOverlayOffsets:
         assert off[0] == 0
         assert off[-1] == 4
 
-        ov_pos = ol.positions.reshape(-1, 3)
+        ov_pos = ol.positions.to_numpy().reshape(-1, 3)
         assert ov_pos.shape[0] == 4

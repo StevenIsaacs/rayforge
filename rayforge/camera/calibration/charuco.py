@@ -1,6 +1,5 @@
 import logging
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -77,7 +76,7 @@ class CharucoBoard:
         return (self.config.squares_x - 1) * (self.config.squares_y - 1)
 
     @property
-    def card_size_mm(self) -> Tuple[float, float]:
+    def card_size_mm(self) -> tuple[float, float]:
         return (
             self.config.squares_x * self.config.square_length_mm,
             self.config.squares_y * self.config.square_length_mm,
@@ -88,8 +87,8 @@ class CharucoBoard:
         cls,
         card_width_mm: float,
         card_height_mm: float,
-        camera_resolution: Tuple[int, int] = (640, 480),
-        surface_size_mm: Optional[Tuple[float, float]] = None,
+        camera_resolution: tuple[int, int] = (640, 480),
+        surface_size_mm: tuple[float, float] | None = None,
     ) -> CharucoConfig:
         min_marker_pixels = cls.MIN_MARKER_PIXELS
         min_dim = min(camera_resolution)
@@ -135,7 +134,7 @@ class CharucoBoard:
 
     def generate_image(
         self,
-        output_size: Optional[Tuple[int, int]] = None,
+        output_size: tuple[int, int] | None = None,
         margin_px: int = 10,
         border_bits: int = 1,
     ) -> np.ndarray:
@@ -159,7 +158,7 @@ class CharucoBoard:
 
     def detect(
         self, image: np.ndarray
-    ) -> Optional[Tuple[List[Tuple[float, float]], List[int]]]:
+    ) -> tuple[list[tuple[float, float]], list[int]] | None:
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
@@ -177,22 +176,33 @@ class CharucoBoard:
         if charuco_corners is None or charuco_ids is None:
             return None
 
-        if len(charuco_corners) < 4:
+        try:
+            corners_array = np.asarray(
+                charuco_corners, dtype=np.float32
+            ).reshape(-1, 2)
+            ids_array = np.asarray(charuco_ids).reshape(-1)
+        except (TypeError, ValueError) as error:
+            logger.debug("Invalid ChArUco detection result: %s", error)
             return None
 
-        corners = [
-            (float(pt[0][0]), float(pt[0][1])) for pt in charuco_corners
-        ]
-        ids = [int(i[0]) for i in charuco_ids]
+        if len(corners_array) < 4 or len(corners_array) != len(ids_array):
+            return None
+
+        try:
+            corners = [(float(x), float(y)) for x, y in corners_array]
+            ids = [int(value) for value in ids_array]
+        except (TypeError, ValueError, OverflowError) as error:
+            logger.debug("Invalid ChArUco detection result: %s", error)
+            return None
 
         return corners, ids
 
     def draw_detection(
         self,
         image: np.ndarray,
-        corners: List[Tuple[float, float]],
-        ids: List[int],
-        color: Tuple[int, int, int] = (0, 255, 0),
+        corners: list[tuple[float, float]],
+        ids: list[int],
+        color: tuple[int, int, int] = (0, 255, 0),
     ) -> np.ndarray:
         result = image.copy()
 

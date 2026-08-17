@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 import math
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
-from raygeo.ops import Ops
+from raygeo.ops.transform.overscan import OverscanSpec
 
-from rayforge.pipeline.transformer.base import ExecutionPhase, OpsTransformer
-from rayforge.shared.tasker.progress import ProgressContext
+from rayforge.pipeline.transformer.base import OpsTransformer
 
 if TYPE_CHECKING:
     from raygeo.geo import Geometry
@@ -29,6 +28,8 @@ class OverscanTransformer(OpsTransformer):
     replaces it with a physically correct toolpath that includes lead-in and
     lead-out moves at zero power.
     """
+
+    SPEC_NAME = "overscan"
 
     def __init__(
         self, enabled: bool = True, distance_mm: float = 2.0, auto: bool = True
@@ -68,16 +69,7 @@ class OverscanTransformer(OpsTransformer):
             2 * max_acceleration * safety_factor
         )
 
-        # Ensure minimum distance for practical purposes
-        return max(0.5, distance_mm)
-
-    @property
-    def execution_phase(self) -> ExecutionPhase:
-        """
-        Overscan must run before path optimization to ensure travel moves
-        are planned between the final, extended endpoints of the toolpaths.
-        """
-        return ExecutionPhase.POST_PROCESSING
+        return distance_mm
 
     @property
     def distance_mm(self) -> float:
@@ -108,22 +100,17 @@ class OverscanTransformer(OpsTransformer):
     def description(self) -> str:
         return _("Extends raster lines to ensure constant engraving speed.")
 
-    def run(
+    def to_spec(
         self,
-        ops: Ops,
-        workpiece: Optional[WorkPiece] = None,
-        context: Optional[ProgressContext] = None,
-        stock_geometries: Optional[List["Geometry"]] = None,
-        settings: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        if not self.enabled or math.isclose(self.distance_mm, 0.0):
-            return
+        workpiece: WorkPiece | None,
+        stock_geometries: list[Geometry] | None,
+        settings: dict[str, Any] | None,
+    ) -> OverscanSpec:
         if settings and settings.get("driver_native_overscan"):
-            return
+            return OverscanSpec(distance_mm=0.0)
+        return OverscanSpec(distance_mm=self.distance_mm)
 
-        ops.apply_overscan(self.distance_mm)
-
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             **super().to_dict(),
             "distance_mm": self.distance_mm,
@@ -131,7 +118,7 @@ class OverscanTransformer(OpsTransformer):
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "OverscanTransformer":
+    def from_dict(cls, data: dict[str, Any]) -> OverscanTransformer:
         return cls(
             enabled=data.get("enabled", True),
             distance_mm=data.get("distance_mm", 2.0),

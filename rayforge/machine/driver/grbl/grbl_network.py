@@ -1,17 +1,11 @@
 import asyncio
 import inspect
 import logging
+from collections.abc import Awaitable, Callable
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Tuple,
-    Union,
     cast,
 )
 from urllib.parse import quote
@@ -23,6 +17,7 @@ from ....core.varset import ChoiceVar, HostnameVar, PortVar, Var, VarSet
 from ....core.varset.hostnamevar import is_valid_hostname_or_ip
 from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
 from ....pipeline.encoder.gcode import GcodeEncoder
+from ....shared.units.system import UnitSystem, inches_to_mm
 from ...transport import HttpTransport, TransportStatus, WebSocketTransport
 from ..driver import (
     Axis,
@@ -37,6 +32,7 @@ from .grbl_probe import probe_grbl_device
 from .grbl_util import (
     CommandRequest,
     command_url,
+    detect_unit_system_from_settings,
     eeprom_info_url,
     execute_url,
     fw_info_url,
@@ -44,6 +40,7 @@ from .grbl_util import (
     get_grbl_setting_varsets,
     grbl_setting_re,
     hw_info_url,
+    is_report_in_inches,
     parse_grbl_parser_state,
     parse_state,
     prb_re,
@@ -74,6 +71,7 @@ class GrblNetworkDriver(Driver):
     subtitle = _("Connect to a GRBL-compatible device over the network")
     supports_settings = True
     supports_probing = True
+    supports_unit_detection = True
     reports_granular_progress = False
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
@@ -86,14 +84,15 @@ class GrblNetworkDriver(Driver):
         self.websocket = None
         self.keep_running = False
         self._is_cancelled = False
-        self._connection_task: Optional[asyncio.Task] = None
-        self._current_request: Optional[CommandRequest] = None
+        self._connection_task: asyncio.Task | None = None
+        self._current_request: CommandRequest | None = None
         self._cmd_lock = asyncio.Lock()
+        self._report_in_inches: bool = False
 
     @classmethod
     async def probe(
         cls, context: "RayforgeContext", **kwargs: Any
-    ) -> Tuple["DeviceProfile", List[str]]:
+    ) -> tuple["DeviceProfile", list[str]]:
         return await probe_grbl_device(cls, context, **kwargs)
 
     @property
@@ -105,7 +104,7 @@ class GrblNetworkDriver(Driver):
         return _("Machine Coordinates (G53)")
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         if self.host:
             # We assume port 80 is the control port for locking purposes
             # even if ws_port is different.
@@ -144,9 +143,10 @@ class GrblNetworkDriver(Driver):
                 ChoiceVar(
                     key="protocol",
                     label=_("Protocol variant"),
-                    description=_("ESP3D or Longer GRBL variant"),
-                    default="EPS3D",
+                    description=_("Standard, ESP3D, or Longer GRBL variant"),
+                    default="ESP3D",
                     choices=["ESP3D", "Longer"],
+                    null_label=_("Standard"),
                 ),
             ]
         )
@@ -209,9 +209,11 @@ class GrblNetworkDriver(Driver):
                 "data": f"GET {url}",
             },
         )
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                data = await response.text()
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(url) as response,
+        ):
+            data = await response.text()
         logger.debug(
             f"GET {url} response: {data}",
             extra={
@@ -243,10 +245,12 @@ class GrblNetworkDriver(Driver):
             },
         )
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
-                    response.raise_for_status()  # Check for 4xx/5xx errors
-                    data = await response.text()
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(url) as response,
+            ):
+                response.raise_for_status()  # Check for 4xx/5xx errors
+                data = await response.text()
             logger.debug(
                 f"GET {url} response: {data}",
                 extra={
@@ -293,10 +297,12 @@ class GrblNetworkDriver(Driver):
                 "data": log_data,
             },
         )
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=form) as response:
-                response.raise_for_status()
-                data = await response.text()
+        async with (
+            aiohttp.ClientSession() as session,
+            session.post(url, data=form) as response,
+        ):
+            response.raise_for_status()
+            data = await response.text()
 
         logger.debug(
             f"POST {url} response: {data}",
@@ -318,9 +324,11 @@ class GrblNetworkDriver(Driver):
                 "data": f"GET {url}",
             },
         )
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                data = await response.text()
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(url) as response,
+        ):
+            data = await response.text()
 
         logger.debug(
             f"GET {url} response: {data}",
@@ -361,9 +369,7 @@ class GrblNetworkDriver(Driver):
                     tg.create_task(self.http.connect())
                     tg.create_task(self.websocket.connect())
 
-            except DeviceConnectionError as e:
-                self._update_connection_status(TransportStatus.ERROR, str(e))
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - connection loop boundary
                 self._update_connection_status(TransportStatus.ERROR, str(e))
             finally:
                 if self.websocket:
@@ -379,9 +385,7 @@ class GrblNetworkDriver(Driver):
         encoded: EncodedOutput,
         doc: "Doc",
         ops: "Ops",
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         if not self.host:
             raise ConnectionError("Driver not configured with a host.")
@@ -396,9 +400,7 @@ class GrblNetworkDriver(Driver):
             # since we upload the entire file at once
             if on_command_done is not None:
                 # Call the callback for each op to indicate completion
-                num_ops = 0
-                if op_map and op_map.op_to_machine_code:
-                    num_ops = max(op_map.op_to_machine_code.keys()) + 1
+                num_ops = op_map.op_count if op_map else 0
 
                 for op_index in range(num_ops):
                     result = on_command_done(op_index)
@@ -443,7 +445,7 @@ class GrblNetworkDriver(Driver):
             if not self._is_cancelled:
                 self.job_finished.send(self)
 
-    async def execute_interactive_command(self, command: str) -> List[str]:
+    async def execute_interactive_command(self, command: str) -> list[str]:
         """
         Sends a command via HTTP and waits for the full response from the
         WebSocket, including an 'ok' or 'error:'.
@@ -480,11 +482,11 @@ class GrblNetworkDriver(Driver):
         await self._send_command("\x18")
         self.job_finished.send(self)
 
-    def can_home(self, axis: Optional[Axis] = None) -> bool:
+    def can_home(self, axis: Axis | None = None) -> bool:
         """GRBL supports homing for all axes."""
         return True
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         """
         Homes the specified axes or all axes if none specified.
 
@@ -521,7 +523,9 @@ class GrblNetworkDriver(Driver):
     async def move_to(self, pos_x, pos_y) -> None:
         dialect = self.dialect
         cmd = dialect.move_to.format(
-            speed=1500, x=float(pos_x), y=float(pos_y)
+            speed=self._to_machine_speed(1500),
+            x=self._to_machine_length(float(pos_x)),
+            y=self._to_machine_length(float(pos_y)),
         )
         await self.execute_interactive_command(cmd)
 
@@ -590,7 +594,7 @@ class GrblNetworkDriver(Driver):
                 break
             await asyncio.sleep(0.05)
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         """GRBL supports jogging for all axes."""
         return True
 
@@ -603,10 +607,12 @@ class GrblNetworkDriver(Driver):
             **deltas: Axis names and distances (e.g. x=10.0, y=5.0)
         """
         dialect = self.dialect
-        cmd_parts = [dialect.jog.format(speed=speed)]
+        cmd_parts = [dialect.jog.format(speed=self._to_machine_speed(speed))]
 
         for axis_name, distance in deltas.items():
-            cmd_parts.append(f"{axis_name.upper()}{distance}")
+            cmd_parts.append(
+                f"{axis_name.upper()}{self._to_machine_length(distance)}"
+            )
 
         # If no axes specified, do nothing
         if len(cmd_parts) == 1:
@@ -619,7 +625,7 @@ class GrblNetworkDriver(Driver):
         pass
 
     def on_http_status_changed(
-        self, sender, status: TransportStatus, message: Optional[str] = None
+        self, sender, status: TransportStatus, message: str | None = None
     ):
         self._update_command_status(status, message)
 
@@ -653,7 +659,10 @@ class GrblNetworkDriver(Driver):
             # Process line for state updates, regardless of active request.
             if is_status_report:
                 state = parse_state(
-                    line, self.state, lambda message: logger.info(message)
+                    line,
+                    self.state,
+                    lambda message: logger.info(message),
+                    report_in_inches=self._report_in_inches,
                 )
                 old_status = self.state.status
                 if state != self.state:
@@ -676,23 +685,35 @@ class GrblNetworkDriver(Driver):
                     request.finished.set()
 
     def on_websocket_status_changed(
-        self, sender, status: TransportStatus, message: Optional[str] = None
+        self, sender, status: TransportStatus, message: str | None = None
     ):
         self._update_connection_status(status, message)
 
-    def get_setting_vars(self) -> List["VarSet"]:
+    def get_setting_vars(self) -> list["VarSet"]:
         return get_grbl_setting_varsets()
+
+    async def detect_unit_system(self) -> UnitSystem | None:
+        """
+        Queries the device's ``$$`` settings and infers the unit
+        system from the ``$13`` (Report in inches) flag.
+        """
+        try:
+            response_lines = await self.execute_interactive_command("$$")
+        except (ConnectionError, asyncio.TimeoutError) as e:
+            logger.warning(f"Unit system detection failed: {e}")
+            return None
+        self._report_in_inches = is_report_in_inches(response_lines)
+        return detect_unit_system_from_settings(response_lines)
 
     async def read_settings(self) -> None:
         response_lines = await self.execute_interactive_command("$$")
+        self._report_in_inches = is_report_in_inches(response_lines)
         # Get the list of VarSets, which serve as our template
         known_varsets = self.get_setting_vars()
 
         # For efficient lookup, map each setting key to its parent VarSet
         key_to_varset_map = {
-            var_key: varset
-            for varset in known_varsets
-            for var_key in varset.keys()
+            var.key: varset for varset in known_varsets for var in varset
         }
 
         unknown_vars = VarSet(
@@ -745,16 +766,20 @@ class GrblNetworkDriver(Driver):
         await self.execute_interactive_command(cmd)
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         p_num = gcode_to_p_number(wcs_slot)
         if p_num is None:
             raise ValueError(f"Invalid WCS slot: {wcs_slot}")
-        dialect = self.dialect
-        cmd = dialect.set_wcs_offset.format(p_num=p_num, x=x, y=y, z=z)
+        cmd = self.dialect.format_wcs_offset(
+            p_num,
+            self._to_machine_length(x),
+            self._to_machine_length(y),
+            self._to_machine_length(z) if z is not None else None,
+        )
         await self.execute_interactive_command(cmd)
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
         response_lines = await self.execute_interactive_command("$#")
         offsets = {}
         for line in response_lines:
@@ -762,11 +787,16 @@ class GrblNetworkDriver(Driver):
             if match:
                 slot, x_str, y_str, z_str = match.groups()
                 z_str = z_str or "0.000"
-                offsets[slot] = (float(x_str), float(y_str), float(z_str))
+                parsed: Pos = (float(x_str), float(y_str), float(z_str))
+                offsets[slot] = (
+                    tuple(inches_to_mm(v) for v in parsed)
+                    if self._report_in_inches
+                    else parsed
+                )
         self.wcs_updated.send(self, offsets=offsets)
         return offsets
 
-    async def read_parser_state(self) -> Optional[str]:
+    async def read_parser_state(self) -> str | None:
         """Reads the $G parser state to determine the active WCS."""
         try:
             response_lines = await self.execute_interactive_command("$G")
@@ -777,14 +807,14 @@ class GrblNetworkDriver(Driver):
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         assert axis.name, "Probing requires a single, named axis."
         axis_letter = axis.name.upper()
         dialect = self.dialect
         cmd = dialect.probe_cycle.format(
             axis_letter=axis_letter,
-            max_travel=max_travel,
-            feed_rate=feed_rate,
+            max_travel=self._to_machine_length(max_travel),
+            feed_rate=self._to_machine_speed(feed_rate),
         )
 
         self.probe_status_changed.send(
@@ -798,6 +828,8 @@ class GrblNetworkDriver(Driver):
                 x_str, y_str, z_str, success = match.groups()
                 if int(success) == 1:
                     pos: Pos = (float(x_str), float(y_str), float(z_str))
+                    if self._report_in_inches:
+                        pos = tuple(inches_to_mm(v) for v in pos)
                     self.probe_status_changed.send(
                         self, message=f"Probe triggered at {pos}"
                     )
@@ -807,7 +839,7 @@ class GrblNetworkDriver(Driver):
         return None
 
     def _update_command_status(
-        self, status: TransportStatus, message: Optional[str] = None
+        self, status: TransportStatus, message: str | None = None
     ):
         log_data = f"Command status: {status.name}"
         if message:
@@ -816,7 +848,7 @@ class GrblNetworkDriver(Driver):
         self.command_status_changed.send(self, status=status, message=message)
 
     def _update_connection_status(
-        self, status: TransportStatus, message: Optional[str] = None
+        self, status: TransportStatus, message: str | None = None
     ):
         log_data = f"Connection status: {status.name}"
         if message:

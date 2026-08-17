@@ -23,17 +23,11 @@ register_icon_path(_ICONS_DIR)
 
 
 @hookimpl
-def step_settings_loaded(dialog, step, producer):
-    """Add step settings widgets based on assembler name."""
-    widget_cls = ASSEMBLER_WIDGETS.get(step.ASSEMBLER_NAME)
-    if widget_cls:
-        dialog.add(
-            widget_cls(
-                dialog.editor,
-                step.typelabel,
-                dialog,
-                step,
-            )
+def register_step_settings_pages(step_settings_page_registry):
+    """Register step settings page classes based on assembler name."""
+    for assembler_name, page_cls in ASSEMBLER_WIDGETS.items():
+        step_settings_page_registry.register(
+            assembler_name, page_cls, ADDON_NAME
         )
 
 

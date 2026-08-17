@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 
 import yaml
 from blinker import Signal
@@ -19,8 +19,8 @@ class MachineManager:
     def __init__(self, base_dir: Path):
         base_dir.mkdir(parents=True, exist_ok=True)
         self.base_dir = base_dir
-        self.controllers: Dict[str, MachineController] = dict()
-        self.machines: Dict[str, Machine] = dict()
+        self.controllers: dict[str, MachineController] = {}
+        self.machines: dict[str, Machine] = {}
         self.machine_added = Signal()
         self.machine_removed = Signal()
         self.machine_updated = Signal()
@@ -118,7 +118,7 @@ class MachineManager:
                     f"Inactive machine '{machine.name}' deferred connection: "
                     "resource busy."
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - async auto-connect task
             logger.error(
                 f"Failed to auto-connect machine '{machine.name}': {e}"
             )
@@ -146,8 +146,11 @@ class MachineManager:
                 # Add a small delay for the OS to release the port
                 await asyncio.sleep(0.2)
 
-            # 2. Update the global config. This triggers UI updates.
-            context.config.set_machine(new_machine)
+            # 2. Update the global config. This triggers UI updates, so it
+            #    must run on the main thread (GTK is not thread-safe).
+            await task_mgr.run_on_main_thread(
+                context.config.set_machine, new_machine
+            )
 
             # 3. Connect the new machine if it's set to auto-connect
             if new_machine.auto_connect:
@@ -198,9 +201,9 @@ class MachineManager:
     def get_machine_by_id(self, machine_id):
         return self.machines.get(machine_id)
 
-    def get_machines(self) -> List["Machine"]:
+    def get_machines(self) -> list["Machine"]:
         """Returns a list of all managed machines, sorted by name."""
-        return sorted(list(self.machines.values()), key=lambda m: m.name)
+        return sorted(self.machines.values(), key=lambda m: m.name)
 
     def create_default_machine(self):
         machine = Machine(get_context())
@@ -251,5 +254,5 @@ class MachineManager:
         for file in self.base_dir.glob("*.yaml"):
             try:
                 self.load_machine(file.stem)
-            except Exception as e:
+            except (OSError, ValueError, TypeError, yaml.YAMLError) as e:
                 logger.error(f"Failed to load machine from {file}: {e}")

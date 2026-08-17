@@ -1,5 +1,4 @@
 import ast
-from typing import Optional, Set
 
 
 class ExpressionParser:
@@ -8,7 +7,7 @@ class ExpressionParser:
     extracts information like used variable names.
     """
 
-    def parse(self, expression: str) -> Optional[ast.AST]:
+    def parse(self, expression: str) -> ast.AST | None:
         """
         Parses an expression string into an AST object.
 
@@ -25,7 +24,7 @@ class ExpressionParser:
         except (SyntaxError, ValueError):
             return None
 
-    def get_used_variables(self, ast_node: ast.AST) -> Set[str]:
+    def get_used_variables(self, ast_node: ast.AST) -> set[str]:
         """
         Traverses a parsed AST to find all names used as variables or
           functions.

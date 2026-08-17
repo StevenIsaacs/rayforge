@@ -2,7 +2,7 @@ import enum
 import io
 import token as py_token
 import tokenize as py_tokenize
-from typing import List, NamedTuple, Optional
+from typing import ClassVar, NamedTuple
 
 
 class TokenType(enum.Enum):
@@ -32,14 +32,14 @@ class ExpressionTokenizer:
     syntax highlighting.
     """
 
-    _TYPE_MAP = {
+    _TYPE_MAP: ClassVar[dict[int, TokenType]] = {
         py_token.NAME: TokenType.NAME,
         py_token.NUMBER: TokenType.NUMBER,
         py_token.STRING: TokenType.STRING,
         py_token.OP: TokenType.OPERATOR,
     }
 
-    def tokenize(self, expression: str) -> List[Token]:
+    def tokenize(self, expression: str) -> list[Token]:
         """
         Converts an expression string into a list of Token objects.
 
@@ -52,7 +52,7 @@ class ExpressionTokenizer:
         if not expression.strip():
             return []
 
-        tokens: List[Token] = []
+        tokens: list[Token] = []
         try:
             # The tokenize module expects a callable that returns strings.
             # io.StringIO provides this.
@@ -76,9 +76,7 @@ class ExpressionTokenizer:
 
         return tokens
 
-    def _get_token_type(
-        self, tok: py_tokenize.TokenInfo
-    ) -> Optional[TokenType]:
+    def _get_token_type(self, tok: py_tokenize.TokenInfo) -> TokenType | None:
         """Maps a standard library token to our simplified TokenType."""
         # 1. Explicitly filter out all non-content tokens.
         if tok.type in (

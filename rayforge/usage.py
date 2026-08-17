@@ -21,7 +21,7 @@ def _get_language() -> str:
         if lang:
             return lang.replace("_", "-")
         return "en-US"
-    except Exception:
+    except locale.Error:
         return "en-US"
 
 
@@ -35,7 +35,7 @@ def _get_os_info() -> str:
             if version:
                 return f"linux/{distro}/{version}"
             return f"linux/{distro}"
-        except Exception:
+        except (OSError, KeyError, ValueError):
             return "linux"
     elif system == "Windows":
         return f"windows/{platform.release()}"
@@ -65,7 +65,7 @@ class UsageTracker:
         self._language = _get_language()
         self._os = _get_os_info()
         self._version = __version__ or "unknown"
-        self._cache_token: Optional[str] = None
+        self._cache_token: str | None = None
         self._session_id = str(uuid.uuid4())
 
     def _get_screen_size(self) -> str:
@@ -76,7 +76,7 @@ class UsageTracker:
             if size:
                 return f"{size[0]}x{size[1]}"
         except Exception:
-            pass
+            logger.debug("Failed to get screen size", exc_info=True)
         return "unknown"
 
     def set_enabled(self, enabled: bool):
@@ -86,7 +86,7 @@ class UsageTracker:
         else:
             logger.info("Usage tracking disabled")
 
-    def track_page_view(self, url: str, title: Optional[str] = None):
+    def track_page_view(self, url: str, title: str | None = None):
         if not self._enabled:
             return
         if not url.startswith("/"):
@@ -148,7 +148,7 @@ class UsageTracker:
                 )
             except urllib.error.URLError as e:
                 logger.warning(f"Usage tracking request failed: {e}")
-            except Exception as e:
+            except (OSError, TimeoutError, ValueError) as e:
                 logger.warning(f"Usage tracking error: {e}")
 
         thread = threading.Thread(target=_send, daemon=True)

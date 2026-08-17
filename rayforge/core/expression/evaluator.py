@@ -1,6 +1,6 @@
 import logging
 import math
-from typing import Any, Dict
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +10,7 @@ MATH_CONTEXT = {
 }
 
 
-def safe_evaluate(expression: str, context: Dict[str, Any]) -> float:
+def safe_evaluate(expression: str, context: dict[str, Any]) -> float:
     """
     Evaluates a mathematical expression string using a specific context
     (variable names) and standard math functions.
@@ -44,6 +44,6 @@ def safe_evaluate(expression: str, context: Dict[str, Any]) -> float:
         # Eval will use this for both globals and locals.
         result = eval(expr, namespace)
         return float(result)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - arbitrary user expression
         logger.error(f"Failed to evaluate expression '{expression}': {e}")
         raise ValueError(f"Invalid expression: {e}")

@@ -1,8 +1,10 @@
 import logging
+import zipfile
+from collections.abc import Callable
 from gettext import gettext as _
 from pathlib import Path
-from typing import Callable, Optional
 
+import yaml
 from gi.repository import Gio, GLib, Gtk
 
 from ...context import get_context
@@ -15,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 def open_profile_file(
     parent: Gtk.Window,
-    callback: Callable[[Optional[DeviceProfile], Optional[str]], None],
+    callback: Callable[[DeviceProfile | None, str | None], None],
 ):
     """Open a file dialog to import a device profile.
 
@@ -57,7 +59,7 @@ def open_profile_file(
 
 def open_profile_zip(
     parent: Gtk.Window,
-    callback: Callable[[Optional[DeviceProfile], Optional[str]], None],
+    callback: Callable[[DeviceProfile | None, str | None], None],
 ):
     """Legacy entry point -- delegates to :func:`open_profile_file`."""
     open_profile_file(parent, callback)
@@ -84,7 +86,14 @@ def _handle_zip(file_path: Path, callback):
     mgr = get_context().device_profile_mgr
     try:
         profile = mgr.install_from_zip(file_path)
-    except Exception as e:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+        zipfile.BadZipFile,
+        yaml.YAMLError,
+    ) as e:
         logger.error(f"Import failed: {e}")
         callback(None, str(e))
         return
@@ -94,11 +103,11 @@ def _handle_zip(file_path: Path, callback):
 def _handle_lbdev(
     parent: Gtk.Window,
     file_path: Path,
-    callback: Callable[[Optional[DeviceProfile], Optional[str]], None],
+    callback: Callable[[DeviceProfile | None, str | None], None],
 ):
     try:
-        profile, summary = convert_to_profile(file_path)
-    except Exception as e:
+        _profile, summary = convert_to_profile(file_path)
+    except (OSError, ValueError, TypeError) as e:
         logger.error(f"LightBurn import failed: {e}")
         callback(None, str(e))
         return
@@ -116,12 +125,12 @@ def _handle_lbdev(
 
 def _install_lbdev_and_callback(
     file_path: Path,
-    callback: Callable[[Optional[DeviceProfile], Optional[str]], None],
+    callback: Callable[[DeviceProfile | None, str | None], None],
 ):
     mgr = get_context().device_profile_mgr
     try:
         installed_profile, _ = mgr.install_from_lbdev(file_path)
-    except Exception as e:
+    except (OSError, ValueError, TypeError, RuntimeError) as e:
         logger.error(f"LightBurn install failed: {e}")
         callback(None, str(e))
         return

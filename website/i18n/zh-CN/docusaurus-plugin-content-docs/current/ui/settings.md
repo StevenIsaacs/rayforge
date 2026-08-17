@@ -1,6 +1,6 @@
 # 设置
 
-![常规设置](/screenshots/application-general.png)
+![常规设置](/screenshots/app-settings-general.png)
 
 自定义 Rayforge 以匹配您的工作流程和偏好。通过 **编辑 → 设置** 或按
 <kbd>ctrl+comma</kbd> 打开设置对话框。
@@ -47,5 +47,6 @@ Rayforge 可以发送匿名使用数据以帮助改进应用程序。不会收�
 - [机器](../application-settings/machines.md) — 添加、移除和配置您的激光切割机
 - [材料](../application-settings/materials.md) — 管理您的材料库
 - [配方](../application-settings/recipes.md) — 管理保存的操作配方
+- [颜色规则](../application-settings/color-rules.md) — 将 SVG 颜色映射到步骤类型
 - [AI 提供者](../application-settings/ai-provider.md) — 配置供扩展使用的 AI 提供者
 - [扩展](../application-settings/addons.md) — 安装、更新和移除扩展

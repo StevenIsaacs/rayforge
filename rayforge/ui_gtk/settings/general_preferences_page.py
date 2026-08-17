@@ -1,6 +1,7 @@
 import logging
 from gettext import gettext as _
 from pathlib import Path
+from typing import ClassVar
 
 from gi.repository import Adw, GLib, Gtk
 
@@ -13,6 +14,7 @@ from ...shared.units.definitions import (
 from ...shared.util.localized import SUPPORTED_LANGUAGES
 from ...ui_gtk.doceditor import file_dialogs
 from ...usage import get_usage_tracker
+from ..shared.pref_rows.base import SpinRow
 from ..shared.preferences_page import TrackedPreferencesPage
 
 logger = logging.getLogger(__name__)
@@ -41,27 +43,27 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
     key = "general"
 
     # Map for converting between UI index and config string
-    THEME_MAP = ["system", "light", "dark"]
-    THEME_LABELS = [_("System"), _("Light"), _("Dark")]
+    THEME_MAP: ClassVar[list[str]] = ["system", "light", "dark"]
+    THEME_LABELS: ClassVar[list[str]] = [_("System"), _("Light"), _("Dark")]
 
     # Map for startup behavior options
-    STARTUP_BEHAVIOR_MAP = [
+    STARTUP_BEHAVIOR_MAP: ClassVar[list[str]] = [
         StartupBehavior.NONE.value,
         StartupBehavior.LAST_PROJECT.value,
         StartupBehavior.SPECIFIC_PROJECT.value,
     ]
-    STARTUP_BEHAVIOR_LABELS = [
+    STARTUP_BEHAVIOR_LABELS: ClassVar[list[str]] = [
         _("Open nothing"),
         _("Open last project"),
         _("Open specific project"),
     ]
 
     # Map for ops color mode options
-    OPS_COLOR_MODE_MAP = [
+    OPS_COLOR_MODE_MAP: ClassVar[list[str]] = [
         OpsColorMode.LASER.value,
         OpsColorMode.LAYER.value,
     ]
-    OPS_COLOR_MODE_LABELS = [
+    OPS_COLOR_MODE_LABELS: ClassVar[list[str]] = [
         _("Laser Color"),
         _("Layer Color"),
     ]
@@ -248,7 +250,7 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
             title=_("Auto-update operations"),
             subtitle=_(
                 "Recalculate operations automatically after each change. "
-                "Disable for manual recalculation via the toolbar button."
+                "Disable for manual recalculation via the toolbar button"
             ),
         )
         self.auto_pipeline_row.set_active(config.auto_pipeline)
@@ -257,10 +259,24 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         )
         startup_group.add(self.auto_pipeline_row)
 
+        self.cache_budget_row = SpinRow(
+            _("Cache budget (MB)"),
+            _("Maximum memory for cache. High complexity scenes require more"),
+            lower=128,
+            upper=65536,
+            step_increment=128,
+            digits=0,
+            value=config.cache_budget_bytes / (1024 * 1024),
+        )
+        self.cache_budget_row.value_changed.connect(
+            self.on_cache_budget_changed
+        )
+        startup_group.add(self.cache_budget_row)
+
         self.check_updates_row = Adw.SwitchRow(
             title=_("Check for updates"),
             subtitle=_(
-                "Automatically check for new Rayforge versions on startup."
+                "Automatically check for new Rayforge versions on startup"
             ),
         )
         self.check_updates_row.set_active(config.check_for_app_updates)
@@ -501,6 +517,11 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         """Called when the user toggles auto pipeline mode."""
         enabled = switch_row.get_active()
         get_context().config.set_auto_pipeline(enabled)
+
+    def on_cache_budget_changed(self, row):
+        """Called when the user adjusts the cache budget."""
+        mb = int(row.get_value())
+        get_context().config.set_cache_budget_bytes(mb * 1024 * 1024)
 
     def on_check_updates_changed(self, switch_row, _):
         """Called when the user toggles the update check setting."""

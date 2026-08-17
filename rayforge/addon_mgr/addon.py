@@ -1,8 +1,9 @@
 import logging
 import re
 from dataclasses import asdict, dataclass, field
+from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Optional
 
 import semver
 import yaml
@@ -20,7 +21,33 @@ class AddonValidationError(Exception):
     Raised when an addon fails validation checks.
     """
 
-    pass
+
+class AddonMaturity(Enum):
+    """Represents the maturity level of an addon."""
+
+    STABLE = auto()
+    UNTESTED = auto()
+    EXPERIMENTAL = auto()
+    KNOWN_BUGGY = auto()
+
+
+def parse_maturity(value: Any) -> AddonMaturity:
+    """
+    Parses a maturity value from a manifest or registry entry.
+
+    Unknown or missing values fall back to AddonMaturity.STABLE.
+    """
+    if isinstance(value, AddonMaturity):
+        return value
+    if not isinstance(value, str):
+        return AddonMaturity.STABLE
+    try:
+        return AddonMaturity[value.strip().upper()]
+    except KeyError:
+        logger.warning(
+            f"Unknown addon maturity '{value}', falling back to stable"
+        )
+        return AddonMaturity.STABLE
 
 
 @dataclass
@@ -49,12 +76,12 @@ class AddonLicense:
     required: bool = False
     purchase_url: str = ""
     product_id: str = ""
-    product_ids: List[str] = field(default_factory=list)
-    patreon_tier_ids: List[str] = field(default_factory=list)
+    product_ids: list[str] = field(default_factory=list)
+    patreon_tier_ids: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(
-        cls, data: Optional[Dict[str, Any]]
+        cls, data: dict[str, Any] | None
     ) -> Optional["AddonLicense"]:
         """Creates an AddonLicense from a dictionary, or None if empty."""
         if not data:
@@ -76,7 +103,7 @@ class AddonLicense:
             patreon_tier_ids=tier_ids if isinstance(tier_ids, list) else [],
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Converts the license to a dictionary for serialization."""
         result = {}
         if self.name:
@@ -93,7 +120,7 @@ class AddonLicense:
             result["patreon_tier_ids"] = self.patreon_tier_ids
         return result
 
-    def get_all_product_ids(self) -> List[str]:
+    def get_all_product_ids(self) -> list[str]:
         """Returns all product IDs (both single and list)."""
         ids = list(self.product_ids)
         if self.product_id:
@@ -114,12 +141,12 @@ class AddonProvides:
         assets (List[Dict[str, str]]): A list of asset definitions.
     """
 
-    worker: Optional[str] = None
-    frontend: Optional[str] = None
-    assets: List[Dict[str, str]] = field(default_factory=list)
+    worker: str | None = None
+    frontend: str | None = None
+    assets: list[dict[str, str]] = field(default_factory=list)
 
 
-VersionType = Union[str, object]
+VersionType = str | object
 
 
 @dataclass
@@ -131,33 +158,37 @@ class AddonMetadata:
     name: str
     description: str
     version: VersionType
-    depends: List[str]
+    depends: list[str]
     author: AddonAuthor
     provides: AddonProvides
     api_version: int = 1
     url: str = ""
     display_name: str = ""
-    requires: List[str] = field(default_factory=list)
-    license: Optional[AddonLicense] = None
-    version_entries: List[Dict[str, Any]] = field(default_factory=list)
+    requires: list[str] = field(default_factory=list)
+    license: AddonLicense | None = None
+    version_entries: list[dict[str, Any]] = field(default_factory=list)
+    default_state: str = "enabled"
+    maturity: AddonMaturity = AddonMaturity.STABLE
 
     @property
     def license_name(self) -> str:
         """Returns the license name if available."""
         return self.license.name if self.license else ""
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Converts metadata back to a dictionary for YAML serialization."""
         result = asdict(self)
         if self.version is UnknownVersion:
             result["version"] = None
         if self.license:
             result["license"] = self.license.to_dict()
+        if isinstance(self.maturity, AddonMaturity):
+            result["maturity"] = self.maturity.name.lower()
         return result
 
     @classmethod
     def from_registry_entry(
-        cls, addon_name: str, data: Dict[str, Any]
+        cls, addon_name: str, data: dict[str, Any]
     ) -> "AddonMetadata":
         """
         Parses a registry dictionary entry into an AddonMetadata object.
@@ -207,18 +238,20 @@ class AddonMetadata:
             requires=requires,
             license=AddonLicense.from_dict(data.get("license")),
             version_entries=version_entries,
+            default_state=data.get("default_state", "enabled"),
+            maturity=parse_maturity(data.get("maturity")),
         )
 
 
 def _parse_version_entries(
     raw: list,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Parse the 'versions' list from registry data into structured dicts.
 
     Each entry may be either a string (legacy format, e.g. ``"v1.0.0"``)
     or a dict with keys ``version``, ``api_version``.
     """
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     if not isinstance(raw, list):
         return entries
     for item in raw:
@@ -256,7 +289,7 @@ class Addon:
     def load_from_directory(
         cls,
         addon_dir: Path,
-        version: Optional[VersionType] = None,
+        version: VersionType | None = None,
     ) -> "Addon":
         """
         Loads an addon from a directory by parsing its YAML metadata file.
@@ -333,12 +366,12 @@ class Addon:
                 requires = [requires]
 
             resolved_version: VersionType
-            if version is not None:
-                resolved_version = version
-            elif version is UnknownVersion:
+            if version is not None or version is UnknownVersion:
                 resolved_version = version
             else:
                 resolved_version = get_git_tag_version(addon_dir)
+
+            default_state = data.get("default_state", "enabled")
 
             metadata = AddonMetadata(
                 name=addon_name,
@@ -352,13 +385,15 @@ class Addon:
                 api_version=data.get("api_version", PLUGIN_API_VERSION),
                 requires=requires,
                 license=AddonLicense.from_dict(data.get("license")),
+                default_state=default_state,
+                maturity=parse_maturity(data.get("maturity")),
             )
 
             return cls(path=addon_dir, metadata=metadata)
 
         except AddonValidationError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - wrap into AddonValidationError
             raise AddonValidationError(f"Structure error in metadata: {e}")
 
     def validate(self) -> bool:
@@ -452,14 +487,12 @@ class Addon:
         if "your-github-username" in self.metadata.author.name.lower():
             raise AddonValidationError("Placeholder detected in author name.")
 
-        if self.metadata.author.email:
-            if not re.match(
-                r"^[^@\s]+@[^@\s]+\.[^@\s]+$", self.metadata.author.email
-            ):
-                logger.warning(
-                    f"Author email '{self.metadata.author.email}' "
-                    "appears invalid."
-                )
+        if self.metadata.author.email and not re.match(
+            r"^[^@\s]+@[^@\s]+\.[^@\s]+$", self.metadata.author.email
+        ):
+            logger.warning(
+                f"Author email '{self.metadata.author.email}' appears invalid."
+            )
 
         for asset in self.metadata.provides.assets:
             path_str = asset.get("path")
@@ -511,7 +544,7 @@ class Addon:
         parts = path.split(".")
         return all(part.isidentifier() for part in parts)
 
-    def _resolve_module_path(self, module_str: str) -> Optional[Path]:
+    def _resolve_module_path(self, module_str: str) -> Path | None:
         """
         Resolves a dotted module string or a filename to a path.
         """

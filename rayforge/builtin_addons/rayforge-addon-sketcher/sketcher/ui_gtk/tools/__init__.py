@@ -75,7 +75,7 @@ def build_key_to_tool_map() -> dict[str, str]:
 def build_action_tool_map() -> dict[str, str]:
     """Build mapping: action name -> tool name for all tools."""
     action_map = {}
-    for tool_name, tool_cls in TOOL_REGISTRY.items():
+    for tool_name in TOOL_REGISTRY:
         action_name = f"tool_{tool_name}"
         action_map[action_name] = tool_name
     return action_map
@@ -86,10 +86,11 @@ ACTION_TOOL_MAP = build_action_tool_map()
 
 __all__ = [
     "ACTION_TOOL_MAP",
+    "KEY_TO_TOOL",
+    "TOOL_REGISTRY",
     "AngleConstraintTool",
     "ArcTool",
     "AspectRatioConstraintTool",
-    "PathTool",
     "ChamferTool",
     "CircleTool",
     "CoincidentConstraintTool",
@@ -98,11 +99,11 @@ __all__ = [
     "DiameterConstraintTool",
     "DistanceConstraintTool",
     "EqualConstraintTool",
+    "FillTool",
     "FilletTool",
     "GridTool",
-    "FillTool",
     "HorizontalConstraintTool",
-    "KEY_TO_TOOL",
+    "PathTool",
     "PerpendicularConstraintTool",
     "RadiusConstraintTool",
     "RectangleTool",
@@ -115,7 +116,6 @@ __all__ = [
     "SymmetryConstraintTool",
     "TangentConstraintTool",
     "TextBoxTool",
-    "TOOL_REGISTRY",
     "VerticalConstraintTool",
     "WaypointSharpTool",
     "WaypointSmoothTool",

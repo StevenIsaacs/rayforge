@@ -2,11 +2,15 @@
 
 import math
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, cast
 
+import pytest
 from raygeo.geo import Matrix
 
 from rayforge.core.layer import Layer
+from rayforge.core.step_registry import step_registry
+from rayforge.core.vectorization_spec import PassthroughSpec
+from rayforge.image.assembler import ItemAssembler
 from rayforge.image.lightburn.importer import (
     LightBurnImporter,
     _apply_xform_to_geo,
@@ -18,6 +22,7 @@ from rayforge.image.lightburn.importer import (
     _parse_verts,
     _parse_xform,
 )
+from rayforge.image.registry import importer_registry
 from rayforge.image.structures import (
     ImportManifest,
     ParsingResult,
@@ -157,14 +162,14 @@ class TestBuildEllipse:
     def test_circle(self):
         geo = _build_ellipse(50, 50)
         assert not geo.is_empty()
-        min_x, min_y, max_x, max_y = geo.rect()
+        min_x, min_y, _max_x, _max_y = geo.rect()
         assert abs(min_x - (-50.0)) < 1.0
         assert abs(min_y - (-50.0)) < 1.0
 
     def test_ellipse(self):
         geo = _build_ellipse(100, 50)
         assert not geo.is_empty()
-        min_x, min_y, max_x, max_y = geo.rect()
+        min_x, min_y, _max_x, _max_y = geo.rect()
         assert abs(min_x - (-100.0)) < 1.0
         assert abs(min_y - (-50.0)) < 1.0
 
@@ -193,7 +198,34 @@ class TestBuildStepConfig:
         cs = {"kerf": 0.06}
         config = _build_step_config(cs)
         assert config is not None
-        assert config == {"kerf_mm": 0.06}
+        assert config == {"offset_mm": 0.03}
+
+    def test_dot_width_mapping_halves_value(self):
+        # LightBurn's dotWidth is the total shortening per run; raygeo's
+        # dot_width_correction_mm is applied at each end, so the importer
+        # halves the value on the way through.
+        cs = {"dotWidth": 0.08}
+        config = _build_step_config(cs)
+        assert config is not None
+        assert config == {"dot_width_correction_mm": 0.04}
+
+    def test_min_power_mapping(self):
+        cs = {"minPower": 10}
+        config = _build_step_config(cs)
+        assert config is not None
+        assert config == {"min_power_level": 0.1}
+
+    def test_interval_mapping(self):
+        cs = {"interval": 0.04}
+        config = _build_step_config(cs)
+        assert config is not None
+        assert config == {"line_interval_mm": 0.04}
+
+    def test_angle_mapping(self):
+        cs = {"angle": 45}
+        config = _build_step_config(cs)
+        assert config is not None
+        assert config == {"scan_angle": 45.0}
 
     def test_num_passes_mapping(self):
         cs = {"numPasses": 3}
@@ -207,13 +239,13 @@ class TestBuildStepConfig:
         assert config is not None
         assert config["power"] == 0.7
         assert config["cut_speed"] == 400
-        assert config["kerf_mm"] == 0.06
+        assert config["offset_mm"] == 0.03
         assert config["passes"] == 2
 
 
 class TestBuildPath:
     def test_line_closed(self):
-        verts: List[Dict[str, float]] = [
+        verts: list[dict[str, float]] = [
             {"x": 0.0, "y": 0.0},
             {"x": 10.0, "y": 0.0},
             {"x": 10.0, "y": 10.0},
@@ -225,7 +257,7 @@ class TestBuildPath:
         assert not geo.is_empty()
 
     def test_lineclosed_string(self):
-        verts: List[Dict[str, float]] = [
+        verts: list[dict[str, float]] = [
             {"x": 0.0, "y": 0.0},
             {"x": 10.0, "y": 0.0},
             {"x": 10.0, "y": 10.0},
@@ -239,12 +271,12 @@ class TestBuildPath:
         assert geo.is_empty()
 
     def test_single_vert_lineclosed(self):
-        verts: List[Dict[str, float]] = [{"x": 5.0, "y": 5.0}]
+        verts: list[dict[str, float]] = [{"x": 5.0, "y": 5.0}]
         geo = _build_path_from_verts_and_prims(verts, [], "LineClosed")
         assert not geo.is_empty()
 
     def test_bezier(self):
-        verts: List[Dict[str, float]] = [
+        verts: list[dict[str, float]] = [
             {
                 "x": 0.0,
                 "y": 0.0,
@@ -267,7 +299,7 @@ class TestBuildPath:
         assert not geo.is_empty()
 
     def test_bezier_missing_controls_falls_back_to_line(self):
-        verts: List[Dict[str, float]] = [
+        verts: list[dict[str, float]] = [
             {"x": 0.0, "y": 0.0},
             {"x": 10.0, "y": 10.0},
         ]
@@ -281,7 +313,7 @@ class TestApplyXFormToGeo:
         geo = _build_rect(10, 10, 0)
         xform = _parse_xform("1 0 0 1 100 50")
         geo = _apply_xform_to_geo(geo, xform)
-        min_x, min_y, max_x, max_y = geo.rect()
+        min_x, min_y, _max_x, _max_y = geo.rect()
         assert abs(min_x - 95.0) < 1e-6
         assert abs(min_y - 45.0) < 1e-6
 
@@ -348,7 +380,6 @@ class TestLightBurnImporter:
         importer = self._import("rect.lbrn2")
         parse_result = importer.parse()
         assert parse_result is not None
-        from rayforge.core.vectorization_spec import PassthroughSpec
 
         vec_result = importer.vectorize(parse_result, PassthroughSpec())
         assert isinstance(vec_result, VectorizationResult)
@@ -393,8 +424,6 @@ class TestLightBurnImporter:
         assert len(result.payload.items) > 0
 
     def test_extension_registration(self):
-        from rayforge.image.registry import importer_registry
-
         importer_cls = importer_registry.get_by_extension(".lbrn2")
         assert importer_cls is not None
         assert importer_cls is LightBurnImporter
@@ -460,8 +489,6 @@ class TestLightBurnImporter:
         assert lb_settings["C02"]["index"] == 1
 
     def test_vectorization_passes_layer_settings_for_rect(self):
-        from rayforge.core.vectorization_spec import PassthroughSpec
-
         importer = self._import("rect.lbrn2")
         parse_result = importer.parse()
         assert parse_result is not None
@@ -472,8 +499,6 @@ class TestLightBurnImporter:
         assert s["cut_speed"] == 500
 
     def test_vectorization_layer_settings_for_fence(self):
-        from rayforge.core.vectorization_spec import PassthroughSpec
-
         importer = self._import("fence.lbrn2")
         parse_result = importer.parse()
         assert parse_result is not None
@@ -482,7 +507,31 @@ class TestLightBurnImporter:
         s = vec.layer_settings["1"]
         assert s["power"] == 0.7
         assert s["cut_speed"] == 400
-        assert s["kerf_mm"] == 0.06
+        assert s["offset_mm"] == 0.03
+
+    def test_vectorization_layer_settings_dot_width_halved(self):
+        importer = self._import("dot_width.lbrn2")
+        parse_result = importer.parse()
+        assert parse_result is not None
+        vec = importer.vectorize(parse_result, PassthroughSpec())
+        assert "0" in vec.layer_settings
+        s = vec.layer_settings["0"]
+        # The fixture uses CutSetting_Img, so the layer must be tagged
+        # so the assembler knows to create an EngraveStep for it.
+        assert s["_is_image_layer"] is True
+        # Fixture has dotWidth=0.08; importer halves to 0.04 (LightBurn
+        # stores the total shortening, raygeo applies at each end).
+        assert s["dot_width_correction_mm"] == 0.04
+        # minPower=10 -> 0.1 (LightBurn uses 0-100, raygeo uses 0-1).
+        assert s["min_power_level"] == 0.1
+        # maxPower=50 -> 0.5, surfaced as `power` for the base Step.
+        assert s["power"] == 0.5
+        # Image layers mirror `power` into the raster ceiling.
+        assert s["max_power_level"] == 0.5
+        # interval=0.04 -> line_interval_mm=0.04 (already in mm).
+        assert s["line_interval_mm"] == 0.04
+        # angle=45 -> scan_angle=45.0 (already in degrees).
+        assert s["scan_angle"] == 45.0
 
     def test_assembler_creates_step_from_settings(self):
         importer = self._import("rect.lbrn2")
@@ -499,7 +548,7 @@ class TestLightBurnImporter:
                 # workflow empty and add_default_steps_for_layers will
                 # create a default step later.
                 if wf and wf.has_steps():
-                    step = wf.steps[0]
+                    step: Any = wf.steps[0]
                     assert abs(step.power - 0.2) < 1e-6
                     assert step.cut_speed == 500
                 found = True
@@ -516,10 +565,10 @@ class TestLightBurnImporter:
             if isinstance(item, Layer):
                 wf = item.workflow
                 if wf and wf.has_steps():
-                    step = wf.steps[0]
+                    step: Any = wf.steps[0]
                     assert abs(step.power - 0.7) < 1e-6
                     assert step.cut_speed == 400
-                    assert abs(step.kerf_mm - 0.06) < 1e-6
+                    assert abs(step.offset_mm - 0.03) < 1e-6
                 found = True
                 break
         assert found, "No Layer found in imported items"
@@ -534,3 +583,128 @@ class TestLightBurnImporter:
                 wf = item.workflow
                 # No settings available → no step pre-created
                 assert wf is None or not wf.has_steps()
+
+    def test_image_layer_import_produces_engrave_step(self):
+        """End-to-end: dot_width.lbrn2 (CutSetting_Img) must produce a
+        Layer whose workflow has an EngraveStep (not a ContourStep),
+        with dot_width_correction_mm and the other raster settings
+        applied. This is the test that catches the silent-fallback-to-
+        contour regression.
+        """
+        engrave_cls = step_registry.get("EngraveStep")
+        if engrave_cls is None:
+            pytest.skip("EngraveStep not registered")
+        contour_cls = step_registry.get("ContourStep")
+        assert contour_cls is not None, "ContourStep not registered"
+
+        importer = self._import("dot_width.lbrn2")
+        result = importer.get_doc_items()
+        assert result is not None
+        assert result.payload is not None
+
+        layer = None
+        for item in result.payload.items:
+            if isinstance(item, Layer):
+                layer = item
+                break
+        assert layer is not None, "No Layer in imported items"
+
+        wf = layer.workflow
+        assert wf is not None and wf.has_steps(), (
+            "Image layer ended up with no step — _apply_settings "
+            "likely swallowed an EngraveStep construction error."
+        )
+        step: Any = wf.steps[0]
+        assert isinstance(step, engrave_cls), (
+            f"Expected EngraveStep for CutSetting_Img, got "
+            f"{type(step).__name__} — dispatch fell back to contour."
+        )
+        step = cast(Any, step)
+        # All raster settings from the fixture should be applied.
+        assert step.dot_width_correction_mm == 0.04
+        assert step.line_interval_mm == 0.04
+        assert step.scan_angle == 45.0
+        assert step.min_power_level == 0.1
+        assert step.max_power_level == 0.5
+
+
+class TestApplySettingsDispatch:
+    """ItemAssembler._apply_settings must pick its step type from
+    the importer's layer-settings marker: image layers get an
+    EngraveStep (so dot_width_correction_mm lands somewhere useful),
+    everything else gets a ContourStep as before.
+    """
+
+    @staticmethod
+    def _step_classes():
+        contour_cls = step_registry.get("ContourStep")
+        engrave_cls = step_registry.get("EngraveStep")
+        assert contour_cls is not None, "ContourStep not registered"
+        assert engrave_cls is not None, "EngraveStep not registered"
+        return contour_cls, engrave_cls
+
+    def test_image_layer_creates_engrave_step(self):
+        contour_cls, engrave_cls = self._step_classes()
+
+        layer = Layer(name="img")
+        ItemAssembler._apply_settings(
+            layer,
+            {
+                "power": 0.5,
+                "min_power_level": 0.1,
+                "max_power_level": 0.5,
+                "cut_speed": 600,
+                "dot_width_correction_mm": 0.04,
+                "line_interval_mm": 0.04,
+                "scan_angle": 45.0,
+                "_is_image_layer": True,
+            },
+        )
+        wf = layer.workflow
+        assert wf is not None and wf.has_steps()
+        step: Any = wf.steps[0]
+        assert isinstance(step, engrave_cls)
+        assert not isinstance(step, contour_cls)
+        step = cast(Any, step)
+        # EngraveStep-specific raster settings must all be applied.
+        assert step.dot_width_correction_mm == 0.04
+        assert step.line_interval_mm == 0.04
+        assert step.scan_angle == 45.0
+        # The raster range is set directly from the canonical settings.
+        assert step.min_power_level == 0.1
+        assert step.max_power_level == 0.5
+
+    def test_vector_layer_creates_contour_step(self):
+        contour_cls, engrave_cls = self._step_classes()
+
+        layer = Layer(name="cut")
+        ItemAssembler._apply_settings(
+            layer,
+            {"power": 0.7, "cut_speed": 400, "offset_mm": 0.03},
+        )
+        wf = layer.workflow
+        assert wf is not None and wf.has_steps()
+        step: Any = wf.steps[0]
+        assert isinstance(step, contour_cls)
+        assert not isinstance(step, engrave_cls)
+        step = cast(Any, step)
+        # ContourStep has no dot_width_correction_mm attribute.
+        assert not hasattr(step, "dot_width_correction_mm")
+        assert step.offset_mm == 0.03
+        assert step.power == 0.7
+        assert step.cut_speed == 400
+
+    def test_image_layer_without_dot_width_still_uses_engrave_step(self):
+        # _is_image_layer alone — without dot_width_correction_mm — must
+        # still route to EngraveStep. offset is a vector concept but should
+        # be tolerated on image layers without crashing.
+        _contour_cls, engrave_cls = self._step_classes()
+
+        layer = Layer(name="img")
+        ItemAssembler._apply_settings(
+            layer,
+            {"_is_image_layer": True, "offset_mm": 0.0},
+        )
+        wf = layer.workflow
+        assert wf is not None and wf.has_steps()
+        assert isinstance(wf.steps[0], engrave_cls)

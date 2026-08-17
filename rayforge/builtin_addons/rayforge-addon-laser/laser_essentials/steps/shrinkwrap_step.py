@@ -1,45 +1,93 @@
 from __future__ import annotations
 
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import numpy as np
+from raygeo.cnc.execution.specs import ComputePayload
+from raygeo.geo import Matrix
+from raygeo.ops.assembly import Assembler
+from raygeo.ops.assembly.shrinkwrap import ShrinkwrapSpec
+from raygeo.ops.part import Part
+from raygeo.ops.part.image_source import WholeImageSource
 
-from rayforge.core.capability import CUT, SCORE, WITH_KERF, Capability
-from rayforge.core.step import Step
-from rayforge.pipeline.assembler.registry import assembler_registry
+from rayforge.core.capability import MachineCapability
 from rayforge.core.cut_side import CutSide
+from rayforge.core.step import legacy_producer_params
+from rayforge.core.varset import (
+    LabeledChoiceVar,
+    LengthVar,
+    SliderFloatVar,
+    VarSet,
+)
+from rayforge.image.tracing import prepare_surface
 from rayforge.pipeline.stage.assembler_helpers import (
-    MachineDefaults,
     build_part_vector,
-    make_artifact,
-    wrap_assembler_result,
 )
 from rayforge.pipeline.transformer.registry import transformer_registry
-from rayforge.image.tracing import prepare_surface
-from raygeo.ops import Ops
 
+from .laser_step import LaserStep
 
 if TYPE_CHECKING:
     from rayforge.context import RayforgeContext
     from rayforge.core.workpiece import WorkPiece
-    from rayforge.machine.models.laser import Laser
-    from rayforge.pipeline.artifact import WorkPieceArtifact
+    from rayforge.machine.models.machine import Machine
+
+    class LeadInOutTransformerType(Protocol):
+        @staticmethod
+        def calculate_auto_distance(
+            step_speed: int, max_acceleration: int
+        ) -> float: ...
 
 
-class ShrinkWrapStep(Step):
+class ShrinkWrapStep(LaserStep):
     TYPELABEL = _("Shrink Wrap")
     ICON = "step-shrinkwrap-symbolic"
-    CAPABILITIES: Tuple[Capability, ...] = (CUT, SCORE, WITH_KERF)
+    REQUIRED_MACHINE_CAPS = frozenset({MachineCapability.LASER})
     ASSEMBLER_NAME = "shrinkwrap"
-    SET_POWER = True
 
-    def __init__(
-        self, name: Optional[str] = None, typelabel: Optional[str] = None
-    ):
+    @classmethod
+    def recipe_varset(cls) -> VarSet:
+        return VarSet(
+            vars=[
+                *LaserStep.recipe_varset().vars,
+                SliderFloatVar(
+                    key="gravity",
+                    label=_("Gravity"),
+                    description=_(
+                        "Pulls the hull inward. 0.0 is a standard convex hull"
+                    ),
+                    default=0.0,
+                    min_val=0.0,
+                    max_val=1.0,
+                    digits=2,
+                ),
+                LabeledChoiceVar(
+                    key="cut_side",
+                    label=_("Cut Side"),
+                    choices=[(cs.label(), cs.name) for cs in CutSide],
+                    default="CENTERLINE",
+                    allow_none=False,
+                ),
+                LengthVar(
+                    key="offset_mm",
+                    label=_("Offset"),
+                    description=_(
+                        "Shifts the contour inward/outward per Cut "
+                        "Side (none on Centerline). Defaults to kerf "
+                        "compensation for the head"
+                    ),
+                    default=0.0,
+                    sensitive_when=lambda v: v.get("cut_side") != "CENTERLINE",
+                ),
+            ]
+        )
+
+    def __init__(self, name: str | None = None, typelabel: str | None = None):
         super().__init__(typelabel=typelabel or self.TYPELABEL, name=name)
+        self.power = 0.8
         self.gravity = 0.0
-        self.path_offset_mm = 0.0
+        self.offset_mm = 0.0
         self.cut_side = "CENTERLINE"
 
     def get_operation_mode_short(self):
@@ -52,89 +100,80 @@ class ShrinkWrapStep(Step):
 
     def get_assembler_kwargs(
         self,
-        machine_defaults: MachineDefaults,
-        workpiece: "WorkPiece",
+        machine: Machine,
+        workpiece: WorkPiece,
     ) -> dict:
         kwargs: dict = {}
         kwargs["cut_side"] = self.cut_side.lower()
         kwargs["gravity"] = self.gravity
-        kwargs["path_offset_mm"] = self.path_offset_mm
-        kwargs["kerf_mm"] = machine_defaults.kerf_mm
-        kwargs["arc_tolerance"] = machine_defaults.arc_tolerance
-        kwargs["allow_arcs"] = machine_defaults.allow_arcs
-        kwargs["supports_curves"] = machine_defaults.supports_curves
+        kwargs["offset_mm"] = self.offset_mm
+        kwargs["arc_tolerance"] = machine.arc_tolerance
+        kwargs["allow_arcs"] = machine.supports_arcs
+        kwargs["supports_curves"] = machine.supports_curves
         return kwargs
 
-    def assemble_on_surface(
+    def build_compute_payload(
         self,
-        workpiece: "WorkPiece",
-        laser: "Laser",
-        generation_id: int,
-        surface: Any = None,
-        pixels_per_mm: Optional[Tuple[float, float]] = None,
-        *,
-        machine_defaults: "MachineDefaults",
-        y_offset_mm: float = 0.0,
-        computed_auto_levels: Optional[Tuple[int, int]] = None,
-    ) -> "WorkPieceArtifact":
-        part = build_part_vector(
-            workpiece,
-            surface=surface,
-            normalize_windings=self.NORMALIZE_WINDINGS,
+        machine: Machine,
+        workpiece: WorkPiece,
+    ) -> tuple[Part, ComputePayload]:
+        """Build a :class:`Part` with vector geometry and a boolean
+        image, and a :class:`ComputePayload` carrying a
+        :class:`ShrinkwrapSpec`."""
+        part = _build_shrinkwrap_part(workpiece)
+        kwargs = self.get_assembler_kwargs(machine, workpiece)
+        spec = ShrinkwrapSpec(
+            gravity=kwargs["gravity"],
+            offset_mm=kwargs["offset_mm"],
+            cut_side=kwargs["cut_side"],
+            arc_tolerance=kwargs["arc_tolerance"],
+            allow_arcs=kwargs["allow_arcs"],
+            supports_curves=kwargs["supports_curves"],
         )
+        return part, ComputePayload(assembler=Assembler(spec))
 
-        if surface is not None:
-            assert part is not None
-            boolean_image = prepare_surface(surface)
-            if not np.any(boolean_image):
-                return make_artifact(
-                    Ops(),
-                    workpiece,
-                    generation_id,
-                    is_vector=self.IS_VECTOR,
-                )
-            part.image = boolean_image
+    def assembler_token_params(
+        self,
+        machine: Machine,
+        workpiece: WorkPiece,
+    ) -> dict | None:
+        return self.get_assembler_kwargs(machine, workpiece)
 
-        if part is None or not part.has_geometry():
-            return make_artifact(
-                Ops(), workpiece, generation_id, is_vector=self.IS_VECTOR
-            )
-
-        kwargs = self.get_assembler_kwargs(machine_defaults, workpiece)
-        result = assembler_registry.assemble(
-            self.ASSEMBLER_NAME, part, **kwargs
-        )
-        set_power = machine_defaults.step_power if self.SET_POWER else None
-        return wrap_assembler_result(
-            result,
-            workpiece,
-            laser,
-            generation_id,
-            split_contours=self.SPLIT_CONTOURS,
-            set_power=set_power,
-            is_vector=self.IS_VECTOR,
-        )
-
-    def requires_full_render(self) -> bool:
-        return True
+    def apply_import_settings(self, settings: dict) -> None:
+        """Apply importer-provided settings this step owns."""
+        super().apply_import_settings(settings)
+        offset_mm = settings.get("offset_mm")
+        if offset_mm is not None:
+            self.offset_mm = offset_mm
 
     def to_dict(self) -> dict:
         result = super().to_dict()
         result["gravity"] = self.gravity
-        result["path_offset_mm"] = self.path_offset_mm
+        result["offset_mm"] = self.offset_mm
         result["cut_side"] = self.cut_side
         return result
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ShrinkWrapStep":
+    def from_dict(cls, data: dict) -> ShrinkWrapStep:
         step = cast("ShrinkWrapStep", super().from_dict(data))
-        step.gravity = data.get("gravity", 0.0)
-        step.path_offset_mm = data.get("path_offset_mm", 0.0)
-        step.cut_side = data.get("cut_side", "CENTERLINE")
+        legacy = legacy_producer_params(data)
+        step.gravity = data.get("gravity", legacy.get("gravity", 0.0))
+        if "offset_mm" in data:
+            step.offset_mm = data["offset_mm"]
+        else:
+            path_offset = data.get(
+                "path_offset_mm",
+                legacy.get("path_offset_mm", legacy.get("offset_mm", 0.0)),
+            )
+            step.offset_mm = path_offset + (data.get("kerf_mm", 0.0) / 2.0)
+        step.cut_side = data.get(
+            "cut_side",
+            legacy.get("cut_side", legacy.get("kerf_mode", "CENTERLINE")),
+        )
         return step
 
     @classmethod
-    def get_default_transformers_dicts(cls) -> Tuple[List, List]:
+    def get_default_transformers_dicts(cls) -> tuple[list, list]:
         Smooth = transformer_registry.get("Smooth")
         LeadInOutTransformer = transformer_registry.get("LeadInOutTransformer")
         TabOpsTransformer = transformer_registry.get("TabOpsTransformer")
@@ -169,31 +208,40 @@ class ShrinkWrapStep(Step):
     @classmethod
     def create(
         cls,
-        context: "RayforgeContext",
-        name: Optional[str] = None,
+        context: RayforgeContext,
+        name: str | None = None,
         **kwargs,
-    ) -> "ShrinkWrapStep":
+    ) -> ShrinkWrapStep:
         machine = context.machine
         assert machine is not None
-        default_head = machine.get_default_head()
+        default_head = machine.get_default_laser_head()
+        if default_head is None:
+            raise ValueError("Machine has no laser heads configured.")
 
         step = cls(name=name)
         per_wp, per_step = cls.get_default_transformers_dicts()
 
         step.per_workpiece_transformers_dicts = per_wp
         step.per_step_transformers_dicts = per_step
-        step.selected_laser_uid = default_head.uid
-        step.kerf_mm = default_head.spot_size_mm[0]
+        step.selected_head_uid = default_head.uid
+        step.offset_mm = default_head.kerf_mm
         step.max_cut_speed = machine.max_cut_speed
         step.max_travel_speed = machine.max_travel_speed
-        for cap in machine.get_laser_capabilities(default_head):
-            for var in cap.varset:
-                setattr(step, var.key, var.default)
+        # Operating feed defaults are machine-derived: the machine only
+        # exposes its ceiling, so the default is that ceiling, bounded by
+        # the operation's typical feed rate.
+        step.cut_speed = min(machine.max_cut_speed, 500)
+        params = machine.get_pwm_params(default_head)
+        if params is not None:
+            step.frequency = params.frequency
+            step.pulse_width = params.pulse_width
 
-        # step.cut_speed is only final after the loop above.
-        LeadInOutTransformer = transformer_registry.get("LeadInOutTransformer")
+        LeadInOutTransformer = cast(
+            "LeadInOutTransformerType",
+            transformer_registry.get("LeadInOutTransformer"),
+        )
         if LeadInOutTransformer:
-            calc = getattr(LeadInOutTransformer, "calculate_auto_distance")
+            calc = LeadInOutTransformer.calculate_auto_distance
             auto_distance = calc(step.cut_speed, machine.acceleration)
             for t in per_wp:
                 if t.get("name") == "LeadInOutTransformer":
@@ -201,3 +249,56 @@ class ShrinkWrapStep(Step):
                     t["lead_out_mm"] = auto_distance
 
         return step
+
+
+def _build_shrinkwrap_part(workpiece: WorkPiece) -> Part:
+    """Build a :class:`Part` for the shrinkwrap assembler.
+
+    The shrinkwrap assembler needs both vector geometry (for the
+    boundary constraint) and a boolean image (for the hull
+    computation).  This function always renders the workpiece to a
+    surface and prepares the boolean image, then attaches it as a
+    :class:`WholeImageSource` alongside any vector geometry.
+
+    The shrinkwrap wraps the *whole* image, so the part is always a
+    single-face part: ``WorkPiece.to_part`` would split the geometry
+    into one face per disconnected pocket, making the pipeline run
+    the assembler once per face (producing one duplicate hull per
+    pocket).
+    """
+    size = workpiece.size
+    if size[0] <= 0 or size[1] <= 0:
+        return Part(size_mm=size)
+
+    px_per_mm = (50.0, 50.0)
+    target_w = max(1, int(size[0] * px_per_mm[0]))
+    target_h = max(1, int(size[1] * px_per_mm[1]))
+    surface = workpiece.render_to_pixels(target_w, target_h)
+    if surface is None:
+        return Part(size_mm=size)
+
+    boolean = prepare_surface(surface)
+    if not np.any(boolean):
+        return Part(size_mm=size)
+
+    part = build_part_vector(workpiece)
+    if part is None or not part.has_geometry():
+        part = Part(size_mm=size)
+    else:
+        # The shrinkwrap wraps the whole image, not each pocket, so
+        # the part must be a single-face part: `WorkPiece.to_part`
+        # would split the geometry into one face per disconnected
+        # pocket, making the pipeline run the assembler once per face
+        # (producing one duplicate hull per pocket).
+        boundaries = workpiece.boundaries
+        if boundaries is not None and not boundaries.is_empty():
+            geo = boundaries.copy()
+            w, h = workpiece.size
+            if w > 0 and h > 0:
+                geo.transform(Matrix.scale(w, h))
+            part = Part(geometry=geo, size_mm=(w, h))
+        else:
+            # Raster-traced fallback geometry: already single-face.
+            part = Part(geometry=part.geometry, size_mm=part.size_mm)
+    part.image_source = WholeImageSource(boolean)
+    return part

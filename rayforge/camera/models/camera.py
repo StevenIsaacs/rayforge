@@ -1,14 +1,28 @@
 import json
 import logging
-from datetime import datetime
-from typing import Any, Dict, Optional, Sequence, Tuple
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from typing import Any
 
 import numpy as np
 from blinker import Signal
 
 logger = logging.getLogger(__name__)
-Pos = Tuple[float, float]
+Pos = tuple[float, float]
 PointList = Sequence[Pos]
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """Interpret a possibly naive datetime as UTC.
+
+    Older stored calibration/alignment dates were written without a
+    timezone offset. The model stores fresh timestamps as UTC-aware, so
+    naive values are assumed to be UTC as well, making the two
+    comparable.
+    """
+    if dt is None or dt.tzinfo is not None:
+        return dt
+    return dt.replace(tzinfo=timezone.utc)
 
 
 class Camera:
@@ -19,7 +33,7 @@ class Camera:
         self._device_id: str = device_id
         self._enabled: bool = False
         # None indicates auto white balance, float for manual Kelvin
-        self._white_balance: Optional[float] = None
+        self._white_balance: float | None = None
         self._contrast: float = 50.0
         self._brightness: float = 0.0  # Default brightness (0 = no change)
         self._transparency: float = 0.2
@@ -30,7 +44,7 @@ class Camera:
 
         self._prefer_yuyv: bool = False
 
-        self._resolution: Optional[Tuple[int, int]] = None
+        self._resolution: tuple[int, int] | None = None
 
         # Lens calibration parameters
         # Distortion coefficients: k1, k2, p1, p2, k3 (OpenCV order)
@@ -41,25 +55,25 @@ class Camera:
         self._distortion_k3: float = 0.0
 
         # Camera matrix parameters (needed for proper undistortion)
-        self._camera_matrix_fx: Optional[float] = None
-        self._camera_matrix_fy: Optional[float] = None
-        self._camera_matrix_cx: Optional[float] = None
-        self._camera_matrix_cy: Optional[float] = None
+        self._camera_matrix_fx: float | None = None
+        self._camera_matrix_fy: float | None = None
+        self._camera_matrix_cx: float | None = None
+        self._camera_matrix_cy: float | None = None
 
         # Calibration metadata
-        self._calibration_rms: Optional[float] = None
-        self._calibration_date: Optional[datetime] = None
-        self._calibration_image_size: Optional[Tuple[int, int]] = None
-        self._calibration_frames_used: Optional[int] = None
+        self._calibration_rms: float | None = None
+        self._calibration_date: datetime | None = None
+        self._calibration_image_size: tuple[int, int] | None = None
+        self._calibration_frames_used: int | None = None
 
         # Properties for camera alignment points
-        self._image_to_world: Optional[Tuple[PointList, PointList]] = None
-        self._alignment_date: Optional[datetime] = None
+        self._image_to_world: tuple[PointList, PointList] | None = None
+        self._alignment_date: datetime | None = None
 
         # Signals
         self.changed = Signal()
         self.settings_changed = Signal()
-        self.extra: Dict[str, Any] = {}
+        self.extra: dict[str, Any] = {}
 
     @property
     def name(self) -> str:
@@ -100,11 +114,11 @@ class Camera:
         self.changed.send(self)
 
     @property
-    def white_balance(self) -> Optional[float]:
+    def white_balance(self) -> float | None:
         return self._white_balance
 
     @white_balance.setter
-    def white_balance(self, value: Optional[float]):
+    def white_balance(self, value: float | None):
         if value is not None:
             if not isinstance(value, (int, float)):
                 raise ValueError("White balance must be a number or None.")
@@ -131,7 +145,7 @@ class Camera:
     @contrast.setter
     def contrast(self, value: float):
         if not isinstance(value, (int, float)):
-            raise ValueError("Contrast must be a number.")
+            raise TypeError("Contrast must be a number.")
         if not (0.0 <= value <= 100.0):
             logger.warning(
                 f"Contrast value {value} is outside range (0.0-100.0). "
@@ -154,7 +168,7 @@ class Camera:
     @brightness.setter
     def brightness(self, value: float):
         if not isinstance(value, (int, float)):
-            raise ValueError("Brightness must be a number.")
+            raise TypeError("Brightness must be a number.")
         if not (-100.0 <= value <= 100.0):
             logger.warning(
                 f"Brightness value {value} is outside range (-100.0-100.0). "
@@ -177,7 +191,7 @@ class Camera:
     @transparency.setter
     def transparency(self, value: float):
         if not isinstance(value, (int, float)):
-            raise ValueError("Transparency must be a number.")
+            raise TypeError("Transparency must be a number.")
         if not (0.0 <= value <= 1.0):
             logger.warning(
                 f"Transparency value {value} is outside range (0.0-1.0). "
@@ -201,7 +215,7 @@ class Camera:
     @denoise.setter
     def denoise(self, value: float):
         if not isinstance(value, (int, float)):
-            raise ValueError("Denoise must be a number.")
+            raise TypeError("Denoise must be a number.")
         # Clamp between 0.0 (off) and 0.95 (extreme smoothing)
         value = max(0.0, min(value, 0.95))
         if self._denoise == value:
@@ -219,7 +233,7 @@ class Camera:
     @prefer_yuyv.setter
     def prefer_yuyv(self, value: bool):
         if not isinstance(value, bool):
-            raise ValueError("prefer_yuyv must be a boolean.")
+            raise TypeError("prefer_yuyv must be a boolean.")
         if self._prefer_yuyv == value:
             return
         logger.debug(
@@ -230,11 +244,11 @@ class Camera:
         self.settings_changed.send(self)
 
     @property
-    def resolution(self) -> Optional[Tuple[int, int]]:
+    def resolution(self) -> tuple[int, int] | None:
         return self._resolution
 
     @resolution.setter
-    def resolution(self, value: Optional[Tuple[int, int]]):
+    def resolution(self, value: tuple[int, int] | None):
         if value is not None:
             if not (
                 isinstance(value, tuple)
@@ -265,7 +279,7 @@ class Camera:
     @distortion_k1.setter
     def distortion_k1(self, value: float):
         self._distortion_k1 = float(value)
-        self._calibration_date = datetime.now()
+        self._calibration_date = datetime.now(tz=timezone.utc)
         self.changed.send(self)
         self.settings_changed.send(self)
 
@@ -276,7 +290,7 @@ class Camera:
     @distortion_k2.setter
     def distortion_k2(self, value: float):
         self._distortion_k2 = float(value)
-        self._calibration_date = datetime.now()
+        self._calibration_date = datetime.now(tz=timezone.utc)
         self.changed.send(self)
         self.settings_changed.send(self)
 
@@ -287,7 +301,7 @@ class Camera:
     @distortion_p1.setter
     def distortion_p1(self, value: float):
         self._distortion_p1 = float(value)
-        self._calibration_date = datetime.now()
+        self._calibration_date = datetime.now(tz=timezone.utc)
         self.changed.send(self)
         self.settings_changed.send(self)
 
@@ -298,7 +312,7 @@ class Camera:
     @distortion_p2.setter
     def distortion_p2(self, value: float):
         self._distortion_p2 = float(value)
-        self._calibration_date = datetime.now()
+        self._calibration_date = datetime.now(tz=timezone.utc)
         self.changed.send(self)
         self.settings_changed.send(self)
 
@@ -309,46 +323,46 @@ class Camera:
     @distortion_k3.setter
     def distortion_k3(self, value: float):
         self._distortion_k3 = float(value)
-        self._calibration_date = datetime.now()
+        self._calibration_date = datetime.now(tz=timezone.utc)
         self.changed.send(self)
         self.settings_changed.send(self)
 
     @property
-    def camera_matrix_fx(self) -> Optional[float]:
+    def camera_matrix_fx(self) -> float | None:
         return self._camera_matrix_fx
 
     @camera_matrix_fx.setter
-    def camera_matrix_fx(self, value: Optional[float]):
+    def camera_matrix_fx(self, value: float | None):
         self._camera_matrix_fx = value
         self.changed.send(self)
         self.settings_changed.send(self)
 
     @property
-    def camera_matrix_fy(self) -> Optional[float]:
+    def camera_matrix_fy(self) -> float | None:
         return self._camera_matrix_fy
 
     @camera_matrix_fy.setter
-    def camera_matrix_fy(self, value: Optional[float]):
+    def camera_matrix_fy(self, value: float | None):
         self._camera_matrix_fy = value
         self.changed.send(self)
         self.settings_changed.send(self)
 
     @property
-    def camera_matrix_cx(self) -> Optional[float]:
+    def camera_matrix_cx(self) -> float | None:
         return self._camera_matrix_cx
 
     @camera_matrix_cx.setter
-    def camera_matrix_cx(self, value: Optional[float]):
+    def camera_matrix_cx(self, value: float | None):
         self._camera_matrix_cx = value
         self.changed.send(self)
         self.settings_changed.send(self)
 
     @property
-    def camera_matrix_cy(self) -> Optional[float]:
+    def camera_matrix_cy(self) -> float | None:
         return self._camera_matrix_cy
 
     @camera_matrix_cy.setter
-    def camera_matrix_cy(self, value: Optional[float]):
+    def camera_matrix_cy(self, value: float | None):
         self._camera_matrix_cy = value
         self.changed.send(self)
         self.settings_changed.send(self)
@@ -365,7 +379,7 @@ class Camera:
             ]
         )
 
-    def get_camera_matrix(self) -> Optional[np.ndarray]:
+    def get_camera_matrix(self) -> np.ndarray | None:
         if not self.has_calibration:
             return None
         return np.array(
@@ -392,11 +406,11 @@ class Camera:
     # ---------------------------------------------
 
     @property
-    def image_to_world(self) -> Optional[Tuple[PointList, PointList]]:
+    def image_to_world(self) -> tuple[PointList, PointList] | None:
         return self._image_to_world
 
     @image_to_world.setter
-    def image_to_world(self, value: Optional[Tuple[PointList, PointList]]):
+    def image_to_world(self, value: tuple[PointList, PointList] | None):
         if value is not None:
             if not (isinstance(value, tuple) and len(value) == 2):
                 raise ValueError(
@@ -439,7 +453,7 @@ class Camera:
         )
         self._image_to_world = value
         if value is not None:
-            self._alignment_date = datetime.now()
+            self._alignment_date = datetime.now(tz=timezone.utc)
         else:
             self._alignment_date = None
         self.changed.send(self)
@@ -473,7 +487,7 @@ class Camera:
         self._distortion_k3 = float(dist[4]) if len(dist) > 4 else 0.0
 
         self._calibration_rms = result.rms_error
-        self._calibration_date = result.calibration_date
+        self._calibration_date = _as_utc(result.calibration_date)
         self._calibration_image_size = result.image_size
         self._calibration_frames_used = result.num_frames_used
 
@@ -484,27 +498,27 @@ class Camera:
         self.settings_changed.send(self)
 
     @property
-    def calibration_rms(self) -> Optional[float]:
+    def calibration_rms(self) -> float | None:
         return self._calibration_rms
 
     @property
-    def calibration_date(self) -> Optional[datetime]:
+    def calibration_date(self) -> datetime | None:
         return self._calibration_date
 
     @property
-    def calibration_image_size(self) -> Optional[Tuple[int, int]]:
+    def calibration_image_size(self) -> tuple[int, int] | None:
         return self._calibration_image_size
 
     @property
-    def calibration_frames_used(self) -> Optional[int]:
+    def calibration_frames_used(self) -> int | None:
         return self._calibration_frames_used
 
     @property
-    def alignment_date(self) -> Optional[datetime]:
+    def alignment_date(self) -> datetime | None:
         return self._alignment_date
 
     @alignment_date.setter
-    def alignment_date(self, value: Optional[datetime]):
+    def alignment_date(self, value: datetime | None):
         if self._alignment_date == value:
             return
         self._alignment_date = value
@@ -519,13 +533,15 @@ class Camera:
     def alignment_valid(self) -> bool:
         if not self.has_alignment:
             return False
-        if self._calibration_date is None:
+        calibration = _as_utc(self._calibration_date)
+        alignment = _as_utc(self._alignment_date)
+        if calibration is None:
             return True
-        if self._alignment_date is None:
+        if alignment is None:
             return False
-        return self._alignment_date >= self._calibration_date
+        return alignment >= calibration
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = {
             "name": self.name,
             "device_id": self.device_id,
@@ -585,7 +601,7 @@ class Camera:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Camera":
+    def from_dict(cls, data: dict[str, Any]) -> "Camera":
         known_keys = {
             "name",
             "device_id",
@@ -652,11 +668,11 @@ class Camera:
             camera.image_to_world = None
 
         if data.get("alignment_date"):
-            camera._alignment_date = datetime.fromisoformat(
-                data["alignment_date"]
+            camera._alignment_date = _as_utc(
+                datetime.fromisoformat(data["alignment_date"])
             )
         elif camera._image_to_world is not None:
-            camera._alignment_date = datetime.now()
+            camera._alignment_date = datetime.now(tz=timezone.utc)
 
         camera._camera_matrix_fx = data.get("camera_matrix_fx")
         camera._camera_matrix_fy = data.get("camera_matrix_fy")
@@ -664,8 +680,8 @@ class Camera:
         camera._camera_matrix_cy = data.get("camera_matrix_cy")
         camera._calibration_rms = data.get("calibration_rms")
         if data.get("calibration_date"):
-            camera._calibration_date = datetime.fromisoformat(
-                data["calibration_date"]
+            camera._calibration_date = _as_utc(
+                datetime.fromisoformat(data["calibration_date"])
             )
         elif any(
             v != 0.0
@@ -677,7 +693,7 @@ class Camera:
                 camera._distortion_p2,
             ]
         ):
-            camera._calibration_date = datetime.now()
+            camera._calibration_date = datetime.now(tz=timezone.utc)
         if data.get("calibration_image_size"):
             camera._calibration_image_size = tuple(
                 data["calibration_image_size"]

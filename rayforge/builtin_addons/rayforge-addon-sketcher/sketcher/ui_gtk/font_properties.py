@@ -1,12 +1,12 @@
 import logging
 from gettext import gettext as _
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from gi.repository import Adw, Gtk, Pango
-
 from raygeo.geo.shape.text import FontConfig
+
 from rayforge.ui_gtk.icons import get_icon
-from rayforge.ui_gtk.shared.adwfix import get_spinrow_float
+from rayforge.ui_gtk.shared.pref_rows import SpinRow
 
 from ..core.commands.text_property import (
     ModifyTextPropertyCommand,
@@ -28,7 +28,7 @@ class FontPropertiesWidget(Adw.PreferencesGroup):
     def __init__(self, editor: "SketchEditor"):
         super().__init__()
         self.editor = editor
-        self._text_entity_id: Optional[int] = None
+        self._text_entity_id: int | None = None
         self._in_update = False
         self._current_font_family = "sans-serif"
 
@@ -52,16 +52,15 @@ class FontPropertiesWidget(Adw.PreferencesGroup):
         self.font_family_row.add_suffix(get_icon("go-next-symbolic"))
         self.add(self.font_family_row)
 
-        adj = Gtk.Adjustment(
-            value=10.0,
+        self.font_size_row = SpinRow(
+            _("Font Size"),
             lower=1.0,
             upper=500.0,
             step_increment=0.1,
+            digits=1,
+            value=10.0,
         )
-        self.font_size_row = Adw.SpinRow(adjustment=adj)
-        self.font_size_row.set_title(_("Font Size"))
-        self.font_size_row.set_digits(1)
-        self.font_size_row.connect("notify::value", self._on_font_size_changed)
+        self.font_size_row.value_changed.connect(self._on_font_size_changed)
         self.add(self.font_size_row)
 
         self.bold_row = Adw.ActionRow()
@@ -86,7 +85,7 @@ class FontPropertiesWidget(Adw.PreferencesGroup):
         self.italic_switch = italic_switch
         self.add(self.italic_row)
 
-    def set_text_entity(self, entity_id: Optional[int]):
+    def set_text_entity(self, entity_id: int | None):
         """
         Sets the text entity to display font properties for.
         Hides the widget if entity_id is None.
@@ -126,7 +125,7 @@ class FontPropertiesWidget(Adw.PreferencesGroup):
         """Creates a FontConfig from the current UI values."""
         return FontConfig(
             family=self._current_font_family,
-            size=get_spinrow_float(self.font_size_row),
+            size=self.font_size_row.get_value(),
             bold=self.bold_switch.get_active(),
             italic=self.italic_switch.get_active(),
         )
@@ -137,7 +136,7 @@ class FontPropertiesWidget(Adw.PreferencesGroup):
             return
         self._open_font_chooser_dialog()
 
-    def _on_font_size_changed(self, row, *args):
+    def _on_font_size_changed(self, row):
         """Handles font size change."""
         if self._in_update or self._text_entity_id is None:
             return
@@ -180,7 +179,7 @@ class FontPropertiesWidget(Adw.PreferencesGroup):
         """Creates a Pango.FontDescription from current UI values."""
         font_desc = Pango.FontDescription()
         font_desc.set_family(self._current_font_family)
-        font_size_pt = get_spinrow_float(self.font_size_row)
+        font_size_pt = self.font_size_row.get_value()
         font_desc.set_size(int(font_size_pt * Pango.SCALE))
         style = (
             Pango.Style.ITALIC

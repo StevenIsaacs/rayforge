@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterator
 from gettext import gettext as _
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator, List, Optional
+from typing import TYPE_CHECKING, ClassVar
 
 from raygeo.geo import Matrix
 
@@ -42,11 +43,11 @@ class SketchImporter(Importer):
     label = _("{app_name} Sketch").format(app_name=const.APP_NAME)
     extensions = (".rfs",)
     mime_types = (const.MIME_TYPE_SKETCH,)
-    features = {ImporterFeature.DIRECT_VECTOR}
+    features: ClassVar[set[ImporterFeature]] = {ImporterFeature.DIRECT_VECTOR}
 
-    def __init__(self, data: bytes, source_file: Optional[Path] = None):
+    def __init__(self, data: bytes, source_file: Path | None = None):
         super().__init__(data, source_file)
-        self.parsed_sketch: Optional[Sketch] = None
+        self.parsed_sketch: Sketch | None = None
 
     def scan(self) -> ImportManifest:
         """
@@ -62,7 +63,7 @@ class SketchImporter(Importer):
             logger.warning(
                 f"Sketch scan failed for {self.source_file.name}: {e}"
             )
-            self.add_error(_(f"Sketch file is invalid JSON: {e}"))
+            self.add_error(_("Sketch file is invalid JSON: {}").format(e))
             return ImportManifest(
                 title=self.source_file.name, errors=self._errors
             )
@@ -77,7 +78,7 @@ class SketchImporter(Importer):
         if not self.parsed_sketch:
             return payload
 
-        def find_workpieces(items: List[DocItem]) -> Iterator[WorkPiece]:
+        def find_workpieces(items: list[DocItem]) -> Iterator[WorkPiece]:
             """Recursively find all WorkPiece objects in a list of items."""
             for item in items:
                 if isinstance(item, WorkPiece):
@@ -111,14 +112,14 @@ class SketchImporter(Importer):
             height_mm=height,
         )
 
-    def parse(self) -> Optional[ParsingResult]:
+    def parse(self) -> ParsingResult | None:
         """Phase 2: Parse JSON into Sketch model and solve it for bounds."""
         try:
             sketch_dict = json.loads(self.raw_data.decode("utf-8"))
             self.parsed_sketch = Sketch.from_dict(sketch_dict)
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.error(f"Failed to parse sketch data: {e}")
-            self.add_error(_(f"Failed to load sketch structure: {e}"))
+            self.add_error(_("Failed to load sketch structure: {}").format(e))
             return None
 
         final_name = self.parsed_sketch.name
