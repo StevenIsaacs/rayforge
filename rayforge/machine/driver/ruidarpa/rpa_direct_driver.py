@@ -271,6 +271,45 @@ class RpaDirectDriver:
         """
         self._ensure_driver().jog_set_u_speed(speed)
 
+    # --- Job control ---
+
+    def pause(self) -> None:
+        """Pause the running job.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        pause command is sent exactly once.
+        """
+        self._require_connected().pause()
+
+    def resume(self) -> None:
+        """Resume the paused job.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        resume command is sent exactly once.
+        """
+        self._require_connected().resume()
+
+    def stop_job(self) -> None:
+        """Stop the running job.
+
+        The wrapped RdDriver auto-sends the generated lines when
+        connected; the returned lines are deliberately discarded so each
+        stop_job command is sent exactly once.
+        """
+        self._require_connected().stop_job()
+
+    def reset(self) -> None:
+        """Reset the controller.
+
+        Stops the current job and homes the X/Y axes. The wrapped
+        RdDriver auto-sends the generated lines when connected; the
+        returned lines are deliberately discarded so each reset command
+        is sent exactly once.
+        """
+        self._require_connected().reset()
+
     # --- Status ---
 
     @property

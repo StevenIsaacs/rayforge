@@ -66,7 +66,7 @@ class TestGoldenStructure:
     def test_single_job_framing(self):
         """The output is self-contained: one ref-point/start block."""
         lines = _encode_representative_job().split("\n")
-        assert lines.count("REF_POINT_ABSOLUTE") == 1
+        assert lines.count("REF_POINT_MACHINE") == 1
         assert lines.count("REF_POINT_SET") == 1
         assert lines.count("START_JOB") == 1
         assert lines.count("LAST_LAYER Layer:2") == 1
@@ -87,7 +87,7 @@ class TestGoldenStructure:
         assert "# Layer 2: Default" in text
         assert "LAYER_MIN_POWER_1 Layer:0 Power:50.0%" in text
         assert "LAYER_MIN_POWER_1 Layer:1 Power:8.0%" in text
-        assert "LAYER_SPEED_LASER_1 Layer:2 Speed:100.0mm/S" in text
+        assert "CUT_SPEED_LASER_1 Layer:2 Speed:100.0mm/S" in text
         assert "LAYER_MIN_POWER_1 Layer:2 Power:20.0%" in text
 
     def test_layer_action_blocks(self):
@@ -96,21 +96,21 @@ class TestGoldenStructure:
         assert text.count("SELECT_LAYER Layer:0") == 1
         assert text.count("SELECT_LAYER Layer:1") == 1
         assert text.count("SELECT_LAYER Layer:2") == 1
-        assert "MIN_POWER_1 Power=8.0%" in text
-        assert "SPEED_LASER_1 Speed=250.000mm/S" in text
-        assert "LAYER_FREQUENCY Laser=1 Layer=0 Freq=25.000KHz" in text
-        assert "LASER_INTERVAL 0.050mS" in text
+        assert "IMD_POWER_1 Power:5.0%" in text
+        assert "IMD_POWER_1 Power:0.0%" in text
+        assert "CUT_SPEED_LASER_1 Layer:0 Speed=4.166666666666667" in text
+        assert "# frequency(25.0)" in text
+        assert "# pwm(50.0)" in text
         assert "AIR_ASSIST_ON" in text
         assert "AIR_ASSIST_OFF" in text
-        assert "delay 250.000ms" in text
 
     def test_moves_cuts_arc_and_scan_present(self):
         """Near/far moves and cuts, an arc, and a scan line all stage."""
         text = _encode_representative_job()
-        assert "MOVE_NEAR_XY X=0.000mm Y=0.000mm" in text
+        assert "MOVE_NEAR_XY nearX=0.000mm nearY=0.000mm" in text
         assert "MOVE_FAR_XY X=20.000mm Y=20.000mm" in text
-        assert "CUT_NEAR_XY X=5.000mm Y=5.000mm" in text
+        assert "CUT_NEAR_XY nearX=5.000mm nearY=5.000mm" in text
         assert "CUT_FAR_XY X=50.000mm Y=20.000mm" in text
         assert text.count("CUT_NEAR_XY") > 5
-        assert "MIN_POWER_1 Power=50.2%" in text
-        assert "MIN_POWER_1 Power=100.0%" in text
+        assert "IMD_POWER_1 Power:50.2%" in text
+        assert "IMD_POWER_1 Power:100.0%" in text

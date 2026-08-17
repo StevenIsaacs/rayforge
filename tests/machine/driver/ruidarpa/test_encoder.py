@@ -17,6 +17,7 @@ import logging
 import pytest
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode, CoolantMode
+from raygeo.ops.types import RasterMode, SectionType
 
 from rayforge.core.doc import Doc
 from rayforge.core.step import Step
@@ -175,7 +176,7 @@ class TestLayerDeclaration:
         result = encoder.encode(ops, mock_machine, doc)
 
         lines = result.text.split("\n")
-        assert "LAYER_SPEED_LASER_1 Layer:0 Speed:100.0mm/S" in lines
+        assert "CUT_SPEED_LASER_1 Layer:0 Speed:100.0mm/S" in lines
         assert "LAYER_MIN_POWER_1 Layer:0 Power:20.0%" in lines
         assert "LAYER_MAX_POWER_1 Layer:0 Power:20.0%" in lines
 
@@ -194,7 +195,7 @@ class TestLayerDeclaration:
         result = encoder.encode(ops, mock_machine, doc)
 
         lines = result.text.split("\n")
-        assert "LAYER_SPEED_LASER_1 Layer:0 Speed:300.0mm/S" in lines
+        assert "CUT_SPEED_LASER_1 Layer:0 Speed:5.0mm/S" in lines
         assert "LAYER_MIN_POWER_1 Layer:0 Power:50.0%" in lines
         assert "LAYER_MAX_POWER_1 Layer:0 Power:50.0%" in lines
 
@@ -244,7 +245,7 @@ class TestMoveCutForms:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "MOVE_NEAR_XY X=5.000mm Y=5.000mm" in result.text
+        assert "MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm" in result.text
         assert "MOVE_FAR_XY" not in result.text
 
     def test_far_move_uses_far_form(self, encoder, mock_machine, doc):
@@ -271,7 +272,7 @@ class TestMoveCutForms:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "CUT_NEAR_XY X=5.000mm Y=5.000mm" in result.text
+        assert "CUT_NEAR_XY nearX=5.000mm nearY=5.000mm" in result.text
 
     def test_far_cut_uses_far_form(self, encoder, mock_machine, doc):
         """Cuts beyond the 8.192mm threshold must use the far form."""
@@ -301,8 +302,8 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         lines = result.text.split("\n")
-        assert "MIN_POWER_1 Power=50.0%" in lines
-        assert "MAX_POWER_1 Power=50.0%" in lines
+        assert "MIN_POWER_1 Power:50.0%" in lines
+        assert "MAX_POWER_1 Power:50.0%" in lines
 
     def test_power_action_below_minimum_clamps(
         self, encoder, mock_machine, doc, caplog
@@ -317,8 +318,8 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         lines = result.text.split("\n")
-        assert "MIN_POWER_1 Power=8.0%" in lines
-        assert "MAX_POWER_1 Power=8.0%" in lines
+        assert "MIN_POWER_1 Power:8.0%" in lines
+        assert "MAX_POWER_1 Power:8.0%" in lines
         assert any("clamping" in record.message for record in caplog.records)
 
     def test_legacy_coolant_non_off_logs_warning(
@@ -339,7 +340,7 @@ class TestSettingsCommands:
         )
 
     def test_feed_rate_emits_speed_line(self, encoder, mock_machine, doc):
-        """SET_FEED_RATE should emit a SPEED_LASER_1 action line."""
+        """SET_FEED_RATE should emit a comment-only cut_speed line."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -348,10 +349,13 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "SPEED_LASER_1 Speed=200.000mm/S" in result.text
+        assert (
+            "CUT_SPEED_LASER_1 Layer:0 Speed=3.3333333333333335"
+            in result.text
+        )
 
     def test_rapid_rate_emits_axis_speed(self, encoder, mock_machine, doc):
-        """SET_RAPID_RATE should emit a SPEED_AXIS action line."""
+        """SET_RAPID_RATE should emit a comment-only move_speed line."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -360,10 +364,10 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "SPEED_AXIS Speed=500.000mm/S" in result.text
+        assert "# move_speed(8.333333333333334)" in result.text
 
     def test_frequency_emits_khz_line(self, encoder, mock_machine, doc):
-        """SET_FREQUENCY should convert Hz to KHz."""
+        """SET_FREQUENCY should convert Hz to KHz for gluescript."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -372,10 +376,10 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "LAYER_FREQUENCY Laser=1 Layer=0 Freq=20.000KHz" in result.text
+        assert "# frequency(20.0)" in result.text
 
     def test_pulse_width_emits_interval_line(self, encoder, mock_machine, doc):
-        """SET_PULSE_WIDTH should convert µs to mS."""
+        """SET_PULSE_WIDTH should pass microseconds to gluescript pwm."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -384,10 +388,13 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "LASER_INTERVAL 0.050mS" in result.text
+        assert "# pwm(50.0)" in result.text
 
-    def test_dwell_emits_delay_line(self, encoder, mock_machine, doc):
-        """DWELL should emit a delay action line in milliseconds."""
+    def test_dwell_warns_and_emits_no_delay(
+        self, encoder, mock_machine, doc, caplog
+    ):
+        """DWELL is unsupported — warn and emit no delay line."""
+        caplog.set_level(logging.WARNING, logger=rpa_encoder.logger.name)
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -396,7 +403,8 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "delay 250.000ms" in result.text
+        assert "delay" not in result.text
+        assert any("DWELL" in record.message for record in caplog.records)
 
     def test_air_assist_on_off(self, encoder, mock_machine, doc):
         """Air assist toggle should emit ON then OFF lines."""
@@ -415,8 +423,11 @@ class TestSettingsCommands:
         assert "AIR_ASSIST_OFF" in lines
         assert lines.index("AIR_ASSIST_ON") < lines.index("AIR_ASSIST_OFF")
 
-    def test_set_head_selects_laser_device(self, encoder, mock_machine, doc):
-        """SET_HEAD should resolve the laser_uid to a device number."""
+    def test_set_head_selects_laser_device(
+        self, encoder, mock_machine, doc, caplog
+    ):
+        """SET_HEAD resolves the laser_uid to a device via select_laser."""
+        caplog.set_level(logging.WARNING, logger=rpa_encoder.logger.name)
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -428,9 +439,16 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         lines = result.text.split("\n")
-        assert "LASER_DEVICE_2" in lines
+        # laser-2 resolves to device 2: select_laser(2) is recorded into the
+        # plan, but no raw LASER_DEVICE_2 (only laser 1 is wired in
+        # ruida-pa), and a warning is logged.
+        assert ("select_laser", (2,)) in result.rpa_plan
+        assert "LASER_DEVICE_2" not in lines
+        assert any(
+            "select_laser" in record.message for record in caplog.records
+        )
+        # laser-1 resolves to device 1: select_laser(1) emits LASER_DEVICE_1.
         assert "LASER_DEVICE_1" in lines
-        assert lines.index("LASER_DEVICE_2") < lines.index("LASER_DEVICE_1")
 
     def test_set_head_numeric_suffix_fallback_selects_device(
         self, encoder, mock_machine, doc
@@ -447,7 +465,8 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         # ((2 - 1) % 2) + 1 = 2; active_laser defaults to 1
-        assert "LASER_DEVICE_2" in result.text
+        assert ("select_laser", (2,)) in result.rpa_plan
+        assert "LASER_DEVICE_2" not in result.text
 
         ops = Ops()
         ops.job_start()
@@ -476,7 +495,179 @@ class TestSettingsCommands:
 
         lines = result.text.split("\n")
         # sum(ord(c) for c in "laser-3") = 631, odd -> device 2
-        assert "LASER_DEVICE_2" in lines
+        assert ("select_laser", (2,)) in result.rpa_plan
+        assert "LASER_DEVICE_2" not in lines
+
+
+class TestSectionPowerRouting:
+    """Section-aware SET_POWER routing to GlueScript power/power_range."""
+
+    def _raster_job(self, doc, raster_mode, power):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL, "wp-0", raster_mode=raster_mode
+        )
+        ops.set_power(power)
+        ops.ops_section_end(SectionType.RASTER_FILL, raster_mode=raster_mode)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
+
+    def test_variable_power_section_uses_power_gluescript(
+        self, encoder, mock_machine, doc
+    ):
+        """RASTER_FILL + VARIABLE_POWER must route through power()."""
+        ops = self._raster_job(doc, RasterMode.VARIABLE_POWER, 0.5)
+        result = encoder.encode(ops, mock_machine, doc)
+
+        assert "IMD_POWER_1 Power:50.0%" in result.text
+        assert ("power", (50.0,)) in result.rpa_plan
+
+    def test_variable_power_section_passes_low_power_through(
+        self, encoder, mock_machine, doc, caplog
+    ):
+        """Image power below 8% must pass through without clamping."""
+        ops = self._raster_job(doc, RasterMode.VARIABLE_POWER, 0.05)
+        result = encoder.encode(ops, mock_machine, doc)
+
+        assert "IMD_POWER_1 Power:5.0%" in result.text
+        assert not any(
+            "clamping" in record.message for record in caplog.records
+        )
+
+    def test_depth_map_section_uses_power_gluescript(
+        self, encoder, mock_machine, doc
+    ):
+        """RASTER_FILL + DEPTH_MAP must route through power()."""
+        ops = self._raster_job(doc, RasterMode.DEPTH_MAP, 0.5)
+        result = encoder.encode(ops, mock_machine, doc)
+
+        assert "IMD_POWER_1 Power:50.0%" in result.text
+        assert ("power", (50.0,)) in result.rpa_plan
+
+    def test_constant_power_section_uses_power_range(
+        self, encoder, mock_machine, doc
+    ):
+        """RASTER_FILL + CONSTANT_POWER must use power_range()."""
+        ops = self._raster_job(doc, RasterMode.CONSTANT_POWER, 0.5)
+        result = encoder.encode(ops, mock_machine, doc)
+
+        lines = result.text.split("\n")
+        assert "MIN_POWER_1 Power:50.0%" in lines
+        assert "MAX_POWER_1 Power:50.0%" in lines
+        assert ("power_range", (50.0, 50.0)) in result.rpa_plan
+
+    def test_layer_mode_derived_from_sections(
+        self, encoder, mock_machine, doc
+    ):
+        """declare_layer mode follows the layer's ops sections."""
+        cases = [
+            (RasterMode.VARIABLE_POWER, "IMAGE"),
+            (RasterMode.DEPTH_MAP, "DEPTHMAP"),
+            (None, "VECTOR"),
+        ]
+        for raster_mode, expected in cases:
+            ops = Ops()
+            ops.job_start()
+            ops.layer_start(layer_uid=doc.layers[0].uid)
+            if raster_mode is None:
+                ops.set_power(0.5)
+            else:
+                ops.ops_section_start(
+                    SectionType.RASTER_FILL,
+                    "wp-0",
+                    raster_mode=raster_mode,
+                )
+                ops.set_power(0.5)
+                ops.ops_section_end(
+                    SectionType.RASTER_FILL, raster_mode=raster_mode
+                )
+            ops.layer_end(layer_uid=doc.layers[0].uid)
+            ops.job_end()
+            result = encoder.encode(ops, mock_machine, doc)
+            declared = [
+                args
+                for name, args in result.rpa_plan
+                if name == "declare_layer"
+            ]
+            assert declared[0][2] == expected
+
+    def test_layer_mode_priority_depth_map_wins_regardless_of_order(
+        self, encoder, mock_machine, doc
+    ):
+        """DEPTH_MAP wins over VARIABLE_POWER even when it comes last."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.set_power(0.5)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.DEPTH_MAP,
+        )
+        ops.set_power(0.5)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.DEPTH_MAP
+        )
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        declared = [
+            args for name, args in result.rpa_plan if name == "declare_layer"
+        ]
+        assert declared[0][2] == "DEPTHMAP"
+
+    def test_section_state_resets_after_section_end(
+        self, encoder, mock_machine, doc
+    ):
+        """SET_POWER after OPS_SECTION_END must fall back to power_range()."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.set_power(0.5)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        lines = result.text.split("\n")
+        assert "MIN_POWER_1 Power:50.0%" in lines
+        assert "MAX_POWER_1 Power:50.0%" in lines
+        assert "IMD_POWER_1" not in lines
+
+    def test_image_section_op_before_layer_start_raises(
+        self, encoder, mock_machine, doc
+    ):
+        """An image-section op before LAYER_START must fail loudly."""
+        ops = Ops()
+        ops.job_start()
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.set_power(0.5)
+
+        with pytest.raises(ValueError, match="LAYER_START"):
+            encoder.encode(ops, mock_machine, doc)
 
 
 class TestCurveLinearization:
@@ -557,10 +748,10 @@ class TestOpMapGeneration:
         """Set/move/cut ops should map to their action lines."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
-        min_power = lines.index("MIN_POWER_1 Power=50.0%")
-        max_power = lines.index("MAX_POWER_1 Power=50.0%")
-        move_line = lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")
-        cut_line = lines.index("CUT_NEAR_XY X=10.000mm Y=8.000mm")
+        min_power = lines.index("MIN_POWER_1 Power:50.0%")
+        max_power = lines.index("MAX_POWER_1 Power:50.0%")
+        move_line = lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
+        cut_line = lines.index("CUT_NEAR_XY nearX=5.000mm nearY=3.000mm")
 
         assert result.op_map.op_to_machine_code[2] == [
             min_power,
@@ -650,12 +841,18 @@ class TestOpMapGeneration:
         assert op_map[5] == list(range(attr1, attr2))
         assert op_map[8] == list(range(attr2, last_layer))
         assert op_map[2] == [
-            lines.index("MIN_POWER_1 Power=50.0%"),
-            lines.index("MAX_POWER_1 Power=50.0%"),
+            lines.index("MIN_POWER_1 Power:50.0%"),
+            lines.index("MAX_POWER_1 Power:50.0%"),
         ]
-        assert op_map[3] == [lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")]
-        assert op_map[6] == [lines.index("MOVE_NEAR_XY X=1.000mm Y=1.000mm")]
-        assert op_map[9] == [lines.index("CUT_NEAR_XY X=9.000mm Y=9.000mm")]
+        assert op_map[3] == [
+            lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
+        ]
+        assert op_map[6] == [
+            lines.index("MOVE_NEAR_XY nearX=-4.000mm nearY=-4.000mm")
+        ]
+        assert op_map[9] == [
+            lines.index("CUT_NEAR_XY nearX=8.000mm nearY=8.000mm")
+        ]
         assert op_map[11] == [
             last_layer,
             select0,
@@ -698,9 +895,13 @@ class TestOpMapLayoutPinning:
 
         assert op_map[0] == list(range(0, attr0))
         assert op_map[1] == list(range(attr0, attr1))
-        assert op_map[2] == [lines.index("MOVE_NEAR_XY X=5.000mm Y=5.000mm")]
+        assert op_map[2] == [
+            lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
+        ]
         assert op_map[4] == list(range(attr1, last_layer))
-        assert op_map[5] == [lines.index("CUT_NEAR_XY X=10.000mm Y=8.000mm")]
+        assert op_map[5] == [
+            lines.index("CUT_NEAR_XY nearX=5.000mm nearY=3.000mm")
+        ]
         assert op_map[7] == [last_layer, select0, select1, end_job, eof]
 
         for op_index, block in op_map.items():
@@ -787,13 +988,13 @@ class TestGluescriptPlan:
     def test_plan_records_structural_and_raw_calls(
         self, encoder, mock_machine, doc
     ):
-        """Structural calls and add_layer_action raw lines are recorded."""
+        """Structural calls and power_range raw lines are recorded."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
         names = [name for name, _ in result.rpa_plan]
         assert "declare_layer" in names
         assert "move_xy_to" in names
         assert "cut_xy_to" in names
-        assert "add_layer_action" in names
+        assert "power_range" in names
 
     def test_plan_args_are_positional_tuples(self, encoder, mock_machine, doc):
         """Recorded args are plain positional tuples (no kwargs)."""
@@ -819,15 +1020,12 @@ class TestGluescriptPlan:
         assert result2.rpa_plan is not None
         assert result2.rpa_plan == plan1
 
-    def test_plan_layers_use_one_based_keys(self, encoder, mock_machine, doc):
-        """add_layer_action records the internal 1-based layer key."""
+    def test_plan_records_per_op_settings_as_gluescript_calls(
+        self, encoder, mock_machine, doc
+    ):
+        """Per-op settings record as gluescript calls in the plan."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        action_layers = {
-            args[0]
-            for name, args in result.rpa_plan
-            if name == "add_layer_action"
-        }
-        assert action_layers == {1, 2}
+        assert ("cut_speed", (3.3333333333333335,)) in result.rpa_plan
 
 
 class TestWcsToRefPoint:

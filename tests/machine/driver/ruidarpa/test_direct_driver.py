@@ -1,9 +1,9 @@
 """
-Unit tests for the RpaDirectDriver jog/home wrappers.
+Unit tests for the RpaDirectDriver live-command wrappers.
 
 The wrappers delegate to the wrapped RdDriver and discard the returned
 lines, which the driver auto-sends when connected. Calling ``run()`` on
-those lines would double-send every jog/home command, so the tests pin
+those lines would double-send every live command, so the tests pin
 ``run`` as never-called and the wrapper return value as None.
 """
 
@@ -24,6 +24,10 @@ _LIVE_METHODS = [
     ("jog_y_rel", (5.0,)),
     ("jog_z_rel", (5.0,)),
     ("jog_u_rel", (5.0,)),
+    ("pause", ()),
+    ("resume", ()),
+    ("stop_job", ()),
+    ("reset", ()),
 ]
 
 _SPEED_METHODS = [
@@ -43,7 +47,7 @@ def _direct_driver(connected: bool) -> tuple[RpaDirectDriver, Mock]:
 
 
 class TestLiveWrapperDelegation:
-    """Jog/home wrappers delegate and never run the returned lines."""
+    """Live-command wrappers delegate and never run the returned lines."""
 
     @pytest.mark.parametrize("method,args", _LIVE_METHODS)
     def test_delegates_and_never_runs_returned_lines(self, method, args):
@@ -60,7 +64,9 @@ class TestLiveWrapperDelegation:
 
     @pytest.mark.parametrize("method,args", _LIVE_METHODS)
     def test_raises_when_disconnected(self, method, args):
-        """Jog/home must fail loudly instead of silently no-oping."""
+        """Jog, home, and job-control commands must fail loudly instead
+        of silently no-oping.
+        """
         driver, _mock_driver = _direct_driver(connected=False)
 
         with pytest.raises(RuntimeError, match="not connected"):

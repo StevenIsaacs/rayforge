@@ -522,3 +522,120 @@ issues; the review follow-ups (3 SHOULD test-coverage items + 2 NITs: aligned
 `_last_fallback_wcs`) were all addressed and re-verified. Constraints honored:
 no changes under `rayforge/machine/driver/ruida/` (reference-only prototype) or
 `external/ruida-pa/`.
+
+## 2026-08-17 — set_power/set_focus_power/dwell unsupported; set_laser → select_laser
+
+### Problem
+
+The RuidaRPAAdapter's live `set_power`/`set_focus_power` emitted runner
+directives (`IMD_POWER_n Power=X%` via `_run_script` → `backend.run()`) that
+have no Ruida-controller equivalent outside of a job, and `set_focus_power`
+delegated to `set_power`. The encoder's `_handle_dwell` emitted a
+`delay {ms}ms` runner directive (never sent to the controller) and raised
+`_require_active_layer()` for pre-layer-start dwells. `_handle_set_laser`
+emitted a raw `LASER_DEVICE_n` layer-action line via `_add_layer_action`
+instead of the GlueScript `select_laser()` API, so laser selection bypassed the
+supported high-level path and the raw line was forwarded-only over RPC (no
+replay dispatch case).
+
+### Solution
+
+`rpa_adapter.py` `set_power` and `set_focus_power` are now UNSUPPORTED: each
+logs its own `logger.warning` (naming its own method, no delegation) and does
+nothing — no `_run_script`, no `IMD_POWER_n` emission. The correct handling
+outside of a job with a Ruida controller is to be determined, so the warning
+conveys that. `_run_script` stays (used by jog/home/etc.).
+
+`rpa_encoder.py` `_handle_dwell` is now UNSUPPORTED: it logs a warning (the
+Ruida controller has no direct equivalent) and emits nothing; the
+`_require_active_layer()` call and `self._gluescript.delay(...)` call are
+removed, so pre-layer-start dwell no longer raises (deliberate softening).
+`_handle_set_laser` keeps the device-resolution logic (machine.heads lookup,
+then modulo fallback, then char-sum fallback) and the `active_laser`
+early-return guard, but replaces `_add_layer_action([f"LASER_DEVICE_{device}"])`
+with `self._gluescript.select_laser(device)`. `select_laser` is not in the
+`_UNRECORDED` frozenset, so it is recorded into the rpa_plan and replays over
+RPC automatically — no other wiring needed. Only laser 1 is wired in ruida-pa
+(other values warn + emit nothing), which is intentional.
+
+### Verification
+
+Updated tests: `test_encoder.py` `test_dwell_warns_and_emits_no_delay`
+(renamed from `test_dwell_emits_delay_line`; asserts no "delay" line and a
+warning via caplog), `test_set_head_selects_laser_device` (laser-2 →
+`select_laser(2)` recorded in rpa_plan, no `LASER_DEVICE_2`, warning logged;
+laser-1 → `LASER_DEVICE_1` present), `test_set_head_numeric_suffix_fallback_selects_device`
+and `test_set_head_char_sum_fallback_selects_device` (assert `select_laser(2)`
+in rpa_plan, no `LASER_DEVICE_2`). `test_adapter.py` `test_set_power_is_unsupported`
+and `test_set_focus_power_is_unsupported` (renamed; assert no `backend.run`
+call and a warning via caplog), plus a new `test_select_laser_replays_via_generic_delta`
+locking that `select_laser` is recorded into the rpa_plan and replays through
+`_stage_plan` as a generic transcript line (not the `add_layer_action`
+special case). `test_golden.py` drops the `delay 250.000ms` assertion.
+
+Full package: `pixi run -e ruidarpa test tests/machine/driver/ruidarpa/` → 236
+passed; the 6 remaining failures are pre-existing ruida-pa version drift
+(installed GlueScript 0.16.2 vs fixture 0.15.2: `LAYER_SPEED_LASER_1` →
+`CUT_SPEED_LASER_1`, `MOVE_NEAR_XY nearX=` format, and the golden fixture
+byte-mismatch) — identical before and after, not regressions. flake8 and
+pyflakes clean; pyright at the pre-existing 20-error baseline (0 new). Golden
+fixture regeneration produced unrelated GlueScript 0.16.2 drift (version
+header, `REF_POINT_ABSOLUTE`→`REF_POINT_MACHINE`, `CUT_SPEED_LASER_1`,
+`nearX=` format, EQUALS→COLON separators) beyond the intended dwell removal,
+so the regenerated fixture was NOT committed; the committed fixture stays at
+0.15.2 and the golden byte-lock test remains a pre-existing version-drift
+failure. Constraints honored: no changes under `rayforge/machine/driver/ruida/`
+(reference-only prototype) or `external/ruida-pa/`.
+
+## 2026-08-17 — Layer cut/travel speed converted mm/min → mm/s for GlueScript
+
+### Problem
+
+The ruidarpa encoder passed layer cut/travel speed to GlueScript in mm/min,
+but GlueScript's `declare_layer`/`cut_speed`/`move_speed` expect mm/s. The
+step's `cut_speed`/`travel_speed` are stored in mm/min (the app's base unit
+for speed — `config.py:62`, `shared/units/definitions.py:98`
+`set_base_unit("speed","mm/min")`). For example, layer 2's cut_speed of
+1000 mm/min was shown as 16.7 mm/s in the GUI but passed as 1000 to
+GlueScript, producing a 60× too-fast speed in the emitted rpascript.
+
+### Solution
+
+Divide the stored mm/min value by 60 at the three speed-emission points in
+`rpa_encoder.py`:
+
+- `_layer_settings`: `speed_mms = float(first_step.cut_speed) / 60.0`
+- `_handle_set_cut_speed`: `cut_speed(float(ops.rate(idx)) / 60.0)`
+- `_handle_set_travel_speed`: `move_speed(float(ops.rate(idx)) / 60.0)`
+
+The default layer speed (`_DEFAULT_LAYER_SPEED_MMS = 100.0`) is already in
+mm/s and is left unchanged. A brief comment noting the mm/min → mm/s
+conversion was added at each emission point.
+
+### Verification
+
+- `pixi run -e ruidarpa test tests/machine/driver/ruidarpa/` — 242 passed, 0
+  failed. Updated assertions: `test_layer_settings_from_step` expects
+  `Speed:5.0mm/S` (300/60), `test_feed_rate_emits_speed_line` expects
+  `Speed=3.3333333333333335` (200/60), `test_rapid_rate_emits_axis_speed`
+  expects `# move_speed(8.333333333333334)` (500/60),
+  `test_plan_records_per_op_settings_as_gluescript_calls` expects
+  `("cut_speed", (3.3333333333333335,))`, and `test_golden.py` expects
+  `Speed=4.166666666666667` (250/60).
+- `pixi run lint` — flake8 and pyflakes pass; pyright at the pre-existing
+  20-error baseline (0 new; optional `ruidadriver`/`rpyc` imports and
+  unrelated ui_gtk/websocket issues).
+- Golden fixture regenerated via
+  `pixi run -e ruidarpa python tests/machine/driver/ruidarpa/golden/regen_golden.py`.
+  Diff-review confirmed correct speeds: layer 0 declare 5.0 (300/60), layer 1
+  declare 2.5 (150/60), layer 2 default 100.0; per-op `cut_speed(4.166...)`
+  and `cut_speed(2.5)`. The regeneration baked in the accepted unrelated
+  GlueScript 0.16.2 drift (`LAYER_SPEED_LASER_1`→`CUT_SPEED_LASER_1`,
+  `REF_POINT_ABSOLUTE`→`REF_POINT_MACHINE`, header version, separator
+  changes). Because the golden fixture now emits `CUT_SPEED_LASER_1` and the
+  per-op `cut_speed` is a real `CUT_SPEED_LASER_1 Layer:0 Speed=...` line
+  (not a `# cut_speed(...)` comment) in 0.16.2, the encoder/golden test
+  assertions were updated to match the regenerated output — this keyword
+  migration is trivial and part of the same regeneration. `move_speed` still
+  emits a `# move_speed(...)` comment, so that assertion is unchanged in
+  format.

@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode
+from raygeo.ops.types import RasterMode, SectionType
 
 from rayforge.core.doc import Doc
 from rayforge.core.step import Step
@@ -86,9 +87,11 @@ def build_representative_job():
     ops = Ops()
     ops.job_start()
 
-    # Layer 0: Cut — per-op settings, near move/cut, arc, air assist.
+    # Layer 0: Cut — vector outline, per-op settings, near move/cut,
+    # arc, air assist.
     layer0 = doc.layers[0].uid
     ops.layer_start(layer_uid=layer0)
+    ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
     ops.set_power(0.6)
     ops.set_feed_rate(250)
     ops.set_frequency(25000)
@@ -99,11 +102,16 @@ def build_representative_job():
     ops.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
     ops.set_air_assist(AirAssistMode.OFF)
     ops.dwell(250)
+    ops.ops_section_end(SectionType.VECTOR_OUTLINE)
     ops.layer_end(layer_uid=layer0)
 
-    # Layer 1: Engrave — clamped power, far move/cut, scan line.
+    # Layer 1: Engrave — image section, clamped power, far move/cut,
+    # scan line.
     layer1 = doc.layers[1].uid
     ops.layer_start(layer_uid=layer1)
+    ops.ops_section_start(
+        SectionType.RASTER_FILL, "wp-1", raster_mode=RasterMode.VARIABLE_POWER
+    )
     ops.set_power(0.05)
     ops.set_feed_rate(150)
     ops.set_frequency(30000)
@@ -112,13 +120,19 @@ def build_representative_job():
     ops.move_to(0.0, 0.0, 0.0)
     power_values = bytearray([0, 128, 255, 128, 0])
     ops.scan_to(5.0, 0.0, 0.0, power_values)
+    ops.ops_section_end(
+        SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+    )
     ops.layer_end(layer_uid=layer1)
 
-    # Layer 2: Default — no workflow steps, encoder defaults apply.
+    # Layer 2: Default — vector outline, no workflow steps, encoder
+    # defaults apply.
     layer2 = doc.layers[2].uid
     ops.layer_start(layer_uid=layer2)
+    ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-2")
     ops.move_to(55.0, 22.0, 0.0)
     ops.line_to(57.0, 22.0, 0.0)
+    ops.ops_section_end(SectionType.VECTOR_OUTLINE)
     ops.layer_end(layer_uid=layer2)
 
     ops.job_end()

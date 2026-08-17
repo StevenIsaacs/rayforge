@@ -742,16 +742,25 @@ class RuidaRPAAdapter(Driver):
         self.job_finished.send(self)
 
     async def set_hold(self, hold: bool = True) -> None:
+        if self._backend is None:
+            raise DriverSetupError("Backend not initialized")
+        loop = asyncio.get_running_loop()
         if hold:
-            await self._run_script(["PAUSE_JOB"])
+            await loop.run_in_executor(None, self._backend.pause)
         else:
-            await self._run_script(["RESTORE_JOB"])
+            await loop.run_in_executor(None, self._backend.resume)
 
     async def cancel(self) -> None:
-        await self._run_script(["STOP_JOB"])
+        if self._backend is None:
+            raise DriverSetupError("Backend not initialized")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._backend.stop_job)
 
     async def clear_alarm(self) -> None:
-        await self._run_script(["STOP_JOB"])
+        if self._backend is None:
+            raise DriverSetupError("Backend not initialized")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._backend.stop_job)
 
     # --- Movement ---
 
@@ -854,13 +863,22 @@ class RuidaRPAAdapter(Driver):
     # --- Power / Laser ---
 
     async def set_power(self, head: Laser, percent: float) -> None:
-        power_pct = percent * 100.0
-        laser_num = head.tool_number + 1
-        cmd = f"IMD_POWER_{laser_num} Power={power_pct:.1f}%"
-        await self._run_script([cmd])
+        logger.warning(
+            _(
+                "set_power is not supported outside of a job with a "
+                "Ruida controller — the correct handling is to be "
+                "determined; no command was sent."
+            )
+        )
 
     async def set_focus_power(self, head: Laser, percent: float) -> None:
-        await self.set_power(head, percent)
+        logger.warning(
+            _(
+                "set_focus_power is not supported outside of a job with "
+                "a Ruida controller — the correct handling is to be "
+                "determined; no command was sent."
+            )
+        )
 
     # --- WCS ---
 

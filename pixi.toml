@@ -15,6 +15,8 @@ video = { features = ["video-tools"], solve-group = "video" }
 [feature.ruida-pa.pypi-dependencies]
 ruida-pa = { path = "external/ruida-pa", editable = false }
 rpyc = { version = ">=6.0.2", editable = false }
+bokeh = "*"
+textual = { version = ">=0.32.0", editable = false }
 
 [feature.app.dependencies]
 adwaita-icon-theme = "*"

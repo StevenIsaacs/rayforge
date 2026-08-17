@@ -50,3 +50,6 @@ rayforge.icns
 .opencode
 commit.txt
 rayforge/rayforge.code-workspace
+
+# For development of the Ruida PA driver
+discovery/

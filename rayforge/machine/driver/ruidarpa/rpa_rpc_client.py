@@ -238,7 +238,7 @@ class RpaRpcClient:
 
     # --- Live commands ---
 
-    # Jog and home commands execute server-side (TuiAdapter
+    # Jog, home, and job-control commands execute server-side (TuiAdapter
     # ``_gluescript_live_command``) and return the sent rpascript lines.
     # The client must not run those lines again — double execution.
 
@@ -319,6 +319,40 @@ class RpaRpcClient:
     def home_u(self) -> None:
         """Home the remote U axis (rotary)."""
         self._call("home_u")
+
+    def pause(self) -> None:
+        """Pause the running job on the remote controller.
+
+        The returned sent lines are deliberately discarded so the pause
+        is sent exactly once, never run again.
+        """
+        self._call("pause")
+
+    def resume(self) -> None:
+        """Resume the paused job on the remote controller.
+
+        The returned sent lines are deliberately discarded so the resume
+        is sent exactly once, never run again.
+        """
+        self._call("resume")
+
+    def stop_job(self) -> None:
+        """Stop the running job on the remote controller.
+
+        The returned sent lines are deliberately discarded so the stop
+        is sent exactly once, never run again.
+        """
+        self._call("stop_job")
+
+    def reset(self) -> None:
+        """Reset the remote controller.
+
+        Stops the current job and homes the X/Y axes
+        (reset = ["STOP_JOB", "HOME_XY"]). The returned sent lines are
+        deliberately discarded so the reset is sent exactly once, never
+        run again.
+        """
+        self._call("reset")
 
     # --- Listeners ---
 

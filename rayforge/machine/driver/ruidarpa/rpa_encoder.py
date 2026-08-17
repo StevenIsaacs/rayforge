@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode, CoolantMode
-from raygeo.ops.types import CommandType
+from raygeo.ops.types import CommandType, RasterMode, SectionType
 
 from rayforge.pipeline.encoder.base import (
     EncodedOutput,
@@ -144,6 +144,9 @@ class RuidaRPAEncoder(OpsEncoder):
         self._layer_index_by_uid: Dict[str, int] = {}
         self._layer_key: int = 0
         self._layer: int = 0
+        self._section_type: Optional[SectionType] = None
+        self._section_raster_mode: Optional[RasterMode] = None
+        self._layer_mode: str = "VECTOR"
         self._snapshot_key: int = 0
         self._header_len: int = 0
         self._actions_len: int = 0
@@ -269,13 +272,19 @@ class RuidaRPAEncoder(OpsEncoder):
         elif ct == CommandType.LAYER_START:
             self._handle_layer_start(ops, idx)
         elif ct == CommandType.LAYER_END:
-            pass  # GlueScript closes layers implicitly
+            # GlueScript closes layers implicitly; an unclosed ops
+            # section must not leak into the next layer. Reset the
+            # layer mode so a stray section after LAYER_END fails
+            # loudly instead of reusing the previous layer's mode.
+            self._section_type = None
+            self._section_raster_mode = None
+            self._layer_mode = "VECTOR"
         elif ct == CommandType.WORKPIECE_START:
             self._handle_workpiece_start(ops, idx)
         elif ct == CommandType.WORKPIECE_END:
             self._handle_workpiece_end()
         elif ct == CommandType.OPS_SECTION_START:
-            self._handle_ops_section_start()
+            self._handle_ops_section_start(ops, idx)
         elif ct == CommandType.OPS_SECTION_END:
             self._handle_ops_section_end()
         elif ct == CommandType.SET_AIR_ASSIST:
@@ -332,15 +341,38 @@ class RuidaRPAEncoder(OpsEncoder):
         )
         return _MIN_LAYER_POWER_PERCENT
 
-    def _emit_power_lines(self, power_fraction: float) -> None:
-        """Emit MIN/MAX power lines for the current layer action block."""
-        power_pct = self._clamp_power_pct(power_fraction * 100.0, "Per-op")
-        self._add_layer_action(
-            [
-                f"MIN_POWER_1 Power={power_pct:.1f}%",
-                f"MAX_POWER_1 Power={power_pct:.1f}%",
-            ]
-        )
+    def _emit_power(self, power_fraction: float) -> None:
+        """Emit laser power for the current layer action block.
+
+        Power-modulated greyscale and depth-map sections pass through
+        GlueScript.power() unclamped; every other section uses
+        power_range() so accel/decel over-burn on raster scans and
+        line cuts is compensated.
+        """
+        section_type = self._section_type
+        raster_mode = self._section_raster_mode
+        if (
+            section_type is None
+            or raster_mode is None
+            or section_type != SectionType.RASTER_FILL
+            or raster_mode
+            not in (RasterMode.VARIABLE_POWER, RasterMode.DEPTH_MAP)
+        ):
+            self._require_active_layer()
+            power_pct = self._clamp_power_pct(power_fraction * 100.0, "Per-op")
+            self._gluescript.power_range(power_pct, power_pct)
+            return
+
+        # Correct only because _compute_layer_mode derives IMAGE/DEPTHMAP
+        # for image sections at LAYER_START.
+        if self._layer_mode not in ("IMAGE", "DEPTHMAP"):
+            raise ValueError(
+                f"Image section {section_type.name} with raster mode "
+                f"{raster_mode.name} requires an IMAGE/DEPTHMAP layer, "
+                f"but the current layer mode is {self._layer_mode!r} — "
+                f"missing LAYER_START before the section"
+            )
+        self._gluescript.power(power_fraction * 100.0)
 
     def _find_layer(self, layer_uid: str) -> Optional["Layer"]:
         """Look up a document layer by uid, or None when unknown."""
@@ -369,7 +401,8 @@ class RuidaRPAEncoder(OpsEncoder):
             and layer.workflow.steps
         ):
             first_step = layer.workflow.steps[0]
-            speed_mms = float(first_step.cut_speed)
+            # cut_speed is stored in mm/min; GlueScript expects mm/s.
+            speed_mms = float(first_step.cut_speed) / 60.0
             power_fraction = float(first_step.power)
             frequency_hz = int(first_step.frequency)
 
@@ -431,7 +464,7 @@ class RuidaRPAEncoder(OpsEncoder):
                 sx, sy, _ = sub_ops.endpoint(j)
                 self._gluescript.cut_xy_to(sx, sy)
             elif sub_ct == CommandType.SET_POWER:
-                self._emit_power_lines(sub_ops.power(j))
+                self._emit_power(sub_ops.power(j))
 
         self.current_pos = end
 
@@ -448,46 +481,45 @@ class RuidaRPAEncoder(OpsEncoder):
         self._linearize_curve(ops, idx)
 
     def _handle_dwell(self, ops: Ops, idx: int) -> None:
-        """Emit a dwell (pause) command; delay accepts milliseconds."""
-        duration_ms = ops.dwell_duration(idx)
-        self._add_layer_action([f"delay {duration_ms:.3f}ms"])
+        """Dwell is unsupported — the Ruida controller has no direct
+        equivalent, so nothing is emitted."""
+        logger.warning(
+            "DWELL is not supported — the Ruida controller has no "
+            "direct equivalent; no delay was emitted."
+        )
 
     # -- Configuration handlers ---------------------------------------------
 
     def _handle_set_power(self, ops: Ops, idx: int) -> None:
         """Set laser power for the remaining cuts on this layer."""
-        self._emit_power_lines(ops.power(idx))
+        self._emit_power(ops.power(idx))
 
     def _handle_set_cut_speed(self, ops: Ops, idx: int) -> None:
         """Set cutting speed in mm/s."""
-        speed = float(ops.rate(idx))
-        self._add_layer_action([f"SPEED_LASER_1 Speed={speed:.3f}mm/S"])
+        self._require_active_layer()
+        # ops.rate is in mm/min; GlueScript expects mm/s.
+        self._gluescript.cut_speed(float(ops.rate(idx)) / 60.0)
 
     def _handle_set_travel_speed(self, ops: Ops, idx: int) -> None:
         """Set travel (rapid move) speed in mm/s."""
-        speed = float(ops.rate(idx))
-        self._add_layer_action([f"SPEED_AXIS Speed={speed:.3f}mm/S"])
+        self._require_active_layer()
+        # ops.rate is in mm/min; GlueScript expects mm/s.
+        self._gluescript.move_speed(float(ops.rate(idx)) / 60.0)
 
     def _handle_set_frequency(self, ops: Ops, idx: int) -> None:
         """Set laser frequency (Hz → KHz)."""
-        freq_hz = ops.frequency(idx)
-        freq_khz = freq_hz / 1000.0
-        self._add_layer_action(
-            [
-                f"LAYER_FREQUENCY Laser={self.active_laser}"
-                f" Layer={self._layer} Freq={freq_khz:.3f}KHz"
-            ]
-        )
+        freq_khz = ops.frequency(idx) / 1000.0
+        self._require_active_layer()
+        self._gluescript.frequency(freq_khz)
 
     def _handle_set_pulse_width(
         self,
         ops: Ops,
         idx: int,
     ) -> None:
-        """Set laser pulse width (µs → mS)."""
-        pw_us = ops.pulse_width(idx)
-        pw_ms = pw_us / 1000.0
-        self._add_layer_action([f"LASER_INTERVAL {pw_ms:.3f}mS"])
+        """Set laser pulse width in microseconds."""
+        self._require_active_layer()
+        self._gluescript.pwm(ops.pulse_width(idx))
 
     def _handle_coolant_as_air_assist(self, ops: Ops, idx: int) -> None:
         """Handle legacy SET_COOLANT used for air assist.
@@ -552,7 +584,7 @@ class RuidaRPAEncoder(OpsEncoder):
         if device == self.active_laser:
             return
         self.active_laser = device
-        self._add_layer_action([f"LASER_DEVICE_{device}"])
+        self._gluescript.select_laser(device)
 
     # -- Structural handlers ------------------------------------------------
 
@@ -597,12 +629,14 @@ class RuidaRPAEncoder(OpsEncoder):
         layer_key = self._layer_key
 
         speed_mms, frequency_khz, power_pct = self._layer_settings(layer)
+        layer_mode = self._compute_layer_mode(ops, idx)
+        self._layer_mode = layer_mode
         self._gluescript.declare_layer(
             label=(
                 layer.name if layer is not None else f"Layer {layer_key - 1}"
             ),
             color=(layer.color if layer is not None else _DEFAULT_LAYER_COLOR),
-            mode="VECTOR",
+            mode=layer_mode,
             overscan="NONE",
             speed=speed_mms,
             frequency=frequency_khz,
@@ -610,6 +644,33 @@ class RuidaRPAEncoder(OpsEncoder):
             max_power_1=power_pct,
         )
         self._op_contributions.setdefault(idx, []).append(("attrs", layer_key))
+
+    def _compute_layer_mode(self, ops: Ops, idx: int) -> str:
+        """Derive the layer mode from its ops sections.
+
+        Scans forward from the LAYER_START command to the next layer or
+        job boundary. DEPTH_MAP beats VARIABLE_POWER regardless of
+        section order, so the first DEPTH_MAP section yields "DEPTHMAP",
+        any VARIABLE_POWER section yields "IMAGE", and anything else
+        defaults to "VECTOR".
+        """
+        seen_variable_power = False
+        for i in range(idx + 1, ops.len()):
+            command = ops.command_type(i)
+            if command in (
+                CommandType.LAYER_END,
+                CommandType.LAYER_START,
+                CommandType.JOB_END,
+            ):
+                break
+            if command != CommandType.OPS_SECTION_START:
+                continue
+            _, _, raster_mode = ops.section_params(i)
+            if raster_mode == RasterMode.DEPTH_MAP:
+                return "DEPTHMAP"
+            if raster_mode == RasterMode.VARIABLE_POWER:
+                seen_variable_power = True
+        return "IMAGE" if seen_variable_power else "VECTOR"
 
     def _handle_job_end(self, idx: int) -> None:
         """Finalize the job in GlueScript, which emits END_JOB and EOF."""
@@ -625,8 +686,11 @@ class RuidaRPAEncoder(OpsEncoder):
         """Emit a workpiece end marker comment."""
         self._gluescript.comment(["# Workpiece End"])
 
-    def _handle_ops_section_start(self) -> None:
-        """Emit a comment for the ops section start."""
+    def _handle_ops_section_start(self, ops: Ops, idx: int) -> None:
+        """Record the active section and emit a comment for its start."""
+        self._section_type, _workpiece_uid, self._section_raster_mode = (
+            ops.section_params(idx)
+        )
         self._gluescript.comment(
             [
                 "# Ops Actions",
@@ -635,7 +699,9 @@ class RuidaRPAEncoder(OpsEncoder):
         )
 
     def _handle_ops_section_end(self) -> None:
-        """Emit a comment for the ops section end."""
+        """Clear the active section and emit a comment for its end."""
+        self._section_type = None
+        self._section_raster_mode = None
         self._gluescript.comment(["# Ops Section End"])
 
     # -- Op map bookkeeping --------------------------------------------------

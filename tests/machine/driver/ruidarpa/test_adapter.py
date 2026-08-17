@@ -24,6 +24,7 @@ No real network or Ruida hardware is used; the backends are
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import replace
 from typing import Callable
 from unittest.mock import Mock, call
@@ -34,6 +35,7 @@ from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
 from rayforge.machine.driver.driver import Axis, DeviceStatus, DriverSetupError
+from rayforge.machine.driver.ruidarpa import rpa_adapter
 from rayforge.machine.driver.ruidarpa.rpa_adapter import (
     RuidaRPAAdapter,
     _stage_plan,
@@ -418,11 +420,12 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_set_hold_pause_routes_to_pause_job(self, adapter_pair):
-        """set_hold(True) must run PAUSE_JOB."""
+    async def test_set_hold_pause_calls_backend_pause(self, adapter_pair):
+        """set_hold(True) must pause via the live backend."""
         adapter, backend = adapter_pair
         await adapter.set_hold(True)
-        backend.run.assert_called_once_with(["PAUSE_JOB"], False)
+        backend.pause.assert_called_once_with()
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -431,11 +434,12 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_set_hold_resume_routes_to_restore_job(self, adapter_pair):
-        """set_hold(False) must run RESTORE_JOB."""
+    async def test_set_hold_resume_calls_backend_resume(self, adapter_pair):
+        """set_hold(False) must resume via the live backend."""
         adapter, backend = adapter_pair
         await adapter.set_hold(False)
-        backend.run.assert_called_once_with(["RESTORE_JOB"], False)
+        backend.resume.assert_called_once_with()
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -445,10 +449,11 @@ class TestRunRouting:
         indirect=True,
     )
     async def test_cancel_routes_to_stop_job(self, adapter_pair):
-        """cancel() must run STOP_JOB."""
+        """cancel() must stop the job via the live backend."""
         adapter, backend = adapter_pair
         await adapter.cancel()
-        backend.run.assert_called_once_with(["STOP_JOB"], False)
+        backend.stop_job.assert_called_once_with()
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -458,10 +463,11 @@ class TestRunRouting:
         indirect=True,
     )
     async def test_clear_alarm_routes_to_stop_job(self, adapter_pair):
-        """clear_alarm() must run STOP_JOB."""
+        """clear_alarm() must stop the job via the live backend."""
         adapter, backend = adapter_pair
         await adapter.clear_alarm()
-        backend.run.assert_called_once_with(["STOP_JOB"], False)
+        backend.stop_job.assert_called_once_with()
+        backend.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -470,12 +476,14 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_set_power_routes_to_imd_power(self, adapter_pair):
-        """set_power() must run an IMD_POWER_<n> command."""
+    async def test_set_power_is_unsupported(self, adapter_pair, caplog):
+        """set_power() is unsupported — warn and send no command."""
+        caplog.set_level(logging.WARNING, logger=rpa_adapter.logger.name)
         adapter, backend = adapter_pair
         head = Laser()
         await adapter.set_power(head, 0.5)
-        backend.run.assert_called_once_with(["IMD_POWER_1 Power=50.0%"], False)
+        backend.run.assert_not_called()
+        assert any("set_power" in record.message for record in caplog.records)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -484,12 +492,16 @@ class TestRunRouting:
         ids=["direct", "rpc"],
         indirect=True,
     )
-    async def test_set_focus_power_delegates_to_set_power(self, adapter_pair):
-        """set_focus_power() must behave like set_power()."""
+    async def test_set_focus_power_is_unsupported(self, adapter_pair, caplog):
+        """set_focus_power() is unsupported — warn and send no command."""
+        caplog.set_level(logging.WARNING, logger=rpa_adapter.logger.name)
         adapter, backend = adapter_pair
         head = Laser()
         await adapter.set_focus_power(head, 0.25)
-        backend.run.assert_called_once_with(["IMD_POWER_1 Power=25.0%"], False)
+        backend.run.assert_not_called()
+        assert any(
+            "set_focus_power" in record.message for record in caplog.records
+        )
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -662,6 +674,79 @@ class TestStagePlan:
             "comment(['# Ops Section Start'])",
             "end_job()",
         ]
+
+    def test_migrated_settings_flush_via_generic_delta(self):
+        """Migrated per-op settings replay as generic transcript lines."""
+        client = Mock(spec=RpaRpcClient)
+        plan = [
+            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+            ("cut_speed", (250.0,)),
+            ("frequency", (25.0,)),
+            ("pwm", (50.0,)),
+            ("delay", ("250.000ms",)),
+            ("end_job", ()),
+        ]
+        _stage_plan(client, plan)
+        deltas = client.root.exposed_stage_gluescript_delta
+        assert deltas.call_count == 1
+        assert deltas.call_args_list[0].args[1] == [
+            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
+            "cut_speed(250.0)",
+            "frequency(25.0)",
+            "pwm(50.0)",
+            "delay('250.000ms')",
+            "end_job()",
+        ]
+        client.root.exposed_add_layer_action.assert_not_called()
+
+    def test_add_layer_action_still_forwards_between_migrated_calls(self):
+        """Raw add_layer_action between migrated calls keeps forwarding."""
+        client = Mock(spec=RpaRpcClient)
+        plan = [
+            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+            ("cut_speed", (250.0,)),
+            ("add_layer_action", (1, ["LASER_DEVICE_1"])),
+            ("frequency", (25.0,)),
+            ("end_job", ()),
+        ]
+        _stage_plan(client, plan)
+        deltas = client.root.exposed_stage_gluescript_delta
+        assert deltas.call_count == 2
+        client.root.exposed_add_layer_action.assert_called_once_with(
+            1, ["LASER_DEVICE_1"]
+        )
+        assert deltas.call_args_list[0].args[1] == [
+            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
+            "cut_speed(250.0)",
+        ]
+        assert deltas.call_args_list[-1].args[1] == [
+            "frequency(25.0)",
+            "end_job()",
+        ]
+
+    def test_select_laser_replays_via_generic_delta(self):
+        """select_laser is recorded and replays as a generic transcript line.
+
+        The encoder records ``select_laser`` into the rpa_plan (it is not
+        in the ``_UNRECORDED`` set), so ``_stage_plan`` replays it as a
+        generic GlueScript transcript line rather than forwarding it via
+        the ``add_layer_action`` special case.
+        """
+        client = Mock(spec=RpaRpcClient)
+        plan = [
+            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+            ("select_laser", (2,)),
+            ("end_job", ()),
+        ]
+        _stage_plan(client, plan)
+        deltas = client.root.exposed_stage_gluescript_delta
+        assert deltas.call_count == 1
+        assert deltas.call_args_list[0].args[1] == [
+            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
+            "select_laser(2)",
+            "end_job()",
+        ]
+        client.root.exposed_add_layer_action.assert_not_called()
 
 
 class TestWcsHandling:
