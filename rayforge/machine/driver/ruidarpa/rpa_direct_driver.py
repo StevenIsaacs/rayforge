@@ -12,13 +12,14 @@ from typing import TYPE_CHECKING, Callable, Optional
 from rayforge.pipeline.encoder.base import EncodedOutput
 
 if TYPE_CHECKING:
+    from raygeo.ops import Ops
     from ruidadriver.ruida_driver import RdDriver
+
     from rayforge.core.doc import Doc
     from rayforge.machine.driver.ruidarpa.rpa_encoder import (
         RuidaRPAEncoder,
     )
     from rayforge.machine.models.machine import Machine
-    from raygeo.ops import Ops
 else:
     try:
         from ruidadriver.ruida_driver import RdDriver  # noqa: E402
@@ -40,8 +41,9 @@ class RpaDirectDriver:
 
     # --- Lifecycle ---
 
-    def start(self, udp_host: Optional[str] = None,
-              usb_device: Optional[str] = None) -> bool:
+    def start(
+        self, udp_host: Optional[str] = None, usb_device: Optional[str] = None
+    ) -> bool:
         """Start connection to the Ruida controller.
 
         Idempotent: starting with unchanged parameters is a no-op, while
@@ -58,8 +60,11 @@ class RpaDirectDriver:
         driver = self._ensure_driver()
         result = driver.start(udp_host=udp_host, usb_device=usb_device)
         if result:
-            _logger.info("RPA direct driver connected; udp=%s, usb=%s",
-                         udp_host, usb_device)
+            _logger.info(
+                "RPA direct driver connected; udp=%s, usb=%s",
+                udp_host,
+                usb_device,
+            )
         else:
             _logger.warning("RPA direct driver failed to connect")
         return result
@@ -83,8 +88,7 @@ class RpaDirectDriver:
 
     # --- Run control ---
 
-    def run(self, script: list[str],
-            auto_checksum: bool = False) -> None:
+    def run(self, script: list[str], auto_checksum: bool = False) -> None:
         """Run an Rpascript.
 
         Queues the raw script without head/tail composition.
@@ -119,9 +123,7 @@ class RpaDirectDriver:
             auto_checksum: Whether to auto-calculate checksums.
         """
         text_lines = [
-            line.strip()
-            for line in encoded.text.splitlines()
-            if line.strip()
+            line.strip() for line in encoded.text.splitlines() if line.strip()
         ]
         self.run(text_lines, auto_checksum=auto_checksum)
 
@@ -380,8 +382,7 @@ class RpaDirectDriver:
         """Raise ImportError if ruidadriver is not available."""
         if RdDriver is None:
             raise ImportError(
-                "ruidadriver is not installed. "
-                "Run: pixi run -e ruidarpa ..."
+                "ruidadriver is not installed. Run: pixi run -e ruidarpa ..."
             )
 
     def _ensure_driver(self) -> RdDriver:

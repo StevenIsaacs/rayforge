@@ -28,7 +28,6 @@ from typing import (
 )
 
 from rayforge.context import RayforgeContext
-from rayforge.core.capability import PWMCapability
 from rayforge.core.varset import BoolVar, HostnameVar, Var, VarSet
 from rayforge.machine.driver.driver import (
     Axis,
@@ -38,9 +37,11 @@ from rayforge.machine.driver.driver import (
     DriverPrecheckError,
     DriverSetupError,
     Pos,
+    PWMParams,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import RpaDirectDriver
 from rayforge.machine.driver.ruidarpa.rpa_rpc_client import RpaRpcClient
+from rayforge.machine.models.laser import LaserHead
 from rayforge.machine.transport import TransportStatus
 
 try:
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
     from raygeo.ops import Ops
 
     from rayforge.core.doc import Doc
+    from rayforge.machine.models.head import Head
     from rayforge.machine.models.laser import Laser
     from rayforge.machine.models.machine import Machine
     from rayforge.pipeline.encoder.base import EncodedOutput, OpsEncoder
@@ -524,9 +526,7 @@ class RuidaRPAAdapter(Driver):
             # StatusDict or RPyC netref — convert to local dict for reliable
             # type handling
             event = {k: event[k] for k in event}  # type: ignore
-            status_value = event.get("status") or event.get(
-                "MACHINE_STATUS"
-            )
+            status_value = event.get("status") or event.get("MACHINE_STATUS")
             if status_value is not None:
                 logger.debug(
                     "RPA status update: %s",
@@ -662,14 +662,15 @@ class RuidaRPAAdapter(Driver):
         """Run a job by re-staging its GlueScript plan server-side.
 
         TUI RPC mode only: the encoded output carries the recorded
-        GlueScript call plan (``rpa_plan``). The plan is replayed on
-        the server via the RPC GlueScript sink (``_stage_plan``), then
-        the staged rpascript is queued with ``run_staged_job``. A
-        failed stage is torn down so a stale job cannot be run
-        afterwards.
+        GlueScript call plan in ``driver_data["rpa_plan"]``. The plan
+        is replayed on the server via the RPC GlueScript sink
+        (``_stage_plan``), then the staged rpascript is queued with
+        ``run_staged_job``. A failed stage is torn down so a stale job
+        cannot be run afterwards.
 
         Args:
-            encoded: The encoder output; must carry ``rpa_plan``.
+            encoded: The encoder output; must carry
+                ``driver_data["rpa_plan"]``.
 
         Raises:
             DriverSetupError: If the backend is not initialized or the
@@ -677,14 +678,16 @@ class RuidaRPAAdapter(Driver):
         """
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
-        if encoded.rpa_plan is None:
+        if encoded.driver_data.get("rpa_plan") is None:
             raise DriverSetupError(
                 "TUI RPC mode requires a GlueScript plan (rpa_plan) — "
                 "re-encode the job with the ruidarpa encoder"
             )
         client: RpaRpcClient = self._backend  # type: ignore
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _stage_plan, client, encoded.rpa_plan)
+        await loop.run_in_executor(
+            None, _stage_plan, client, encoded.driver_data["rpa_plan"]
+        )
         await loop.run_in_executor(None, client.run_staged_job)
 
     # --- Job control ---
@@ -704,9 +707,7 @@ class RuidaRPAAdapter(Driver):
         op_map = encoded.op_map
 
         if on_command_done is not None:
-            num_ops = 0
-            if op_map and op_map.op_to_machine_code:
-                num_ops = max(op_map.op_to_machine_code.keys()) + 1
+            num_ops = op_map.op_count if op_map else 0
             for op_index in range(num_ops):
                 result = on_command_done(op_index)
                 if inspect.isawaitable(result):
@@ -718,12 +719,24 @@ class RuidaRPAAdapter(Driver):
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
         )
 
-        if self._tui_mode:
-            if text_lines:
-                # TUI RPC re-stages the GlueScript plan server-side
-                # instead of shipping the assembled rpascript text.
-                await self._run_staged_job(encoded)
-        elif text_lines:
+        if not text_lines:
+            logger.debug(
+                "No rpascript commands to execute",
+                extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
+            )
+        elif (
+            self._tui_mode and encoded.driver_data.get("rpa_plan") is not None
+        ):
+            # TUI RPC re-stages the GlueScript plan server-side; without
+            # a plan the raw text path stays drop-in with direct mode.
+            await self._run_staged_job(encoded)
+        else:
+            if self._tui_mode:
+                logger.debug(
+                    "TUI RPC without rpa_plan — falling back to raw "
+                    "rpascript text (drop-in with direct mode)",
+                    extra=self._log_extra("TUI_RPC"),
+                )
             await self._run_script(text_lines, auto_checksum=True)
 
         self.job_finished.send(self)
@@ -941,18 +954,19 @@ class RuidaRPAAdapter(Driver):
     def can_jog(self, axis: Optional[Axis] = None) -> bool:
         return True
 
-    def get_laser_capabilities(self, laser: Laser):
-        if laser.laser_type.supports_pwm:
-            return (
-                PWMCapability(
-                    frequency=laser.pwm_frequency,
-                    max_frequency=laser.max_pwm_frequency,
-                    pulse_width=laser.pulse_width,
-                    min_pulse_width=laser.min_pulse_width,
-                    max_pulse_width=laser.max_pulse_width,
-                ),
-            )
-        return ()
+    def supports_pwm(self, head: "Head") -> bool:
+        return isinstance(head, LaserHead) and head.laser_type.supports_pwm
+
+    def get_pwm_params(self, head: "Head") -> PWMParams | None:
+        if not isinstance(head, LaserHead) or not self.supports_pwm(head):
+            return None
+        return PWMParams(
+            frequency=head.pwm_frequency,
+            max_frequency=head.max_pwm_frequency,
+            pulse_width=head.pulse_width,
+            min_pulse_width=head.min_pulse_width,
+            max_pulse_width=head.max_pulse_width,
+        )
 
     # --- Cleanup ---
 

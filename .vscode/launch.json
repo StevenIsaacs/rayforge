@@ -9,7 +9,8 @@
             "name": "Python Debugger: Rayforge app with Arguments",
             "type": "debugpy",
             "request": "launch",
-            "program": "rayforge/app.py",
+            "module": "rayforge.app",
+            "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
             // "args": "${command:pickArgs}",
             "env": {

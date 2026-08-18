@@ -6,10 +6,10 @@ library's Rpascript protocol, either directly (USB/UDP) or over RPyC.
 """
 
 from rayforge.machine.driver.ruidarpa.rpa_adapter import RuidaRPAAdapter
-from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
     RpaDirectDriver,
 )
+from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 from rayforge.machine.driver.ruidarpa.rpa_rpc_client import RpaRpcClient
 
 __all__ = [

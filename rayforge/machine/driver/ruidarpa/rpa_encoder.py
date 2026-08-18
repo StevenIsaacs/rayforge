@@ -177,7 +177,8 @@ class RuidaRPAEncoder(OpsEncoder):
             doc: The document being processed.
 
         Returns:
-            EncodedOutput with rpascript text, op_map, and no driver_data.
+            EncodedOutput with rpascript text, op_map, and the recorded
+            GlueScript plan in driver_data["rpa_plan"].
 
         Raises:
             RuntimeError: If the ruida-pa GlueScript API is unavailable or
@@ -229,7 +230,7 @@ class RuidaRPAEncoder(OpsEncoder):
         return EncodedOutput(
             text=text,
             op_map=self.op_map,
-            rpa_plan=self.gluescript_plan(),
+            driver_data={"rpa_plan": self.gluescript_plan()},
         )
 
     # -- Command dispatch ---------------------------------------------------
@@ -784,6 +785,8 @@ class RuidaRPAEncoder(OpsEncoder):
             tail_positions.append(actions_start[key] - 1)  # SELECT_LAYER
         tail_positions.extend([offset, offset + 1])  # END_JOB, EOF
 
+        line_spans: List[tuple[int, int]] = []
+        machine_code_to_op = [-1] * line_count
         for op_index in range(self._op_count):
             block = []
             contributions = self._op_contributions.get(op_index, [])
@@ -807,12 +810,14 @@ class RuidaRPAEncoder(OpsEncoder):
                 elif kind == "tail":
                     block.extend(tail_positions)
             block.sort()
-            assert self.op_map is not None
-            self.op_map.op_to_machine_code[op_index] = block
-            for line_num in block:
-                self.op_map.machine_code_to_op[line_num] = op_index
+            if block:
+                line_spans.append((block[0], block[-1] - block[0] + 1))
+                for line_num in block:
+                    assert 0 <= line_num < line_count
+                    machine_code_to_op[line_num] = op_index
+            else:
+                line_spans.append((0, 0))
 
-        assert self.op_map is not None
-        for op_index in self.op_map.op_to_machine_code:
-            for line_num in self.op_map.op_to_machine_code[op_index]:
-                assert 0 <= line_num < line_count
+        self.op_map = MachineCodeOpMap.from_lists(
+            line_spans, machine_code_to_op
+        )

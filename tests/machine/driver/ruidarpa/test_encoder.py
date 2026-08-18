@@ -81,8 +81,8 @@ class TestRuidaRPAEncoderBasics:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert result.text == ""
-        assert result.op_map.op_to_machine_code == {}
-        assert result.op_map.machine_code_to_op == {}
+        assert result.op_map.op_count == 0
+        assert result.op_map.line_count == 0
 
     def test_encoder_state_resets_between_encodes(
         self, encoder, mock_machine, doc
@@ -108,8 +108,8 @@ class TestRuidaRPAEncoderBasics:
         assert encoder.active_laser == 1
         # Second job: 0=job_start, 1=layer_start, 2=move_to,
         # 3=layer_end, 4=job_end
-        assert set(result2.op_map.op_to_machine_code.keys()) == set(range(5))
-        assert result2.op_map.op_to_machine_code[3] == []
+        assert result2.op_map.op_count == 5
+        assert result2.op_map.span_for_op(3) == (0, 0)
 
 
 class TestJobStructure:
@@ -350,8 +350,7 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert (
-            "CUT_SPEED_LASER_1 Layer:0 Speed=3.3333333333333335"
-            in result.text
+            "CUT_SPEED_LASER_1 Layer:0 Speed=3.3333333333333335" in result.text
         )
 
     def test_rapid_rate_emits_axis_speed(self, encoder, mock_machine, doc):
@@ -442,7 +441,7 @@ class TestSettingsCommands:
         # laser-2 resolves to device 2: select_laser(2) is recorded into the
         # plan, but no raw LASER_DEVICE_2 (only laser 1 is wired in
         # ruida-pa), and a warning is logged.
-        assert ("select_laser", (2,)) in result.rpa_plan
+        assert ("select_laser", (2,)) in result.driver_data["rpa_plan"]
         assert "LASER_DEVICE_2" not in lines
         assert any(
             "select_laser" in record.message for record in caplog.records
@@ -465,7 +464,7 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         # ((2 - 1) % 2) + 1 = 2; active_laser defaults to 1
-        assert ("select_laser", (2,)) in result.rpa_plan
+        assert ("select_laser", (2,)) in result.driver_data["rpa_plan"]
         assert "LASER_DEVICE_2" not in result.text
 
         ops = Ops()
@@ -495,7 +494,7 @@ class TestSettingsCommands:
 
         lines = result.text.split("\n")
         # sum(ord(c) for c in "laser-3") = 631, odd -> device 2
-        assert ("select_laser", (2,)) in result.rpa_plan
+        assert ("select_laser", (2,)) in result.driver_data["rpa_plan"]
         assert "LASER_DEVICE_2" not in lines
 
 
@@ -523,7 +522,7 @@ class TestSectionPowerRouting:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert "IMD_POWER_1 Power:50.0%" in result.text
-        assert ("power", (50.0,)) in result.rpa_plan
+        assert ("power", (50.0,)) in result.driver_data["rpa_plan"]
 
     def test_variable_power_section_passes_low_power_through(
         self, encoder, mock_machine, doc, caplog
@@ -545,7 +544,7 @@ class TestSectionPowerRouting:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert "IMD_POWER_1 Power:50.0%" in result.text
-        assert ("power", (50.0,)) in result.rpa_plan
+        assert ("power", (50.0,)) in result.driver_data["rpa_plan"]
 
     def test_constant_power_section_uses_power_range(
         self, encoder, mock_machine, doc
@@ -557,7 +556,7 @@ class TestSectionPowerRouting:
         lines = result.text.split("\n")
         assert "MIN_POWER_1 Power:50.0%" in lines
         assert "MAX_POWER_1 Power:50.0%" in lines
-        assert ("power_range", (50.0, 50.0)) in result.rpa_plan
+        assert ("power_range", (50.0, 50.0)) in result.driver_data["rpa_plan"]
 
     def test_layer_mode_derived_from_sections(
         self, encoder, mock_machine, doc
@@ -589,7 +588,7 @@ class TestSectionPowerRouting:
             result = encoder.encode(ops, mock_machine, doc)
             declared = [
                 args
-                for name, args in result.rpa_plan
+                for name, args in result.driver_data["rpa_plan"]
                 if name == "declare_layer"
             ]
             assert declared[0][2] == expected
@@ -624,7 +623,9 @@ class TestSectionPowerRouting:
         result = encoder.encode(ops, mock_machine, doc)
 
         declared = [
-            args for name, args in result.rpa_plan if name == "declare_layer"
+            args
+            for name, args in result.driver_data["rpa_plan"]
+            if name == "declare_layer"
         ]
         assert declared[0][2] == "DEPTHMAP"
 
@@ -721,10 +722,10 @@ class TestOpMapGeneration:
         return ops
 
     def test_every_op_has_entry(self, encoder, mock_machine, doc):
-        """Every op index must be present in op_to_machine_code."""
+        """Every op index must be present in the op_map."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
 
-        assert set(result.op_map.op_to_machine_code.keys()) == set(range(7))
+        assert result.op_map.op_count == 7
 
     def test_job_start_maps_to_header(self, encoder, mock_machine, doc):
         """JOB_START should map to every line before the first layer attr."""
@@ -732,7 +733,13 @@ class TestOpMapGeneration:
         lines = result.text.split("\n")
         first_attr = lines.index("# Layer 0: Layer 1")
 
-        assert result.op_map.op_to_machine_code[0] == list(range(first_attr))
+        expected = list(range(first_attr))
+        assert result.op_map.span_for_op(0) == (
+            expected[0],
+            expected[-1] - expected[0] + 1,
+        )
+        for line_num in expected:
+            assert result.op_map.op_for_line(line_num) == 0
 
     def test_layer_start_maps_to_attrs(self, encoder, mock_machine, doc):
         """LAYER_START should map to the layer attribute block."""
@@ -742,7 +749,12 @@ class TestOpMapGeneration:
         last_layer = lines.index("LAST_LAYER Layer:0")
 
         expected = list(range(first_attr, last_layer))
-        assert result.op_map.op_to_machine_code[1] == expected
+        assert result.op_map.span_for_op(1) == (
+            expected[0],
+            expected[-1] - expected[0] + 1,
+        )
+        for line_num in expected:
+            assert result.op_map.op_for_line(line_num) == 1
 
     def test_action_ops_map_to_action_lines(self, encoder, mock_machine, doc):
         """Set/move/cut ops should map to their action lines."""
@@ -753,43 +765,50 @@ class TestOpMapGeneration:
         move_line = lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
         cut_line = lines.index("CUT_NEAR_XY nearX=5.000mm nearY=3.000mm")
 
-        assert result.op_map.op_to_machine_code[2] == [
-            min_power,
-            max_power,
-        ]
-        assert result.op_map.op_to_machine_code[3] == [move_line]
-        assert result.op_map.op_to_machine_code[4] == [cut_line]
+        assert result.op_map.span_for_op(2) == (min_power, 2)
+        assert result.op_map.op_for_line(min_power) == 2
+        assert result.op_map.op_for_line(max_power) == 2
+        assert result.op_map.span_for_op(3) == (move_line, 1)
+        assert result.op_map.op_for_line(move_line) == 3
+        assert result.op_map.span_for_op(4) == (cut_line, 1)
+        assert result.op_map.op_for_line(cut_line) == 4
 
     def test_layer_end_maps_to_nothing(self, encoder, mock_machine, doc):
         """LAYER_END produces no rpascript lines."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
 
-        assert result.op_map.op_to_machine_code[5] == []
+        assert result.op_map.span_for_op(5) == (0, 0)
 
     def test_job_end_maps_to_tail(self, encoder, mock_machine, doc):
         """JOB_END should map to LAST_LAYER/SELECT/END_JOB/EOF."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
-        tail = [
-            lines.index("LAST_LAYER Layer:0"),
-            lines.index("SELECT_LAYER Layer:0"),
-            lines.index("END_JOB"),
-            lines.index("EOF"),
-        ]
+        tail = sorted(
+            [
+                lines.index("LAST_LAYER Layer:0"),
+                lines.index("SELECT_LAYER Layer:0"),
+                lines.index("END_JOB"),
+                lines.index("EOF"),
+            ]
+        )
 
-        assert result.op_map.op_to_machine_code[6] == sorted(tail)
+        assert result.op_map.span_for_op(6) == (
+            tail[0],
+            tail[-1] - tail[0] + 1,
+        )
+        for line_num in tail:
+            assert result.op_map.op_for_line(line_num) == 6
 
     def test_reverse_mapping_is_consistent(self, encoder, mock_machine, doc):
-        """machine_code_to_op must agree with op_to_machine_code."""
+        """Every line must map back to its owning op."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
 
-        for op_index, block in result.op_map.op_to_machine_code.items():
-            for line_num in block:
-                assert result.op_map.machine_code_to_op[line_num] == op_index
-
-        mapped = set(result.op_map.machine_code_to_op.keys())
-        assert mapped == set(range(len(lines)))
+        for line_num in range(len(lines)):
+            op_index = result.op_map.op_for_line(line_num)
+            assert op_index is not None
+            start, count = result.op_map.span_for_op(op_index)
+            assert start <= line_num < start + count
 
     def _three_layer_job(self, doc):
         ops = Ops()
@@ -811,7 +830,7 @@ class TestOpMapGeneration:
         """A 3-layer job must keep exact per-layer op_map positions."""
         result = encoder.encode(self._three_layer_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
-        op_map = result.op_map.op_to_machine_code
+        op_map = result.op_map
 
         attr0 = lines.index("# Layer 0: Layer 1")
         attr1 = lines.index("# Layer 1: Layer 2")
@@ -836,31 +855,28 @@ class TestOpMapGeneration:
         )
         assert eof == len(lines) - 1
 
-        assert op_map[0] == list(range(0, attr0))
-        assert op_map[1] == list(range(attr0, attr1))
-        assert op_map[5] == list(range(attr1, attr2))
-        assert op_map[8] == list(range(attr2, last_layer))
-        assert op_map[2] == [
-            lines.index("MIN_POWER_1 Power:50.0%"),
-            lines.index("MAX_POWER_1 Power:50.0%"),
-        ]
-        assert op_map[3] == [
-            lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
-        ]
-        assert op_map[6] == [
-            lines.index("MOVE_NEAR_XY nearX=-4.000mm nearY=-4.000mm")
-        ]
-        assert op_map[9] == [
-            lines.index("CUT_NEAR_XY nearX=8.000mm nearY=8.000mm")
-        ]
-        assert op_map[11] == [
-            last_layer,
-            select0,
-            select1,
-            select2,
-            end_job,
-            eof,
-        ]
+        assert op_map.span_for_op(0) == (0, attr0)
+        assert op_map.span_for_op(1) == (attr0, attr1 - attr0)
+        assert op_map.span_for_op(5) == (attr1, attr2 - attr1)
+        assert op_map.span_for_op(8) == (attr2, last_layer - attr2)
+        min_power = lines.index("MIN_POWER_1 Power:50.0%")
+        max_power = lines.index("MAX_POWER_1 Power:50.0%")
+        assert op_map.span_for_op(2) == (min_power, 2)
+        assert op_map.op_for_line(min_power) == 2
+        assert op_map.op_for_line(max_power) == 2
+        move3 = lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
+        assert op_map.span_for_op(3) == (move3, 1)
+        assert op_map.op_for_line(move3) == 3
+        move6 = lines.index("MOVE_NEAR_XY nearX=-4.000mm nearY=-4.000mm")
+        assert op_map.span_for_op(6) == (move6, 1)
+        assert op_map.op_for_line(move6) == 6
+        cut9 = lines.index("CUT_NEAR_XY nearX=8.000mm nearY=8.000mm")
+        assert op_map.span_for_op(9) == (cut9, 1)
+        assert op_map.op_for_line(cut9) == 9
+        tail = [last_layer, select0, select1, select2, end_job, eof]
+        assert op_map.span_for_op(11) == (tail[0], tail[-1] - tail[0] + 1)
+        for line_num in tail:
+            assert op_map.op_for_line(line_num) == 11
 
 
 class TestOpMapLayoutPinning:
@@ -879,7 +895,7 @@ class TestOpMapLayoutPinning:
         ops.job_end()  # 7 -> LAST_LAYER/SELECTs/END_JOB/EOF
         result = encoder.encode(ops, mock_machine, doc)
         lines = result.text.split("\n")
-        op_map = result.op_map.op_to_machine_code
+        op_map = result.op_map
 
         attr0 = lines.index("# Layer 0: Layer 1")
         attr1 = lines.index("# Layer 1: Layer 2")
@@ -893,23 +909,23 @@ class TestOpMapLayoutPinning:
         assert end_job == eof - 1
         assert last_layer < select0 < select1 < end_job
 
-        assert op_map[0] == list(range(0, attr0))
-        assert op_map[1] == list(range(attr0, attr1))
-        assert op_map[2] == [
-            lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
-        ]
-        assert op_map[4] == list(range(attr1, last_layer))
-        assert op_map[5] == [
-            lines.index("CUT_NEAR_XY nearX=5.000mm nearY=3.000mm")
-        ]
-        assert op_map[7] == [last_layer, select0, select1, end_job, eof]
+        assert op_map.span_for_op(0) == (0, attr0)
+        assert op_map.span_for_op(1) == (attr0, attr1 - attr0)
+        move2 = lines.index("MOVE_NEAR_XY nearX=5.000mm nearY=5.000mm")
+        assert op_map.span_for_op(2) == (move2, 1)
+        assert op_map.op_for_line(move2) == 2
+        assert op_map.span_for_op(4) == (attr1, last_layer - attr1)
+        cut5 = lines.index("CUT_NEAR_XY nearX=5.000mm nearY=3.000mm")
+        assert op_map.span_for_op(5) == (cut5, 1)
+        assert op_map.op_for_line(cut5) == 5
+        tail = [last_layer, select0, select1, end_job, eof]
+        assert op_map.span_for_op(7) == (tail[0], tail[-1] - tail[0] + 1)
 
-        for op_index, block in op_map.items():
-            for line_num in block:
-                assert result.op_map.machine_code_to_op[line_num] == op_index
-
-        mapped = set(result.op_map.machine_code_to_op.keys())
-        assert mapped == set(range(len(lines)))
+        for line_num in range(len(lines)):
+            op_index = op_map.op_for_line(line_num)
+            assert op_index is not None
+            start, count = op_map.span_for_op(op_index)
+            assert start <= line_num < start + count
 
 
 class TestErrorHandling:
@@ -969,28 +985,28 @@ class TestGluescriptPlan:
     def test_encode_populates_rpa_plan(self, encoder, mock_machine, doc):
         """encode() must attach the recorded plan to the output."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.rpa_plan is not None
-        assert len(result.rpa_plan) > 0
+        assert result.driver_data["rpa_plan"] is not None
+        assert len(result.driver_data["rpa_plan"]) > 0
 
     def test_empty_ops_have_no_plan(self, encoder, mock_machine, doc):
         """An empty job produces no plan (no GlueScript calls)."""
         result = encoder.encode(Ops(), mock_machine, doc)
-        assert result.rpa_plan is None
+        assert result.driver_data.get("rpa_plan") is None
 
     def test_plan_starts_with_declare_job_and_ends_with_end_job(
         self, encoder, mock_machine, doc
     ):
         """The plan frames the job exactly like the driver transcript."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.rpa_plan[0][0] == "declare_job"
-        assert result.rpa_plan[-1] == ("end_job", ())
+        assert result.driver_data["rpa_plan"][0][0] == "declare_job"
+        assert result.driver_data["rpa_plan"][-1] == ("end_job", ())
 
     def test_plan_records_structural_and_raw_calls(
         self, encoder, mock_machine, doc
     ):
         """Structural calls and power_range raw lines are recorded."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        names = [name for name, _ in result.rpa_plan]
+        names = [name for name, _ in result.driver_data["rpa_plan"]]
         assert "declare_layer" in names
         assert "move_xy_to" in names
         assert "cut_xy_to" in names
@@ -999,7 +1015,7 @@ class TestGluescriptPlan:
     def test_plan_args_are_positional_tuples(self, encoder, mock_machine, doc):
         """Recorded args are plain positional tuples (no kwargs)."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        for name, args in result.rpa_plan:
+        for name, args in result.driver_data["rpa_plan"]:
             assert isinstance(name, str)
             assert isinstance(args, tuple)
 
@@ -1015,17 +1031,19 @@ class TestGluescriptPlan:
     def test_plan_survives_encoder_reuse(self, encoder, mock_machine, doc):
         """A new encode replaces the plan; the old snapshot stays valid."""
         result1 = encoder.encode(_plan_job(doc), mock_machine, doc)
-        plan1 = result1.rpa_plan
+        plan1 = result1.driver_data["rpa_plan"]
         result2 = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result2.rpa_plan is not None
-        assert result2.rpa_plan == plan1
+        assert result2.driver_data["rpa_plan"] is not None
+        assert result2.driver_data["rpa_plan"] == plan1
 
     def test_plan_records_per_op_settings_as_gluescript_calls(
         self, encoder, mock_machine, doc
     ):
         """Per-op settings record as gluescript calls in the plan."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert ("cut_speed", (3.3333333333333335,)) in result.rpa_plan
+        assert ("cut_speed", (3.3333333333333335,)) in result.driver_data[
+            "rpa_plan"
+        ]
 
 
 class TestWcsToRefPoint:
@@ -1056,13 +1074,13 @@ class TestWcsToRefPoint:
         """The declare_job ref point mirrors the active framework WCS."""
         mock_machine.active_wcs = wcs
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.rpa_plan[0] == (
+        assert result.driver_data["rpa_plan"][0] == (
             "declare_job",
             (self._JOB_LABEL, expected, None, 1, 1, 0.0, 0.0),
         )
         if wcs == "ANCHOR":
             # ANCHOR maps to ABSOLUTE with abs_xy pinned to None.
-            assert result.rpa_plan[0][1][2] is None
+            assert result.driver_data["rpa_plan"][0][1][2] is None
 
     def test_g54_falls_back_to_machine_ref_point(
         self, encoder, mock_machine, doc
@@ -1070,7 +1088,7 @@ class TestWcsToRefPoint:
         """The framework default G54 must fall back to MACHINE."""
         mock_machine.active_wcs = "G54"
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.rpa_plan[0] == (
+        assert result.driver_data["rpa_plan"][0] == (
             "declare_job",
             (self._JOB_LABEL, "MACHINE", None, 1, 1, 0.0, 0.0),
         )
@@ -1078,7 +1096,7 @@ class TestWcsToRefPoint:
     def test_machine_none_defaults_to_machine_ref_point(self, encoder, doc):
         """machine=None must default to the MACHINE reference point."""
         result = encoder.encode(_plan_job(doc), None, doc)
-        assert result.rpa_plan[0] == (
+        assert result.driver_data["rpa_plan"][0] == (
             "declare_job",
             (self._JOB_LABEL, "MACHINE", None, 1, 1, 0.0, 0.0),
         )

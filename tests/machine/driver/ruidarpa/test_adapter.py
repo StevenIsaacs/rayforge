@@ -373,7 +373,7 @@ class TestRunRouting:
                 ["REF_POINT_SET", "MOVE_NEAR_XY X=5.000mm Y=5.000mm"]
             ),
             op_map=MachineCodeOpMap(),
-            rpa_plan=plan,
+            driver_data={"rpa_plan": plan},
         )
         await adapter.run(encoded, Doc(), Ops())
         client.root.exposed_new_gluescript.assert_called_once_with()
@@ -395,6 +395,69 @@ class TestRunRouting:
         assert final.args[1] == ["move_xy_to(5.0, 5.0)", "end_job()"]
         assert final.kwargs["require_complete"] is True
         client.run_staged_job.assert_called_once_with()
+        client.run.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_run_rpc_without_plan_falls_back_to_text(self, adapter_pair):
+        """run() in RPC mode without a plan must ship text via backend.run
+        (drop-in compatibility with the direct driver)."""
+        adapter, client = adapter_pair
+        encoded = EncodedOutput(
+            text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
+            op_map=MachineCodeOpMap(),
+        )
+        await adapter.run(encoded, Doc(), Ops())
+        client.run.assert_called_once_with(
+            ["HOME_XY", "MOVE_NEAR_XY X=1.000mm Y=1.000mm"], True
+        )
+        client.run_staged_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_run_with_empty_text_skips_backend(self, adapter_pair):
+        """Empty output must skip backend dispatch but still signal
+        job_finished."""
+        adapter, backend = adapter_pair
+        encoded = EncodedOutput(text="", op_map=MachineCodeOpMap())
+        fired = []
+
+        def _record_finished(sender):
+            fired.append(sender)
+
+        adapter.job_finished.connect(_record_finished)
+        await adapter.run(encoded, Doc(), Ops())
+        assert fired == [adapter]
+        backend.run.assert_not_called()
+        run_staged_job = getattr(backend, "run_staged_job", None)
+        if run_staged_job is not None:
+            run_staged_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+    )
+    async def test_run_rpc_empty_plan_is_present_routes_to_staged(
+        self, adapter_pair
+    ):
+        """run() in RPC mode must treat an empty list plan as present and
+        route to staged, never to raw text."""
+        adapter, client = adapter_pair
+        encoded = EncodedOutput(
+            text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
+            op_map=MachineCodeOpMap(),
+            driver_data={"rpa_plan": []},
+        )
+        await adapter.run(encoded, Doc(), Ops())
+        client.run_staged_job.assert_called_once_with()
+        client.run.assert_not_called()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -557,7 +620,7 @@ class TestRunStagedJob:
         return EncodedOutput(
             text="dummy",
             op_map=MachineCodeOpMap(),
-            rpa_plan=plan,
+            driver_data={"rpa_plan": plan},
         )
 
     @pytest.mark.asyncio
