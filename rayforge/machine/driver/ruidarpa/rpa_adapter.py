@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 import random
 from dataclasses import replace
 from gettext import gettext as _
@@ -28,7 +29,7 @@ from typing import (
 )
 
 from rayforge.context import RayforgeContext
-from rayforge.core.varset import BoolVar, HostnameVar, Var, VarSet
+from rayforge.core.varset import BoolVar, FloatVar, HostnameVar, Var, VarSet
 from rayforge.machine.driver.driver import (
     Axis,
     DeviceStatus,
@@ -66,7 +67,25 @@ _RpaBackend = Union[RpaDirectDriver, RpaRpcClient]
 # Default speed for move_to() absolute jogs (mm/s), used until the first
 # jog() records the GUI-configured speed. After that, move_to() reuses the
 # last jog speed so absolute moves do not fight the jog speed.
+# NOTE: 600 mm/s == DEFAULT_MAX_TRAVEL_SPEED_MMPM (36000 mm/min) below;
+# keep them in sync to avoid drift.
 DEFAULT_MOVE_TO_JOG_SPEED_MM_S = 600.0
+
+# Driver-level default for the RPC sync request timeout (seconds); the
+# RpaRpcClient class default is 5.0 for direct constructions.
+DEFAULT_RPC_TIMEOUT_S = 30.0
+
+# Ruida test-hardware speed limits (mm/min base units): 400 mm/s cut,
+# 600 mm/s travel. Seeded into the machine only while it still holds the
+# framework defaults (see _UNCONFIGURED_* below).
+DEFAULT_MAX_CUT_SPEED_MMPM = 24000
+DEFAULT_MAX_TRAVEL_SPEED_MMPM = 36000
+
+# Framework defaults for the machine speed fields (machine.py:139-140).
+# Instance attributes, not importable — mirrored here as the "user never
+# configured" sentinel.
+_UNCONFIGURED_MAX_CUT_SPEED_MMPM = 1000
+_UNCONFIGURED_MAX_TRAVEL_SPEED_MMPM = 3000
 
 
 def _unwrap_mm(value: object) -> Optional[float]:
@@ -269,6 +288,18 @@ class RuidaRPAAdapter(Driver):
                     ),
                     default=False,
                 ),
+                FloatVar(
+                    "timeout",
+                    label=_("RPC timeout (s)"),
+                    description=_(
+                        "Maximum seconds to wait for each synchronous RPC. "
+                        "Raise for large jobs with many layers."
+                    ),
+                    default=DEFAULT_RPC_TIMEOUT_S,
+                    min_val=1.0,
+                    digits=1,
+                    visible_when=lambda v: v.get("tui", False),
+                ),
             ]
         )
 
@@ -282,12 +313,49 @@ class RuidaRPAAdapter(Driver):
 
     # --- Setup / Connect ---
 
+    def _seed_machine_speed_defaults(self) -> None:
+        """Seed machine speed limits with Ruida defaults when unconfigured.
+
+        Machine Settings -> General is the source of truth for these
+        values; the driver only fills in the Ruida hardware defaults
+        while the machine still holds the framework defaults (i.e. the
+        user has never configured them). set_max_* early-returns when
+        unchanged and fires machine.changed for persistence.
+        """
+        if self._machine.max_cut_speed == _UNCONFIGURED_MAX_CUT_SPEED_MMPM:
+            self._machine.set_max_cut_speed(DEFAULT_MAX_CUT_SPEED_MMPM)
+            logger.debug(
+                "Seeding machine max cut speed with Ruida default (%d mm/min)",
+                DEFAULT_MAX_CUT_SPEED_MMPM,
+                extra=self._log_extra("RPA"),
+            )
+        if (
+            self._machine.max_travel_speed
+            == _UNCONFIGURED_MAX_TRAVEL_SPEED_MMPM
+        ):
+            self._machine.set_max_travel_speed(DEFAULT_MAX_TRAVEL_SPEED_MMPM)
+            logger.debug(
+                "Seeding machine max travel speed with Ruida default "
+                "(%d mm/min)",
+                DEFAULT_MAX_TRAVEL_SPEED_MMPM,
+                extra=self._log_extra("RPA"),
+            )
+
     def _setup_implementation(self, **kwargs: Any) -> None:
         self._config = dict(kwargs)
         self._tui_mode = bool(kwargs.get("tui", False))
 
+        try:
+            timeout = float(kwargs.get("timeout", DEFAULT_RPC_TIMEOUT_S))
+        except (TypeError, ValueError):
+            raise DriverSetupError("RPC timeout must be a number") from None
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise DriverSetupError("RPC timeout must be positive")
+
+        self._seed_machine_speed_defaults()
+
         if self._tui_mode:
-            self._backend = RpaRpcClient()
+            self._backend = RpaRpcClient(timeout=timeout)
             logger.debug(
                 "RPA adapter configured for TUI RPC mode",
                 extra=self._log_extra("TUI_RPC"),
@@ -904,7 +972,7 @@ class RuidaRPAAdapter(Driver):
         self._selected_wcs = wcs
 
     async def set_wcs_offset(
-        self, wcs_slot: str, x: float, y: float, z: float
+        self, wcs_slot: str, x: float, y: float, z: float | None
     ) -> None:
         raise NotImplementedError(
             _(

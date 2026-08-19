@@ -246,8 +246,25 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
 
         # Update controls based on new driver features
         self._update_travel_speed_state()
+        self._sync_speed_rows()
         self._sync_unit_system_widgets()
         self._update_unit_warning()
+
+    def _sync_speed_rows(self) -> None:
+        """Re-read machine speed limits into the speed rows.
+
+        Called from _on_machine_changed so a driver that seeds speed
+        defaults (e.g. ruidarpa) is reflected in the UI without a page
+        rebuild. The rows' own _is_updating guard prevents the
+        value_changed handlers from re-firing the machine setters;
+        _is_initializing is defense-in-depth.
+        """
+        if self._is_initializing:
+            return
+        self.travel_speed_row.set_value_in_base_units(
+            self.machine.max_travel_speed
+        )
+        self.cut_speed_row.set_value_in_base_units(self.machine.max_cut_speed)
 
     def _sync_unit_system_widgets(self):
         """

@@ -7,6 +7,7 @@ to communicate with a Ruida controller on another machine.
 from __future__ import annotations
 
 import logging
+import math
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 _logger = logging.getLogger(__name__)
@@ -24,6 +25,9 @@ else:
 
 # RPyC's default sync_request_timeout is 30s; 5s detects a
 # hung-but-alive server in ~5s instead of blocking the caller.
+# This stays the class default for direct constructions; the RPA
+# adapter overrides it via its own DEFAULT_RPC_TIMEOUT_S setup var
+# so large jobs get a longer per-call budget.
 SYNC_REQUEST_TIMEOUT = 5.0
 
 
@@ -41,8 +45,25 @@ class RpaRpcClient:
     DEFAULT_PORT = 18812
 
     def __init__(
-        self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        timeout: float = SYNC_REQUEST_TIMEOUT,
     ) -> None:
+        """Create the RPyC client wrapper.
+
+        Args:
+            host: RPyC service hostname/IP.
+            port: RPyC service port.
+            timeout: Maximum seconds to wait for each synchronous RPC
+                request. Must be positive.
+
+        Raises:
+            ValueError: If timeout is not a positive number.
+        """
+        self._timeout = float(timeout)
+        if not math.isfinite(self._timeout) or self._timeout <= 0:
+            raise ValueError("RPC timeout must be positive")
         self._host = host
         self._port = port
         self._conn: Any = None
@@ -69,7 +90,7 @@ class RpaRpcClient:
                 self._host,
                 self._port,
                 config={
-                    "sync_request_timeout": SYNC_REQUEST_TIMEOUT,
+                    "sync_request_timeout": self._timeout,
                     # Server-raised GlueScriptDeltaMismatchError must
                     # arrive typed so the delta path can distinguish a
                     # contiguity break from other failures; rpyc 6.0.2
@@ -138,6 +159,11 @@ class RpaRpcClient:
         remote ``is_connected()`` VALUE is deliberately NOT interpreted
         — controller up/down transitions are handled by the status
         listener, not by the health probe.
+
+        Hung-server detection can cost up to 2x the configured timeout:
+        the netref read and the call each make one sync round trip
+        (GETATTR + CALLATTR), so a 30s timeout can block ~60s before
+        the probe fails.
         """
         if self._conn is None:
             return False

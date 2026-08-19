@@ -45,12 +45,37 @@ class TestIsAlive:
 class TestConnectConfig:
     """connect() must configure the RPyC sync request timeout."""
 
-    def test_connect_passes_sync_request_timeout(self, monkeypatch):
-        """connect() must pass the 5s timeout and custom-exception flags."""
+    @staticmethod
+    def _patch_rpyc(monkeypatch):
+        """Replace rpyc + BgServingThread so connect() never touches I/O."""
         mock_rpyc = Mock()
         mock_bg_thread = Mock()
         monkeypatch.setattr(rpa_rpc_client, "rpyc", mock_rpyc)
         monkeypatch.setattr(rpa_rpc_client, "BgServingThread", mock_bg_thread)
+        return mock_rpyc, mock_bg_thread
+
+    def test_connect_passes_custom_sync_request_timeout(self, monkeypatch):
+        """connect() must pass a custom timeout and exception flags."""
+        mock_rpyc, mock_bg_thread = self._patch_rpyc(monkeypatch)
+
+        client = RpaRpcClient(host="127.0.0.1", port=18812, timeout=42.0)
+        result = client.connect()
+
+        assert result is True
+        mock_rpyc.connect.assert_called_once_with(
+            "127.0.0.1",
+            18812,
+            config={
+                "sync_request_timeout": 42.0,
+                "import_custom_exceptions": True,
+                "instantiate_custom_exceptions": True,
+            },
+        )
+        mock_bg_thread.assert_called_once()
+
+    def test_connect_defaults_to_sync_request_timeout(self, monkeypatch):
+        """Default construction must keep the class-level 5s timeout."""
+        mock_rpyc, mock_bg_thread = self._patch_rpyc(monkeypatch)
 
         client = RpaRpcClient(host="127.0.0.1", port=18812)
         result = client.connect()
@@ -66,7 +91,21 @@ class TestConnectConfig:
             },
         )
         mock_bg_thread.assert_called_once()
-        assert SYNC_REQUEST_TIMEOUT == 5.0
+
+    def test_non_positive_timeout_raises_value_error(self):
+        """A non-positive timeout must fail fast at construction."""
+        with pytest.raises(ValueError, match="positive"):
+            RpaRpcClient(timeout=0)
+
+    def test_nan_timeout_raises_value_error(self):
+        """A NaN timeout must fail fast at construction."""
+        with pytest.raises(ValueError, match="positive"):
+            RpaRpcClient(timeout=float("nan"))
+
+    def test_inf_timeout_raises_value_error(self):
+        """An infinite timeout must fail fast at construction."""
+        with pytest.raises(ValueError, match="positive"):
+            RpaRpcClient(timeout=float("inf"))
 
 
 class TestRootProperty:

@@ -34,9 +34,13 @@ import pytest_asyncio
 from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
+from rayforge.core.varset import FloatVar
 from rayforge.machine.driver.driver import Axis, DeviceStatus, DriverSetupError
 from rayforge.machine.driver.ruidarpa import rpa_adapter
 from rayforge.machine.driver.ruidarpa.rpa_adapter import (
+    DEFAULT_MAX_CUT_SPEED_MMPM,
+    DEFAULT_MAX_TRAVEL_SPEED_MMPM,
+    DEFAULT_RPC_TIMEOUT_S,
     RuidaRPAAdapter,
     _stage_plan,
     _unwrap_mm,
@@ -1656,3 +1660,104 @@ class TestHealthPoll:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+
+
+class TestRpcTimeoutSetup:
+    """The setup 'timeout' var drives the RPyC sync request timeout."""
+
+    def test_timeout_var_present_with_driver_defaults(
+        self, isolated_context, isolated_machine
+    ):
+        """get_setup_vars must expose a timeout var with driver defaults."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        varset = adapter.get_setup_vars()
+        timeout_var = varset.get("timeout")
+        assert timeout_var is not None
+        assert isinstance(timeout_var, FloatVar)
+        assert timeout_var.default == DEFAULT_RPC_TIMEOUT_S
+        assert timeout_var.min_val == 1.0
+        assert timeout_var.digits == 1
+        assert timeout_var.visible_when is not None
+        assert timeout_var.visible_when({"tui": True}) is True
+        assert timeout_var.visible_when({"tui": False}) is False
+
+    @pytest.mark.asyncio
+    async def test_setup_passes_timeout_to_rpc_client(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """setup(tui=True, timeout=42.0) must construct the client with it."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        mock_client_cls = Mock()
+        monkeypatch.setattr(rpa_adapter, "RpaRpcClient", mock_client_cls)
+
+        adapter.setup(tui=True, timeout=42.0)
+
+        mock_client_cls.assert_called_once_with(timeout=42.0)
+
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_setup_omits_timeout_uses_driver_default(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """setup(tui=True) without timeout must use DEFAULT_RPC_TIMEOUT_S."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        mock_client_cls = Mock()
+        monkeypatch.setattr(rpa_adapter, "RpaRpcClient", mock_client_cls)
+
+        adapter.setup(tui=True)
+
+        mock_client_cls.assert_called_once_with(timeout=DEFAULT_RPC_TIMEOUT_S)
+
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.parametrize(
+        "value, match",
+        [
+            (0, "positive"),
+            (float("nan"), "positive"),
+            (float("inf"), "positive"),
+            ("abc", "number"),
+            (None, "number"),
+        ],
+    )
+    def test_invalid_timeout_raises_driver_setup_error(
+        self, isolated_context, isolated_machine, value, match
+    ):
+        """Non-numeric or non-positive timeouts must fail loudly."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        with pytest.raises(DriverSetupError, match=match):
+            adapter._setup_implementation(tui=True, timeout=value)
+
+
+class TestSeedMachineSpeedDefaults:
+    """The adapter seeds Ruida speed defaults only while unconfigured."""
+
+    @pytest.mark.parametrize(
+        "tui", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
+    )
+    def test_seeds_defaults_at_framework_defaults(self, isolated_context, tui):
+        """A machine at framework defaults gets the Ruida speed limits."""
+        from rayforge.machine.models.machine import Machine
+
+        m = Machine(isolated_context)
+        a = RuidaRPAAdapter(isolated_context, m)
+        a._setup_implementation(tui=tui)
+
+        assert m.max_cut_speed == DEFAULT_MAX_CUT_SPEED_MMPM
+        assert m.max_travel_speed == DEFAULT_MAX_TRAVEL_SPEED_MMPM
+
+    def test_does_not_overwrite_user_values(self, isolated_context):
+        """User-configured speeds must never be clobbered by seeding."""
+        from rayforge.machine.models.machine import Machine
+
+        m = Machine(isolated_context)
+        m.set_max_cut_speed(20000)
+        m.set_max_travel_speed(50000)
+        a = RuidaRPAAdapter(isolated_context, m)
+        a._setup_implementation(tui=False)
+
+        assert m.max_cut_speed == 20000
+        assert m.max_travel_speed == 50000
