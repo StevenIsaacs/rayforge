@@ -183,6 +183,7 @@ class RuidaRPAAdapter(Driver):
     uses_gcode = False
     maturity = DriverMaturity.KNOWN_BUGGY
     supports_probing = False
+    supports_travel_speed = True
     native_overscan = True
 
     # --- Reconnect constants ---

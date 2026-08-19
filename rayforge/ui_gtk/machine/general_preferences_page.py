@@ -373,11 +373,17 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         self.machine.set_acceleration(int(value))
 
     def _update_travel_speed_state(self):
-        """Update the travel speed row based on dialect features."""
+        """Update the travel speed row based on driver/dialect features."""
         if self._is_initializing:
             return
 
-        if self.machine.dialect and self.machine.dialect.can_g0_with_speed:
+        if (
+            self.machine.driver
+            and self.machine.driver.supports_travel_speed
+            or (
+                self.machine.dialect and self.machine.dialect.can_g0_with_speed
+            )
+        ):
             self.travel_speed_row.set_sensitive(True)
             self.travel_speed_row.set_subtitle(
                 _("Maximum rapid movement speed")

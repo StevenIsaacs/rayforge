@@ -35,7 +35,12 @@ from raygeo.ops import Ops
 
 from rayforge.core.doc import Doc
 from rayforge.core.varset import FloatVar
-from rayforge.machine.driver.driver import Axis, DeviceStatus, DriverSetupError
+from rayforge.machine.driver.driver import (
+    Axis,
+    DeviceStatus,
+    Driver,
+    DriverSetupError,
+)
 from rayforge.machine.driver.ruidarpa import rpa_adapter
 from rayforge.machine.driver.ruidarpa.rpa_adapter import (
     DEFAULT_MAX_CUT_SPEED_MMPM,
@@ -135,6 +140,14 @@ async def adapter_pair(isolated_context, isolated_machine, request):
 
     await adapter.cleanup()
     await machine.shutdown()
+
+
+class TestClassAttributes:
+    def test_supports_travel_speed(self):
+        assert RuidaRPAAdapter.supports_travel_speed is True
+
+    def test_supports_travel_speed_default_false(self):
+        assert Driver.supports_travel_speed is False
 
 
 class TestStopBackendRegression:

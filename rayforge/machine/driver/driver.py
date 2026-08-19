@@ -220,6 +220,9 @@ class Driver(ABC):
     # When True, the driver can query the device to detect its
     # native unit system (metric vs imperial).
     supports_unit_detection: bool = False
+    # When True, the driver can limit rapid/travel speed (used by
+    # the Machine Settings -> General Max Travel Speed field).
+    supports_travel_speed: bool = False
 
     @property
     @abstractmethod
