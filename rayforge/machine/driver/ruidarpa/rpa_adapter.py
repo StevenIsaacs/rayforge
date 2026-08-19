@@ -24,7 +24,6 @@ from typing import (
     Dict,
     List,
     Optional,
-    Tuple,
     Union,
 )
 
@@ -100,62 +99,31 @@ def _unwrap_mm(value: object) -> Optional[float]:
     return value  # type: ignore[return-value]
 
 
-def _render_transcript_lines(name: str, args: Tuple) -> List[str]:
-    """Render one recorded GlueScript call as server transcript line(s).
+def _stage_gluescript_document(
+    client: RpaRpcClient, gluescript_lines: list[str]
+) -> None:
+    """Stage the complete GlueScript transcript on the server via RPC.
 
-    Mirrors the driver's own transcript mirroring: ``comment`` and
-    ``inline`` expand to one line per item (the driver appends a mirror
-    line per element), so the replayed server transcript length stays
-    contiguous for the delta flush guard.
-    """
-    if name == "comment" and args and isinstance(args[0], (list, tuple)):
-        return [f"comment({[line]!r})" for line in args[0]]
-    if name == "inline" and args and isinstance(args[0], (list, tuple)):
-        return [f"inline({[command]!r})" for command in args[0]]
-    args_str = ", ".join(repr(arg) for arg in args)
-    return [f"{name}({args_str})"]
-
-
-def _stage_plan(client: RpaRpcClient, plan: List[Tuple[str, Tuple]]) -> None:
-    """Replay a recorded GlueScript plan on the server via RPC.
-
-    The server's replay registry has no ``add_layer_action`` case (raw
-    lines are forwarded-only upstream), so the plan is walked in
-    recorded order: structural calls are flushed as
-    ``stage_gluescript_delta`` batches, and each ``add_layer_action`` is
-    forwarded at its exact interleaved position. Every delta
-    re-assembles the rpascript, so the final ``end_job`` flush stages
-    the complete job. A failed stage is torn down so a stale job
-    cannot be run afterwards.
+    The encoder ships the full transcript in
+    ``driver_data["rpa_gluescript"]``; the server's
+    ``exposed_stage_gluescript`` replays it wholesale into the TUI's
+    GlueScript driver and mirrors the assembled rpascript into the
+    loaded-script slot (``/list script``). ``exposed_new_gluescript``
+    clears the TUI-side document state first (loaded script, run flag,
+    .cglu path) — state that ``stage_gluescript`` itself does not reset.
+    A failed stage is torn down so a stale job cannot be run afterwards.
 
     Args:
         client: The connected RPC client.
-        plan: Recorded ``(method_name, args)`` pairs from the encoder.
+        gluescript_lines: The complete GlueScript transcript lines.
 
     Raises:
-        RuntimeError: If the server rejects a replayed batch or the
-            plan never reached ``end_job()``.
+        RuntimeError: If the server rejects the staged document.
     """
     try:
         root = client.root
         root.exposed_new_gluescript()
-        flushed = 0
-        buffer: List[str] = []
-        for name, args in plan:
-            if name == "add_layer_action":
-                if buffer:
-                    root.exposed_stage_gluescript_delta(
-                        flushed, buffer, require_complete=False
-                    )
-                    flushed += len(buffer)
-                    buffer = []
-                root.exposed_add_layer_action(*args)
-            else:
-                buffer.extend(_render_transcript_lines(name, args))
-        if buffer:
-            root.exposed_stage_gluescript_delta(
-                flushed, buffer, require_complete=True
-            )
+        root.exposed_stage_gluescript(gluescript_lines, require_complete=True)
     except Exception:
         try:
             client._reset_staged()
@@ -728,34 +696,38 @@ class RuidaRPAAdapter(Driver):
         )
 
     async def _run_staged_job(self, encoded: EncodedOutput) -> None:
-        """Run a job by re-staging its GlueScript plan server-side.
+        """Run a job by staging its complete GlueScript transcript server-side.
 
-        TUI RPC mode only: the encoded output carries the recorded
-        GlueScript call plan in ``driver_data["rpa_plan"]``. The plan
-        is replayed on the server via the RPC GlueScript sink
-        (``_stage_plan``), then the staged rpascript is queued with
-        ``run_staged_job``. A failed stage is torn down so a stale job
-        cannot be run afterwards.
+        TUI RPC mode only: the encoded output carries the complete
+        GlueScript transcript in ``driver_data["rpa_gluescript"]``. The
+        transcript is staged wholesale on the server via
+        ``_stage_gluescript_document``, then the staged rpascript is
+        queued with ``run_staged_job``. A failed stage is torn down so a
+        stale job cannot be run afterwards.
 
         Args:
             encoded: The encoder output; must carry
-                ``driver_data["rpa_plan"]``.
+                ``driver_data["rpa_gluescript"]``.
 
         Raises:
             DriverSetupError: If the backend is not initialized or the
-                plan is missing.
+                transcript is missing.
         """
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
-        if encoded.driver_data.get("rpa_plan") is None:
+        if encoded.driver_data.get("rpa_gluescript") is None:
             raise DriverSetupError(
-                "TUI RPC mode requires a GlueScript plan (rpa_plan) — "
-                "re-encode the job with the ruidarpa encoder"
+                "TUI RPC mode requires the GlueScript transcript "
+                "(rpa_gluescript) — re-encode the job with the ruidarpa "
+                "encoder"
             )
         client: RpaRpcClient = self._backend  # type: ignore
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
-            None, _stage_plan, client, encoded.driver_data["rpa_plan"]
+            None,
+            _stage_gluescript_document,
+            client,
+            encoded.driver_data["rpa_gluescript"],
         )
         await loop.run_in_executor(None, client.run_staged_job)
 
@@ -794,15 +766,17 @@ class RuidaRPAAdapter(Driver):
                 extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
             )
         elif (
-            self._tui_mode and encoded.driver_data.get("rpa_plan") is not None
+            self._tui_mode
+            and encoded.driver_data.get("rpa_gluescript") is not None
         ):
-            # TUI RPC re-stages the GlueScript plan server-side; without
-            # a plan the raw text path stays drop-in with direct mode.
+            # TUI RPC stages the complete GlueScript transcript
+            # server-side; without a transcript the raw text path stays
+            # drop-in with direct mode.
             await self._run_staged_job(encoded)
         else:
             if self._tui_mode:
                 logger.debug(
-                    "TUI RPC without rpa_plan — falling back to raw "
+                    "TUI RPC without rpa_gluescript — falling back to raw "
                     "rpascript text (drop-in with direct mode)",
                     extra=self._log_extra("TUI_RPC"),
                 )

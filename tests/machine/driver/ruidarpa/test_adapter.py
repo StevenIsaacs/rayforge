@@ -26,7 +26,7 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import replace
-from typing import Callable
+from typing import Callable, ClassVar
 from unittest.mock import Mock, call
 
 import pytest
@@ -47,7 +47,7 @@ from rayforge.machine.driver.ruidarpa.rpa_adapter import (
     DEFAULT_MAX_TRAVEL_SPEED_MMPM,
     DEFAULT_RPC_TIMEOUT_S,
     RuidaRPAAdapter,
-    _stage_plan,
+    _stage_gluescript_document,
     _unwrap_mm,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
@@ -372,45 +372,31 @@ class TestRunRouting:
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_run_rpc_stages_plan_and_runs_staged_job(self, adapter_pair):
-        """run() in RPC mode must re-stage the plan server-side."""
+    async def test_run_rpc_stages_document_and_runs_staged_job(
+        self, adapter_pair
+    ):
+        """run() in RPC mode must stage the full transcript server-side."""
         adapter, client = adapter_pair
-        plan = [
-            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+        gluescript_lines = [
+            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
             (
-                "declare_layer",
-                ("Cut", "#ff6600", "VECTOR", "NONE", 100.0, 20.0, 50.0, 50.0),
+                "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
+                "100.0, 20.0, 50.0, 50.0)"
             ),
-            ("add_layer_action", (1, ["MIN_POWER_1 Power=50.0%"])),
-            ("move_xy_to", (5.0, 5.0)),
-            ("end_job", ()),
+            "move_xy_to(5.0, 5.0)",
+            "end_job()",
         ]
         encoded = EncodedOutput(
-            text="\n".join(
-                ["REF_POINT_SET", "MOVE_NEAR_XY X=5.000mm Y=5.000mm"]
-            ),
+            text="REF_POINT_SET\nMOVE_NEAR_XY X=5.000mm Y=5.000mm",
             op_map=MachineCodeOpMap(),
-            driver_data={"rpa_plan": plan},
+            driver_data={"rpa_gluescript": gluescript_lines},
         )
         await adapter.run(encoded, Doc(), Ops())
         client.root.exposed_new_gluescript.assert_called_once_with()
-        deltas = client.root.exposed_stage_gluescript_delta
-        assert deltas.call_count == 2
-        first = deltas.call_args_list[0]
-        assert first.args[0] == 0
-        assert first.args[1] == [
-            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-            "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
-            "100.0, 20.0, 50.0, 50.0)",
-        ]
-        assert first.kwargs["require_complete"] is False
-        client.root.exposed_add_layer_action.assert_called_once_with(
-            1, ["MIN_POWER_1 Power=50.0%"]
+        client.root.exposed_stage_gluescript.assert_called_once_with(
+            gluescript_lines, require_complete=True
         )
-        final = deltas.call_args_list[-1]
-        assert final.args[0] == 2
-        assert final.args[1] == ["move_xy_to(5.0, 5.0)", "end_job()"]
-        assert final.kwargs["require_complete"] is True
+        client.root.exposed_stage_gluescript_delta.assert_not_called()
         client.run_staged_job.assert_called_once_with()
         client.run.assert_not_called()
 
@@ -461,16 +447,16 @@ class TestRunRouting:
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_run_rpc_empty_plan_is_present_routes_to_staged(
+    async def test_run_rpc_empty_gluescript_is_present_routes_to_staged(
         self, adapter_pair
     ):
-        """run() in RPC mode must treat an empty list plan as present and
-        route to staged, never to raw text."""
+        """run() in RPC mode must treat an empty list transcript as present
+        and route to staged, never to raw text."""
         adapter, client = adapter_pair
         encoded = EncodedOutput(
             text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
             op_map=MachineCodeOpMap(),
-            driver_data={"rpa_plan": []},
+            driver_data={"rpa_gluescript": []},
         )
         await adapter.run(encoded, Doc(), Ops())
         client.run_staged_job.assert_called_once_with()
@@ -620,24 +606,23 @@ class TestRunRouting:
 
 
 class TestRunStagedJob:
-    """The TUI RPC staged pipeline re-stages the plan server-side."""
+    """The TUI RPC staged pipeline stages the full transcript server-side."""
 
-    PLAN = [
-        ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
+    GLUESCRIPT_LINES: ClassVar[list[str]] = [
+        "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
         (
-            "declare_layer",
-            ("Cut", "#ff6600", "VECTOR", "NONE", 100.0, 20.0, 50.0, 50.0),
+            "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
+            "100.0, 20.0, 50.0, 50.0)"
         ),
-        ("add_layer_action", (1, ["MIN_POWER_1 Power=50.0%"])),
-        ("move_xy_to", (5.0, 5.0)),
-        ("end_job", ()),
+        "move_xy_to(5.0, 5.0)",
+        "end_job()",
     ]
 
-    def _encoded(self, plan=PLAN):
+    def _encoded(self, gluescript_lines=GLUESCRIPT_LINES):
         return EncodedOutput(
             text="dummy",
             op_map=MachineCodeOpMap(),
-            driver_data={"rpa_plan": plan},
+            driver_data={"rpa_gluescript": gluescript_lines},
         )
 
     @pytest.mark.asyncio
@@ -645,22 +630,27 @@ class TestRunStagedJob:
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
     async def test_run_staged_job_stages_then_runs(self, adapter_pair):
-        """_run_staged_job must replay the plan and run the staged job."""
+        """_run_staged_job must stage the transcript and run the staged job."""
         adapter, client = adapter_pair
         await adapter._run_staged_job(self._encoded())
         client.root.exposed_new_gluescript.assert_called_once_with()
-        assert client.root.exposed_stage_gluescript_delta.call_count == 2
+        client.root.exposed_stage_gluescript.assert_called_once_with(
+            self.GLUESCRIPT_LINES, require_complete=True
+        )
+        client.root.exposed_stage_gluescript_delta.assert_not_called()
         client.run_staged_job.assert_called_once_with()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_run_staged_job_missing_plan_raises(self, adapter_pair):
-        """A plan-less encoded output must fail fast in RPC mode."""
+    async def test_run_staged_job_missing_gluescript_raises(
+        self, adapter_pair
+    ):
+        """A transcript-less encoded output must fail fast in RPC mode."""
         adapter, client = adapter_pair
-        with pytest.raises(DriverSetupError, match="rpa_plan"):
-            await adapter._run_staged_job(self._encoded(plan=None))
+        with pytest.raises(DriverSetupError, match="rpa_gluescript"):
+            await adapter._run_staged_job(self._encoded(gluescript_lines=None))
         client.root.exposed_new_gluescript.assert_not_called()
 
     @pytest.mark.asyncio
@@ -671,162 +661,68 @@ class TestRunStagedJob:
         self, adapter_pair
     ):
         """A missing backend must fail fast."""
-        adapter, client = adapter_pair
+        adapter, _client = adapter_pair
         adapter._backend = None
         with pytest.raises(DriverSetupError, match="Backend"):
             await adapter._run_staged_job(self._encoded())
 
 
-class TestStagePlan:
-    """_stage_plan replays the recorded plan through the RPC sink."""
+class TestStageGluescriptDocument:
+    """_stage_gluescript_document stages the full transcript via RPC."""
+
+    GLUESCRIPT_LINES: ClassVar[list[str]] = [
+        "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
+        (
+            "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
+            "100.0, 20.0, 50.0, 50.0)"
+        ),
+        "move_xy_to(5.0, 5.0)",
+        "end_job()",
+    ]
 
     def test_resets_before_staging(self):
         """The pipeline starts from a clean server-side gluescript."""
         client = Mock(spec=RpaRpcClient)
-        _stage_plan(client, [])
+        _stage_gluescript_document(client, [])
         client.root.exposed_new_gluescript.assert_called_once_with()
+        client.root.exposed_stage_gluescript.assert_called_once_with(
+            [], require_complete=True
+        )
         # The server-side gluescript cursor tracks the live machine
         # position, so staging must not clobber it with a zero reset.
         client.root.exposed_update_position.assert_not_called()
 
-    def test_single_delta_when_no_raw_actions(self):
-        """A plan without add_layer_action flushes once, complete."""
+    def test_stages_full_document_in_order(self):
+        """new_gluescript then stage_gluescript(lines, complete)."""
         client = Mock(spec=RpaRpcClient)
-        plan = [
-            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
-            ("end_job", ()),
-        ]
-        _stage_plan(client, plan)
-        client.root.exposed_stage_gluescript_delta.assert_called_once_with(
-            0,
-            [
-                "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-                "end_job()",
-            ],
-            require_complete=True,
+        _stage_gluescript_document(client, self.GLUESCRIPT_LINES)
+        client.root.exposed_new_gluescript.assert_called_once_with()
+        client.root.exposed_stage_gluescript.assert_called_once_with(
+            self.GLUESCRIPT_LINES, require_complete=True
         )
-
-    def test_raw_actions_forwarded_at_interleaved_position(self):
-        """add_layer_action lines forward in recorded order."""
-        client = Mock(spec=RpaRpcClient)
-        _stage_plan(client, TestRunStagedJob.PLAN)
-        deltas = client.root.exposed_stage_gluescript_delta
-        assert deltas.call_count == 2
-        first = deltas.call_args_list[0]
-        assert first.args[0] == 0
-        assert first.args[1][0].startswith("declare_job(")
-        assert first.kwargs["require_complete"] is False
-        client.root.exposed_add_layer_action.assert_called_once_with(
-            1, ["MIN_POWER_1 Power=50.0%"]
-        )
-        final = deltas.call_args_list[-1]
-        assert final.args[0] == 2
-        assert final.args[1] == ["move_xy_to(5.0, 5.0)", "end_job()"]
-        assert final.kwargs["require_complete"] is True
+        client.root.exposed_stage_gluescript_delta.assert_not_called()
+        client.root.exposed_add_layer_action.assert_not_called()
 
     def test_failed_stage_resets_staged_state(self):
-        """A rejected replay must tear down so no stale job can run."""
+        """A rejected stage must tear down so no stale job can run."""
         client = Mock(spec=RpaRpcClient)
-        client.root.exposed_stage_gluescript_delta.side_effect = RuntimeError(
+        client.root.exposed_stage_gluescript.side_effect = RuntimeError(
             "Re-staged gluescript is missing end_job()"
         )
-        plan = [
-            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
-            ("add_layer_action", (1, ["MIN_POWER_1 Power=50.0%"])),
-        ]
         with pytest.raises(RuntimeError, match="end_job"):
-            _stage_plan(client, plan)
+            _stage_gluescript_document(client, self.GLUESCRIPT_LINES)
         client._reset_staged.assert_called_once_with()
 
-    def test_comment_expands_per_item(self):
-        """Multi-item comment calls mirror one transcript line per item."""
+    def test_failed_reset_logs_and_re_raises(self):
+        """A failing reset must not mask the original stage error."""
         client = Mock(spec=RpaRpcClient)
-        plan = [
-            ("comment", (["# Ops Actions", "# Ops Section Start"],)),
-            ("end_job", ()),
-        ]
-        _stage_plan(client, plan)
-        deltas = client.root.exposed_stage_gluescript_delta
-        assert deltas.call_count == 1
-        lines = deltas.call_args_list[0].args[1]
-        assert lines == [
-            "comment(['# Ops Actions'])",
-            "comment(['# Ops Section Start'])",
-            "end_job()",
-        ]
-
-    def test_migrated_settings_flush_via_generic_delta(self):
-        """Migrated per-op settings replay as generic transcript lines."""
-        client = Mock(spec=RpaRpcClient)
-        plan = [
-            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
-            ("cut_speed", (250.0,)),
-            ("frequency", (25.0,)),
-            ("pwm", (50.0,)),
-            ("delay", ("250.000ms",)),
-            ("end_job", ()),
-        ]
-        _stage_plan(client, plan)
-        deltas = client.root.exposed_stage_gluescript_delta
-        assert deltas.call_count == 1
-        assert deltas.call_args_list[0].args[1] == [
-            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-            "cut_speed(250.0)",
-            "frequency(25.0)",
-            "pwm(50.0)",
-            "delay('250.000ms')",
-            "end_job()",
-        ]
-        client.root.exposed_add_layer_action.assert_not_called()
-
-    def test_add_layer_action_still_forwards_between_migrated_calls(self):
-        """Raw add_layer_action between migrated calls keeps forwarding."""
-        client = Mock(spec=RpaRpcClient)
-        plan = [
-            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
-            ("cut_speed", (250.0,)),
-            ("add_layer_action", (1, ["LASER_DEVICE_1"])),
-            ("frequency", (25.0,)),
-            ("end_job", ()),
-        ]
-        _stage_plan(client, plan)
-        deltas = client.root.exposed_stage_gluescript_delta
-        assert deltas.call_count == 2
-        client.root.exposed_add_layer_action.assert_called_once_with(
-            1, ["LASER_DEVICE_1"]
+        client.root.exposed_stage_gluescript.side_effect = RuntimeError(
+            "stage failed"
         )
-        assert deltas.call_args_list[0].args[1] == [
-            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-            "cut_speed(250.0)",
-        ]
-        assert deltas.call_args_list[-1].args[1] == [
-            "frequency(25.0)",
-            "end_job()",
-        ]
-
-    def test_select_laser_replays_via_generic_delta(self):
-        """select_laser is recorded and replays as a generic transcript line.
-
-        The encoder records ``select_laser`` into the rpa_plan (it is not
-        in the ``_UNRECORDED`` set), so ``_stage_plan`` replays it as a
-        generic GlueScript transcript line rather than forwarding it via
-        the ``add_layer_action`` special case.
-        """
-        client = Mock(spec=RpaRpcClient)
-        plan = [
-            ("declare_job", ("Job", "MACHINE", None, 1, 1, 0.0, 0.0)),
-            ("select_laser", (2,)),
-            ("end_job", ()),
-        ]
-        _stage_plan(client, plan)
-        deltas = client.root.exposed_stage_gluescript_delta
-        assert deltas.call_count == 1
-        assert deltas.call_args_list[0].args[1] == [
-            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-            "select_laser(2)",
-            "end_job()",
-        ]
-        client.root.exposed_add_layer_action.assert_not_called()
+        client._reset_staged.side_effect = RuntimeError("reset failed")
+        with pytest.raises(RuntimeError, match="stage failed"):
+            _stage_gluescript_document(client, self.GLUESCRIPT_LINES)
+        client._reset_staged.assert_called_once_with()
 
 
 class TestWcsHandling:

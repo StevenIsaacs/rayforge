@@ -9,8 +9,6 @@ bounding-box math. Coordinates use mm natively (no unit conversion needed).
 
 from __future__ import annotations
 
-import copy
-import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
@@ -66,62 +64,6 @@ _WCS_TO_REF_POINT = {
 _last_fallback_wcs: Optional[str] = None
 
 
-class _RecordedCall:
-    """Callable that records an invocation into the plan, then forwards.
-
-    Keyword arguments are bound to the target's signature and converted
-    to positional order, so the recorded plan stays a uniform list of
-    ``(name, args)`` pairs replayable on an RPC GlueScript sink.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        target: Any,
-        plan: List[Tuple[str, Tuple]],
-    ) -> None:
-        self._name = name
-        self._target = target
-        self._plan = plan
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        if kwargs:
-            bound = inspect.signature(self._target).bind(*args, **kwargs)
-            bound.apply_defaults()
-            args = tuple(bound.arguments.values())
-        self._plan.append((self._name, copy.deepcopy(args)))
-        return self._target(*args)
-
-
-class _RecordingGlueScriptProxy:
-    """GlueScript proxy that records the encoder's call plan.
-
-    Every attribute access forwards to the wrapped GlueScript, so
-    private state reads (``_job_header``, ``_layer_actions``, ...) keep
-    resolving through ``__getattr__``. Callable attributes return a
-    ``_RecordedCall`` that records the invocation before forwarding.
-    Staging/finalize methods (``stage_gluescript`` and
-    ``stage_gluescript_delta``) are forwarded without recording — they
-    have no replay dispatch case on the RPC sink.
-    """
-
-    _UNRECORDED = frozenset({"stage_gluescript", "stage_gluescript_delta"})
-
-    def __init__(
-        self,
-        gluescript: Any,
-        plan: List[Tuple[str, Tuple]],
-    ) -> None:
-        self._wrapped = gluescript
-        self._plan = plan
-
-    def __getattr__(self, name: str) -> Any:
-        attr = getattr(self._wrapped, name)
-        if name in self._UNRECORDED or not callable(attr):
-            return attr
-        return _RecordedCall(name, attr, self._plan)
-
-
 class RuidaRPAEncoder(OpsEncoder):
     """Encodes Ops commands into rpascript text via ruida-pa GlueScript.
 
@@ -152,19 +94,8 @@ class RuidaRPAEncoder(OpsEncoder):
         self._actions_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple]] = {}
-        self._gluescript_plan: List[Tuple[str, Tuple]] = []
 
     # -- Public API ---------------------------------------------------------
-
-    def gluescript_plan(self) -> List[Tuple[str, Tuple]]:
-        """Return a deep copy of the recorded GlueScript call plan.
-
-        The plan holds the exact interleaved sequence of GlueScript
-        method calls made while encoding, as ``(method_name, args)``
-        pairs. It can be replayed on an RPC GlueScript sink to re-stage
-        the job server-side without resending the assembled rpascript.
-        """
-        return copy.deepcopy(self._gluescript_plan)
 
     def encode(
         self, ops: Ops, machine: "Machine", doc: "Doc"
@@ -177,8 +108,8 @@ class RuidaRPAEncoder(OpsEncoder):
             doc: The document being processed.
 
         Returns:
-            EncodedOutput with rpascript text, op_map, and the recorded
-            GlueScript plan in driver_data["rpa_plan"].
+            EncodedOutput with rpascript text, op_map, and the complete
+            GlueScript transcript in driver_data["rpa_gluescript"].
 
         Raises:
             RuntimeError: If the ruida-pa GlueScript API is unavailable or
@@ -207,9 +138,7 @@ class RuidaRPAEncoder(OpsEncoder):
             layer.uid: i for i, layer in enumerate(doc.layers)
         }
         gluescript_type: Any = GlueScript
-        self._gluescript = _RecordingGlueScriptProxy(
-            gluescript_type(), self._gluescript_plan
-        )
+        self._gluescript = gluescript_type()
 
         for i in range(ops.len()):
             self._snapshot_sections()
@@ -227,10 +156,11 @@ class RuidaRPAEncoder(OpsEncoder):
 
         self._build_op_map(len(lines))
         text = "\n".join(lines)
+        gluescript_lines = list(self._gluescript.gluescript)
         return EncodedOutput(
             text=text,
             op_map=self.op_map,
-            driver_data={"rpa_plan": self.gluescript_plan()},
+            driver_data={"rpa_gluescript": gluescript_lines},
         )
 
     # -- Command dispatch ---------------------------------------------------
@@ -310,11 +240,6 @@ class RuidaRPAEncoder(OpsEncoder):
                 "Layer-scoped op encountered before LAYER_START — "
                 "GlueScript routing requires an active layer"
             )
-
-    def _add_layer_action(self, lines: List[str]) -> None:
-        """Route raw rpascript lines into the current layer's action block."""
-        self._require_active_layer()
-        self._gluescript.add_layer_action(self._layer_key, lines)
 
     def _clamp_power_pct(self, power_pct: float, source: str) -> float:
         """Clamp a power percent up to the controller minimum.

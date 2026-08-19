@@ -12,6 +12,7 @@ Tests cover:
 - Error handling (missing JOB_END, unknown commands, missing layer)
 """
 
+import ast
 import logging
 
 import pytest
@@ -61,6 +62,12 @@ def mock_machine(isolated_machine):
 def doc():
     """Provides a fresh Doc instance (3 default layers)."""
     return Doc()
+
+
+def _declare_layer_mode(line: str) -> str:
+    """Extract the mode argument from a declare_layer transcript line."""
+    args = ast.literal_eval(line[len("declare_layer(") : -1])
+    return args[2]
 
 
 class TestRuidaRPAEncoderBasics:
@@ -441,7 +448,7 @@ class TestSettingsCommands:
         # laser-2 resolves to device 2: select_laser(2) is recorded into the
         # plan, but no raw LASER_DEVICE_2 (only laser 1 is wired in
         # ruida-pa), and a warning is logged.
-        assert ("select_laser", (2,)) in result.driver_data["rpa_plan"]
+        assert "select_laser(2)" in result.driver_data["rpa_gluescript"]
         assert "LASER_DEVICE_2" not in lines
         assert any(
             "select_laser" in record.message for record in caplog.records
@@ -464,7 +471,7 @@ class TestSettingsCommands:
         result = encoder.encode(ops, mock_machine, doc)
 
         # ((2 - 1) % 2) + 1 = 2; active_laser defaults to 1
-        assert ("select_laser", (2,)) in result.driver_data["rpa_plan"]
+        assert "select_laser(2)" in result.driver_data["rpa_gluescript"]
         assert "LASER_DEVICE_2" not in result.text
 
         ops = Ops()
@@ -494,7 +501,7 @@ class TestSettingsCommands:
 
         lines = result.text.split("\n")
         # sum(ord(c) for c in "laser-3") = 631, odd -> device 2
-        assert ("select_laser", (2,)) in result.driver_data["rpa_plan"]
+        assert "select_laser(2)" in result.driver_data["rpa_gluescript"]
         assert "LASER_DEVICE_2" not in lines
 
 
@@ -522,7 +529,7 @@ class TestSectionPowerRouting:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert "IMD_POWER_1 Power:50.0%" in result.text
-        assert ("power", (50.0,)) in result.driver_data["rpa_plan"]
+        assert "power(50.0)" in result.driver_data["rpa_gluescript"]
 
     def test_variable_power_section_passes_low_power_through(
         self, encoder, mock_machine, doc, caplog
@@ -544,7 +551,7 @@ class TestSectionPowerRouting:
         result = encoder.encode(ops, mock_machine, doc)
 
         assert "IMD_POWER_1 Power:50.0%" in result.text
-        assert ("power", (50.0,)) in result.driver_data["rpa_plan"]
+        assert "power(50.0)" in result.driver_data["rpa_gluescript"]
 
     def test_constant_power_section_uses_power_range(
         self, encoder, mock_machine, doc
@@ -556,7 +563,9 @@ class TestSectionPowerRouting:
         lines = result.text.split("\n")
         assert "MIN_POWER_1 Power:50.0%" in lines
         assert "MAX_POWER_1 Power:50.0%" in lines
-        assert ("power_range", (50.0, 50.0)) in result.driver_data["rpa_plan"]
+        assert (
+            "power_range(50.0, 50.0)" in result.driver_data["rpa_gluescript"]
+        )
 
     def test_layer_mode_derived_from_sections(
         self, encoder, mock_machine, doc
@@ -587,11 +596,11 @@ class TestSectionPowerRouting:
             ops.job_end()
             result = encoder.encode(ops, mock_machine, doc)
             declared = [
-                args
-                for name, args in result.driver_data["rpa_plan"]
-                if name == "declare_layer"
+                line
+                for line in result.driver_data["rpa_gluescript"]
+                if line.startswith("declare_layer(")
             ]
-            assert declared[0][2] == expected
+            assert _declare_layer_mode(declared[0]) == expected
 
     def test_layer_mode_priority_depth_map_wins_regardless_of_order(
         self, encoder, mock_machine, doc
@@ -623,11 +632,11 @@ class TestSectionPowerRouting:
         result = encoder.encode(ops, mock_machine, doc)
 
         declared = [
-            args
-            for name, args in result.driver_data["rpa_plan"]
-            if name == "declare_layer"
+            line
+            for line in result.driver_data["rpa_gluescript"]
+            if line.startswith("declare_layer(")
         ]
-        assert declared[0][2] == "DEPTHMAP"
+        assert _declare_layer_mode(declared[0]) == "DEPTHMAP"
 
     def test_section_state_resets_after_section_end(
         self, encoder, mock_machine, doc
@@ -979,71 +988,98 @@ def _plan_job(doc):
     return ops
 
 
-class TestGluescriptPlan:
-    """The encoder records its GlueScript call plan for re-staging."""
+class TestGluescriptDocument:
+    """The encoder ships the complete GlueScript transcript for staging."""
 
-    def test_encode_populates_rpa_plan(self, encoder, mock_machine, doc):
-        """encode() must attach the recorded plan to the output."""
+    def test_encode_populates_rpa_gluescript(self, encoder, mock_machine, doc):
+        """encode() must attach the transcript to the output."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.driver_data["rpa_plan"] is not None
-        assert len(result.driver_data["rpa_plan"]) > 0
+        lines = result.driver_data["rpa_gluescript"]
+        assert lines is not None
+        assert len(lines) > 0
+        assert all(isinstance(line, str) for line in lines)
 
-    def test_empty_ops_have_no_plan(self, encoder, mock_machine, doc):
-        """An empty job produces no plan (no GlueScript calls)."""
+    def test_empty_ops_have_no_gluescript(self, encoder, mock_machine, doc):
+        """An empty job produces no transcript (no GlueScript calls)."""
         result = encoder.encode(Ops(), mock_machine, doc)
-        assert result.driver_data.get("rpa_plan") is None
+        assert result.driver_data.get("rpa_gluescript") is None
 
-    def test_plan_starts_with_declare_job_and_ends_with_end_job(
+    def test_gluescript_starts_with_declare_job_and_ends_with_end_job(
         self, encoder, mock_machine, doc
     ):
-        """The plan frames the job exactly like the driver transcript."""
+        """The transcript frames the job exactly like the driver transcript."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.driver_data["rpa_plan"][0][0] == "declare_job"
-        assert result.driver_data["rpa_plan"][-1] == ("end_job", ())
+        lines = result.driver_data["rpa_gluescript"]
+        assert lines[0].startswith("declare_job(")
+        assert lines[-1] == "end_job()"
 
-    def test_plan_records_structural_and_raw_calls(
+    def test_gluescript_records_structural_and_raw_calls(
         self, encoder, mock_machine, doc
     ):
         """Structural calls and power_range raw lines are recorded."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        names = [name for name, _ in result.driver_data["rpa_plan"]]
-        assert "declare_layer" in names
-        assert "move_xy_to" in names
-        assert "cut_xy_to" in names
-        assert "power_range" in names
+        lines = result.driver_data["rpa_gluescript"]
+        assert any(line.startswith("declare_layer(") for line in lines)
+        assert any(line.startswith("move_xy_to(") for line in lines)
+        assert any(line.startswith("cut_xy_to(") for line in lines)
+        assert any(line.startswith("power_range(") for line in lines)
 
-    def test_plan_args_are_positional_tuples(self, encoder, mock_machine, doc):
-        """Recorded args are plain positional tuples (no kwargs)."""
-        result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        for name, args in result.driver_data["rpa_plan"]:
-            assert isinstance(name, str)
-            assert isinstance(args, tuple)
-
-    def test_plan_replays_without_re_recording(
+    def test_gluescript_is_a_snapshot_not_an_alias(
         self, encoder, mock_machine, doc
     ):
-        """gluescript_plan() returns the same snapshot each call."""
-        encoder.encode(_plan_job(doc), mock_machine, doc)
-        first = encoder.gluescript_plan()
-        second = encoder.gluescript_plan()
-        assert first == second
+        """Mutating the returned list must not affect the encoder's
+        transcript."""
+        result = encoder.encode(_plan_job(doc), mock_machine, doc)
+        returned = result.driver_data["rpa_gluescript"]
+        returned.append("mutated()")
+        assert "mutated()" not in encoder._gluescript.gluescript
 
-    def test_plan_survives_encoder_reuse(self, encoder, mock_machine, doc):
-        """A new encode replaces the plan; the old snapshot stays valid."""
+    def test_gluescript_survives_encoder_reuse(
+        self, encoder, mock_machine, doc
+    ):
+        """A new encode replaces the transcript; the old snapshot stays
+        valid."""
         result1 = encoder.encode(_plan_job(doc), mock_machine, doc)
-        plan1 = result1.driver_data["rpa_plan"]
+        lines1 = result1.driver_data["rpa_gluescript"]
         result2 = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result2.driver_data["rpa_plan"] is not None
-        assert result2.driver_data["rpa_plan"] == plan1
+        assert result2.driver_data["rpa_gluescript"] is not None
+        assert result2.driver_data["rpa_gluescript"] == lines1
 
-    def test_plan_records_per_op_settings_as_gluescript_calls(
+    def test_gluescript_records_per_op_settings_as_lines(
         self, encoder, mock_machine, doc
     ):
-        """Per-op settings record as gluescript calls in the plan."""
+        """Per-op settings record as transcript lines."""
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert ("cut_speed", (3.3333333333333335,)) in result.driver_data[
-            "rpa_plan"
-        ]
+        assert (
+            "cut_speed(3.3333333333333335)"
+            in result.driver_data["rpa_gluescript"]
+        )
+
+    def test_gluescript_records_select_laser_power_and_power_range(
+        self, encoder, mock_machine, doc
+    ):
+        """select_laser, power, and power_range all appear as lines."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.set_head("laser-2")
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.set_power(0.5)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.set_power(0.5)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+        lines = result.driver_data["rpa_gluescript"]
+        assert any(line.startswith("select_laser(") for line in lines)
+        assert any(line.startswith("power(") for line in lines)
+        assert any(line.startswith("power_range(") for line in lines)
 
 
 class TestWcsToRefPoint:
@@ -1074,13 +1110,19 @@ class TestWcsToRefPoint:
         """The declare_job ref point mirrors the active framework WCS."""
         mock_machine.active_wcs = wcs
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.driver_data["rpa_plan"][0] == (
-            "declare_job",
-            (self._JOB_LABEL, expected, None, 1, 1, 0.0, 0.0),
+        assert result.driver_data["rpa_gluescript"][0] == (
+            f"declare_job({self._JOB_LABEL!r}, {expected!r}, "
+            "[0.0, 0.0], 1, 1, 0.0, 0.0)"
         )
         if wcs == "ANCHOR":
-            # ANCHOR maps to ABSOLUTE with abs_xy pinned to None.
-            assert result.driver_data["rpa_plan"][0][1][2] is None
+            # ANCHOR maps to ABSOLUTE; the encoder passes abs_xy=None,
+            # which GlueScript normalizes to [0.0, 0.0].
+            args = ast.literal_eval(
+                result.driver_data["rpa_gluescript"][0][
+                    len("declare_job(") : -1
+                ]
+            )
+            assert args[2] == [0.0, 0.0]
 
     def test_g54_falls_back_to_machine_ref_point(
         self, encoder, mock_machine, doc
@@ -1088,17 +1130,17 @@ class TestWcsToRefPoint:
         """The framework default G54 must fall back to MACHINE."""
         mock_machine.active_wcs = "G54"
         result = encoder.encode(_plan_job(doc), mock_machine, doc)
-        assert result.driver_data["rpa_plan"][0] == (
-            "declare_job",
-            (self._JOB_LABEL, "MACHINE", None, 1, 1, 0.0, 0.0),
+        assert result.driver_data["rpa_gluescript"][0] == (
+            f"declare_job({self._JOB_LABEL!r}, 'MACHINE', "
+            "[0.0, 0.0], 1, 1, 0.0, 0.0)"
         )
 
     def test_machine_none_defaults_to_machine_ref_point(self, encoder, doc):
         """machine=None must default to the MACHINE reference point."""
         result = encoder.encode(_plan_job(doc), None, doc)
-        assert result.driver_data["rpa_plan"][0] == (
-            "declare_job",
-            (self._JOB_LABEL, "MACHINE", None, 1, 1, 0.0, 0.0),
+        assert result.driver_data["rpa_gluescript"][0] == (
+            f"declare_job({self._JOB_LABEL!r}, 'MACHINE', "
+            "[0.0, 0.0], 1, 1, 0.0, 0.0)"
         )
 
     def test_unknown_wcs_raises_value_error(self, encoder, mock_machine, doc):
