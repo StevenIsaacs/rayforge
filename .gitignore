@@ -52,5 +52,8 @@ commit.txt
 rayforge/rayforge.code-workspace
 
 # For development of the Ruida PA driver
-discovery/
+discovery
+rayforge/machine/driver/ruidarpa/docs
+tmp
+
 .hermes_last_pull
