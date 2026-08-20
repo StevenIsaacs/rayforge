@@ -21,6 +21,7 @@ from raygeo.ops.state import CoolantMode
 from ..machine.models.head import Head
 from ..machine.models.spindle import SpindleHead
 from ..pipeline.transformer.registry import transformer_registry
+from ..shared.units.formatter import format_value
 from .capability import MachineCapability
 from .item import DocItem
 from .step_registry import step_registry
@@ -796,6 +797,42 @@ class Step(DocItem, ABC):
         :class:`LaserStep`) override this to describe their process.
         """
         return self.typelabel
+
+    def check(self, machine) -> list[str]:
+        """Return a list of configuration warning strings for this step.
+
+        The UI (step box, settings pages) surfaces these to flag issues
+        such as a speed that exceeds the active machine's maximum.
+        Subclasses extend this with their own warnings. ``machine`` may
+        be None when no machine is configured.
+        """
+        warnings: list[str] = []
+        if machine is None:
+            return warnings
+        if self.cut_speed > machine.max_cut_speed:
+            warnings.append(
+                _(
+                    "Cut speed ({value}) exceeds the machine's "
+                    "maximum ({max})."
+                ).format(
+                    value=format_value(self.cut_speed, "speed"),
+                    max=format_value(machine.max_cut_speed, "speed"),
+                )
+            )
+        if (
+            machine.supports_travel_speed()
+            and self.travel_speed > machine.max_travel_speed
+        ):
+            warnings.append(
+                _(
+                    "Travel speed ({value}) exceeds the machine's "
+                    "maximum ({max})."
+                ).format(
+                    value=format_value(self.travel_speed, "speed"),
+                    max=format_value(machine.max_travel_speed, "speed"),
+                )
+            )
+        return warnings
 
     def dump(self, indent: int = 0):
         print("  " * indent, self.name)

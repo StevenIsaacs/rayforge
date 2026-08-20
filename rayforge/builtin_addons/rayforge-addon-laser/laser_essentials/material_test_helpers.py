@@ -16,6 +16,8 @@ from raygeo.ops.assembly.material_test_grid import (
     generate_material_test_grid_preview,
 )
 
+from rayforge.shared.units.formatter import get_display_unit_settings
+
 _MM_PER_INCH = 25.4
 
 
@@ -84,17 +86,24 @@ def draw_preview(
     width_px: float,
     height_px: float,
     params: dict[str, Any],
+    size_mm: tuple[float, float] | None = None,
 ):
     """
     Draws a visual-only preview of the material test grid.
 
     Renders the Ops via ``generate_material_test_grid_preview`` (raygeo),
     then blits the resulting RGBA buffer to the Cairo context.
+
+    ``size_mm`` is the current workpiece size; the grid is rendered at
+    that size (falling back to the recipe's natural size) so the preview
+    matches the material-test ops, which scale to fill ``workpiece.size``.
     """
-    size_mm = get_material_test_proportional_size(params)
+    if size_mm is None:
+        size_mm = get_material_test_proportional_size(params)
     dpi_x = width_px / size_mm[0] * _MM_PER_INCH
     dpi_y = height_px / size_mm[1] * _MM_PER_INCH
-    dpi = (dpi_x + dpi_y) / 2.0
+    dpi = max(dpi_x, dpi_y)
+    unit_label, factor, precision = get_display_unit_settings("speed")
     img = generate_material_test_grid_preview(
         size_mm=size_mm,
         dpi=dpi,
@@ -117,6 +126,9 @@ def draw_preview(
         include_labels=params.get("include_labels", True),
         label_power_percent=params.get("label_power_percent", 10.0),
         label_speed=params.get("label_speed", 1000.0),
+        speed_unit_label=unit_label,
+        speed_label_factor=factor,
+        speed_label_precision=precision,
     )
 
     h, w = img.shape[:2]
@@ -131,13 +143,23 @@ def draw_preview(
         w,
         h,
     )
+    # Scale the grid to fill the whole target surface. The raster
+    # pipeline maps the rendered image back to millimeters using the
+    # per-axis pixels-per-mm, so stretching the square grid here (the
+    # surface aspect ratio is set by the laser spot geometry) yields
+    # correctly-proportioned cells that cover the full workpiece.
+    ctx.scale(width_px / w, height_px / h)
     ctx.set_source_surface(surface, 0, 0)
     ctx.paint()
     surface.finish()
 
 
 def draw_material_test_preview(
-    ctx: cairo.Context, width: float, height: float, params: dict[str, Any]
+    ctx: cairo.Context,
+    width: float,
+    height: float,
+    params: dict[str, Any],
+    size_mm: tuple[float, float] | None = None,
 ):
     """Stable entry point for the generic procedural renderer."""
-    draw_preview(ctx, width, height, params)
+    draw_preview(ctx, width, height, params, size_mm=size_mm)

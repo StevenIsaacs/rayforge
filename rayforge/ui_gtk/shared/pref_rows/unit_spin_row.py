@@ -1,3 +1,4 @@
+import locale
 import logging
 from gettext import gettext as _
 
@@ -128,7 +129,26 @@ class UnitSpinRow(SpinRow):
             if not self._unit:
                 logger.warning("UnitSpinRow: skipping set, no unit")
                 return
-            self._spin_button.set_value(self._unit.from_base(base_value))
+            display_value = self._unit.from_base(base_value)
+            try:
+                current = float(self._spin_button.get_text())
+            except ValueError:
+                current = float(self._spin_button.get_value())
+            if abs(display_value - current) < 1e-9:
+                return
+            # A value above the bound (e.g. a step loaded from a faster
+            # machine) is shown via the text without moving the bound, so
+            # the next user edit still clamps to it. GTK clamps the text
+            # back to the range when the entry is edited.
+            adj = self._spin_button.get_adjustment()
+            if display_value > adj.get_upper():
+                text = locale.format_string(
+                    f"%.{self._spin_button.get_digits()}f",
+                    display_value,
+                )
+                self._spin_button.set_text(text)
+            else:
+                self._spin_button.set_value(display_value)
         finally:
             self._is_updating = False
 

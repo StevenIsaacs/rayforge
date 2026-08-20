@@ -13,15 +13,15 @@ from rayforge.core.step import legacy_producer_params
 from rayforge.core.varset import (
     BoolVar,
     ChoiceVar,
-    FloatVar,
-    IntVar,
     LengthVar,
     SliderFloatVar,
+    SpeedVar,
     TupleVar,
     VarSet,
 )
 from rayforge.machine.models.laser import LaserHead
 from rayforge.pipeline.transformer.registry import transformer_registry
+from rayforge.shared.units.formatter import get_display_unit_settings
 
 from .laser_step import LaserStep
 
@@ -138,7 +138,7 @@ class MaterialTestStep(LaserStep):
                     description=_(
                         "Distance between scan lines in machine units "
                         "(for Engrave mode). Leave at 0 to use laser "
-                        "spot size."
+                        "spot size"
                     ),
                     default=0.0,
                     min_val=0.0,
@@ -159,21 +159,20 @@ class MaterialTestStep(LaserStep):
                     format_suffix="%",
                     sensitive_when=labels_active,
                 ),
-                IntVar(
+                SpeedVar(
                     key="label_speed",
                     label=_("Label Engrave Speed"),
-                    description=_("Speed for engraving labels (mm/min)"),
+                    description=_("Speed for engraving labels"),
                     default=1000,
                     min_val=1,
                     sensitive_when=labels_active,
                 ),
-                FloatVar(
+                SpeedVar(
                     key="fixed_speed",
                     label=_("Fixed Speed"),
-                    description=_("Constant speed for all cells (mm/min)"),
-                    default=1000.0,
-                    min_val=1.0,
-                    digits=0,
+                    description=_("Constant speed for all cells"),
+                    default=1000,
+                    min_val=1,
                     visible_when=uses_fixed_speed,
                 ),
                 SliderFloatVar(
@@ -209,12 +208,13 @@ class MaterialTestStep(LaserStep):
                     label=_("Speed Range"),
                     item_labels=(_("Minimum Speed"), _("Maximum Speed")),
                     item_subtitles=(
-                        _("Starting speed (mm/min)"),
-                        _("Ending speed (mm/min)"),
+                        _("Starting speed"),
+                        _("Ending speed"),
                     ),
                     default=(100.0, 500.0),
                     min_val=1.0,
                     digits=0,
+                    quantity="speed",
                     visible_when=uses_speed_range,
                 ),
                 TupleVar(
@@ -235,13 +235,14 @@ class MaterialTestStep(LaserStep):
                     label=_("Offset Range"),
                     item_labels=(_("Minimum Offset"), _("Maximum Offset")),
                     item_subtitles=(
-                        _("Bidir scan X-offset for first row (mm)"),
-                        _("Bidir scan X-offset for last row (mm)"),
+                        _("Bidir scan X-offset for first row"),
+                        _("Bidir scan X-offset for last row"),
                     ),
                     default=(-0.5, 0.5),
                     min_val=-10.0,
                     max_val=10.0,
                     digits=2,
+                    quantity="length",
                     visible_when=is_speed_vs_offset,
                 ),
             ]
@@ -299,6 +300,11 @@ class MaterialTestStep(LaserStep):
             if self.line_interval_mm is not None
             else spot_y
         )
+        # Engrave speed labels in the user's preferred speed unit.
+        unit_label, factor, precision = get_display_unit_settings("speed")
+        kwargs["speed_unit_label"] = unit_label
+        kwargs["speed_label_factor"] = factor
+        kwargs["speed_label_precision"] = precision
         return kwargs
 
     def build_compute_payload(
@@ -334,6 +340,9 @@ class MaterialTestStep(LaserStep):
             label_speed=kwargs["label_speed"],
             min_offset=kwargs["min_offset"],
             max_offset=kwargs["max_offset"],
+            speed_unit_label=kwargs["speed_unit_label"],
+            speed_label_factor=kwargs["speed_label_factor"],
+            speed_label_precision=kwargs["speed_label_precision"],
         )
         return part, ComputePayload(assembler=Assembler(spec))
 

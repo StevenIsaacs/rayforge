@@ -158,7 +158,7 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         self.cut_speed_row = SpeedSpinRow(
             _("Max Cut Speed"),
             _("Maximum cutting speed"),
-            upper=60000,  # Increased upper limit for mm/min
+            upper=60000,
             digits=0,
         )
         self.cut_speed_row.set_value_in_base_units(self.machine.max_cut_speed)
@@ -246,25 +246,8 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
 
         # Update controls based on new driver features
         self._update_travel_speed_state()
-        self._sync_speed_rows()
         self._sync_unit_system_widgets()
         self._update_unit_warning()
-
-    def _sync_speed_rows(self) -> None:
-        """Re-read machine speed limits into the speed rows.
-
-        Called from _on_machine_changed so a driver that seeds speed
-        defaults (e.g. ruidarpa) is reflected in the UI without a page
-        rebuild. The rows' own _is_updating guard prevents the
-        value_changed handlers from re-firing the machine setters;
-        _is_initializing is defense-in-depth.
-        """
-        if self._is_initializing:
-            return
-        self.travel_speed_row.set_value_in_base_units(
-            self.machine.max_travel_speed
-        )
-        self.cut_speed_row.set_value_in_base_units(self.machine.max_cut_speed)
 
     def _sync_unit_system_widgets(self):
         """
@@ -373,17 +356,11 @@ class GeneralPreferencesPage(TrackedPreferencesPage):
         self.machine.set_acceleration(int(value))
 
     def _update_travel_speed_state(self):
-        """Update the travel speed row based on driver/dialect features."""
+        """Update the travel speed row based on dialect features."""
         if self._is_initializing:
             return
 
-        if (
-            self.machine.driver
-            and self.machine.driver.supports_travel_speed
-            or (
-                self.machine.dialect and self.machine.dialect.can_g0_with_speed
-            )
-        ):
+        if self.machine.supports_travel_speed():
             self.travel_speed_row.set_sensitive(True)
             self.travel_speed_row.set_subtitle(
                 _("Maximum rapid movement speed")
