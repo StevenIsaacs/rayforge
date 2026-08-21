@@ -1282,7 +1282,10 @@ class TestConnectFailureBackoff:
         await _run_connect_cycle(adapter, lambda: backend.stop.called)
         assert backend.stop.called
         assert adapter._is_connected is False
-        assert adapter._backend is backend
+        if adapter._tui_mode:
+            assert adapter._backend is None
+        else:
+            assert adapter._backend is backend
 
 
 class TestConnectClearsServerHeadTail:
@@ -1370,6 +1373,115 @@ class TestHealthPoll:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+
+
+class TestRpcSingleInstanceReuse:
+    """The TUI RPC backend is a single reused instance across retries."""
+
+    @pytest.mark.asyncio
+    async def test_rpc_reuses_single_instance_across_retries(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """Machine-off retries must reuse one backend, never recreate it."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        adapter.setup(udp_host="127.0.0.1", tui=True)
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        backend.is_connected = False  # machine off
+        constructor = Mock(return_value=backend)
+        monkeypatch.setattr(rpa_adapter, "RpcRdDriver", constructor)
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
+
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: backend.start.call_count >= 2)
+            assert constructor.call_count == 1
+            assert adapter._backend is backend
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_registers_listeners_once(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """Listeners must register once across machine-off retries."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        adapter.setup(udp_host="127.0.0.1", tui=True)
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        backend.is_connected = False  # machine off
+        constructor = Mock(return_value=backend)
+        monkeypatch.setattr(rpa_adapter, "RpcRdDriver", constructor)
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
+
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: backend.start.call_count >= 2)
+            assert backend.register_status_listener.call_count == 1
+            assert backend.register_error_listener.call_count == 1
+            assert backend.register_reply_listener.call_count == 1
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_recreates_backend_on_exception(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """A transport exception must recreate the backend; machine-off must
+        not."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        adapter.setup(udp_host="127.0.0.1", tui=True)
+        backends = []
+
+        def make_backend(**kwargs):
+            b = Mock(spec=RpcRdDriver)
+            b.start.return_value = True
+            b.is_connected = False
+            backends.append(b)
+            return b
+
+        constructor = Mock(side_effect=make_backend)
+        monkeypatch.setattr(rpa_adapter, "RpcRdDriver", constructor)
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
+
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(
+                lambda: len(backends) > 0 and backends[0].start.call_count >= 2
+            )
+            first = backends[0]
+            first.start.side_effect = RuntimeError("transport dead")
+            await _wait_until(lambda: constructor.call_count >= 2)
+            assert constructor.call_count == 2
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
 
 
 class TestRpcTimeoutSetup:

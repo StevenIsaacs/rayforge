@@ -144,6 +144,7 @@ class RuidaRPAAdapter(Driver):
         self._tui_mode: bool = False
         self._rpc_timeout: float = DEFAULT_RPC_TIMEOUT_S
         self._backend: Optional[_RpaBackend] = None
+        self._listeners_registered: bool = False
         self._connection_task: Optional[asyncio.Task] = None
         self._keep_running: bool = False
         self._is_connected: bool = False
@@ -303,6 +304,7 @@ class RuidaRPAAdapter(Driver):
             raise DriverSetupError("RPC timeout must be positive")
 
         self._rpc_timeout = timeout
+        self._listeners_registered = False
         self._seed_machine_speed_defaults()
 
         if self._tui_mode:
@@ -357,12 +359,14 @@ class RuidaRPAAdapter(Driver):
                             "rpalib is not installed — TUI RPC mode "
                             "is unavailable"
                         )
-                    # Construct a fresh RpcRdDriver per attempt: its
-                    # constructor self-connects (opens its own RPyC TCP
-                    # connection), so a failed attempt is torn down and
-                    # rebuilt on the next retry.
-                    backend = RpcRdDriver(timeout=self._rpc_timeout)
-                    self._backend = backend
+                    # The RpcRdDriver is constructed lazily on the first
+                    # attempt and reused across reconnect attempts, so
+                    # listeners are registered at most once per instance
+                    # rather than accumulating on the server.
+                    backend: RpcRdDriver = self._backend  # type: ignore
+                    if backend is None:
+                        backend = RpcRdDriver(timeout=self._rpc_timeout)
+                        self._backend = backend
                     udp_host = self._config.get("udp_host")
                     usb_device = self._config.get("usb_device")
                     started = await loop.run_in_executor(
@@ -370,25 +374,23 @@ class RuidaRPAAdapter(Driver):
                     )
                     connected = started
                     if connected:
-                        # Register RPC callbacks on the fresh RPyC
-                        # connection; the server clears them on
-                        # disconnect, so a reconnect registers at most
-                        # once per connection.
-                        await loop.run_in_executor(
-                            None,
-                            backend.register_status_listener,
-                            self._on_rpa_status,
-                        )
-                        await loop.run_in_executor(
-                            None,
-                            backend.register_error_listener,
-                            self._on_rpa_error,
-                        )
-                        await loop.run_in_executor(
-                            None,
-                            backend.register_reply_listener,
-                            self._on_rpa_reply,
-                        )
+                        if not self._listeners_registered:
+                            await loop.run_in_executor(
+                                None,
+                                backend.register_status_listener,
+                                self._on_rpa_status,
+                            )
+                            await loop.run_in_executor(
+                                None,
+                                backend.register_error_listener,
+                                self._on_rpa_error,
+                            )
+                            await loop.run_in_executor(
+                                None,
+                                backend.register_reply_listener,
+                                self._on_rpa_reply,
+                            )
+                            self._listeners_registered = True
                         # Neutralize the server driver's default head/tail
                         # composition: jobs are fully self-framed by the
                         # encoder, and run_job() prepends the driver's
@@ -465,11 +467,11 @@ class RuidaRPAAdapter(Driver):
                             extra=log_extra,
                         )
                         self._is_connected = False
-                        # The dead RpcRdDriver is intentionally NOT closed
-                        # here: the reconnect loop reassigns self._backend
-                        # on the next attempt, and CPython refcounting
-                        # collects the old driver via __del__ -> close().
-                        # Do not "fix" this into a double-close.
+                        # The backend is intentionally NOT closed here
+                        # because it is reused on the next reconnect
+                        # attempt (single-instance design); closing it
+                        # would force a fresh RPyC connection and
+                        # re-registration.
                         break
 
             except asyncio.CancelledError:
@@ -489,6 +491,9 @@ class RuidaRPAAdapter(Driver):
                 )
                 self._is_connected = False
                 await self._stop_backend()
+                if self._tui_mode:
+                    self._backend = None
+                    self._listeners_registered = False
 
             # --- Reconnect delay with exponential backoff ---
             if self._keep_running:
@@ -1002,6 +1007,7 @@ class RuidaRPAAdapter(Driver):
 
         await self._stop_backend()
         self._backend = None
+        self._listeners_registered = False
 
         self.connection_status_changed.send(
             self, status=TransportStatus.DISCONNECTED, message=""
