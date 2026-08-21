@@ -109,3 +109,44 @@ class TestSpeedSetterDelegation:
         getattr(driver, method)(*args)
 
         mock_driver.run.assert_not_called()
+
+
+class TestGluescriptProperty:
+    """The ``gluescript`` property exposes the wrapped RdDriver."""
+
+    def test_returns_wrapped_driver(self):
+        """gluescript must hand back the wrapped RdDriver instance."""
+        driver, mock_driver = _direct_driver(connected=True)
+        assert driver.gluescript is mock_driver
+
+    def test_creates_driver_on_first_use(self):
+        """gluescript must create the RdDriver when none exists yet."""
+        driver = RpaDirectDriver()
+        assert driver._driver is None
+        gs = driver.gluescript
+        assert gs is not None
+        assert driver._driver is gs
+
+
+class TestRunJobDelegation:
+    """run_job delegates to the connected wrapped driver."""
+
+    def test_delegates_to_wrapped_driver(self):
+        """run_job must call the wrapped driver's run_job."""
+        driver, mock_driver = _direct_driver(connected=True)
+        driver.run_job()
+        mock_driver.run_job.assert_called_once_with(None, auto_checksum=False)
+
+    def test_passes_job_and_auto_checksum(self):
+        """run_job must forward job lines and auto_checksum."""
+        driver, mock_driver = _direct_driver(connected=True)
+        driver.run_job(["START_JOB"], auto_checksum=True)
+        mock_driver.run_job.assert_called_once_with(
+            ["START_JOB"], auto_checksum=True
+        )
+
+    def test_raises_when_disconnected(self):
+        """run_job must fail loudly when not connected."""
+        driver, _mock_driver = _direct_driver(connected=False)
+        with pytest.raises(RuntimeError, match="not connected"):
+            driver.run_job()

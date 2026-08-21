@@ -19,6 +19,7 @@ import pytest
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode, CoolantMode
 from raygeo.ops.types import RasterMode, SectionType
+from ruidadriver.rd_gluescript import GlueScript
 
 from rayforge.core.doc import Doc
 from rayforge.core.step import Step
@@ -29,10 +30,16 @@ from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 
 
 class CutStep(Step):
-    """Minimal concrete Step for encoder layer-settings tests."""
+    """Minimal concrete Step for encoder layer-settings tests.
+
+    Mirrors the laser step's process attributes (power, cut_speed,
+    frequency) that the encoder reads from the first workflow step.
+    """
 
     def __init__(self):
         super().__init__(typelabel="cut")
+        self.power: float = 0.0
+        self.frequency: int = 0
 
 
 @pytest.fixture
@@ -1167,3 +1174,57 @@ class TestWcsToRefPoint:
             if "framework default" in record.message
         ]
         assert len(warnings) == 2
+
+
+class TestInjectedGluescript:
+    """The encoder authors into an injected GlueScript backend."""
+
+    @staticmethod
+    def _job(doc):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.move_to(5.0, 5.0, 0.0)
+        ops.line_to(10.0, 8.0, 0.0)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
+
+    def test_authors_into_injected_gluescript(self, mock_machine, doc):
+        """encode() must author into the injected instance, not a new one."""
+        injected = GlueScript()
+        encoder = RuidaRPAEncoder(gluescript=injected)
+
+        result = encoder.encode(self._job(doc), mock_machine, doc)
+
+        assert encoder._gluescript is injected
+        assert any(
+            line.startswith("declare_job(") for line in injected.gluescript
+        )
+        assert result.driver_data["rpa_gluescript"] is not None
+
+    def test_calls_new_gluescript_to_reset(self, mock_machine, doc):
+        """Each encode must reset the injected backend via new_gluescript."""
+        injected = GlueScript()
+        encoder = RuidaRPAEncoder(gluescript=injected)
+
+        encoder.encode(self._job(doc), mock_machine, doc)
+        encoder.encode(self._job(doc), mock_machine, doc)
+
+        # The transcript must not accumulate across encodes.
+        declared = sum(
+            1
+            for line in injected.gluescript
+            if line.startswith("declare_job(")
+        )
+        assert declared == 1
+
+    def test_reset_state_preserves_injected_instance(self, mock_machine, doc):
+        """_reset_state() must keep the injected instance across encodes."""
+        injected = GlueScript()
+        encoder = RuidaRPAEncoder(gluescript=injected)
+
+        encoder.encode(self._job(doc), mock_machine, doc)
+        encoder._reset_state()
+
+        assert encoder._gluescript is injected

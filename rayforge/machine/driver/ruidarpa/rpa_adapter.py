@@ -4,7 +4,8 @@ Ruida Protocol Analyzer (RPA) library.
 
 Two modes:
 - Direct mode: wraps ``RpaDirectDriver`` (in-process ``RdDriver``)
-- TUI RPC mode: wraps ``RpaRpcClient`` (remote RPyC service)
+- TUI RPC mode: wraps ``RpcRdDriver`` (remote RPyC service, itself a
+  GlueScript)
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    TypeAlias,
     Union,
 )
 
@@ -40,9 +42,14 @@ from rayforge.machine.driver.driver import (
     PWMParams,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import RpaDirectDriver
-from rayforge.machine.driver.ruidarpa.rpa_rpc_client import RpaRpcClient
+from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 from rayforge.machine.models.laser import LaserHead
 from rayforge.machine.transport import TransportStatus
+
+try:
+    from rpalib.rpyc_client import RpcRdDriver
+except ImportError:
+    RpcRdDriver = None  # type: ignore[assignment,misc]
 
 try:
     from ruidadriver.rd_status import RdStatusEvent
@@ -60,8 +67,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Type alias for the two possible backends
-_RpaBackend = Union[RpaDirectDriver, RpaRpcClient]
+# Type alias for the two possible backends. RpcRdDriver is None when the
+# optional rpalib import fails, so the alias needs a targeted ignore.
+_RpaBackend: TypeAlias = Union[
+    RpaDirectDriver,
+    RpcRdDriver,  # type: ignore[reportInvalidTypeForm]
+]
 
 # Default speed for move_to() absolute jogs (mm/s), used until the first
 # jog() records the GUI-configured speed. After that, move_to() reuses the
@@ -71,7 +82,7 @@ _RpaBackend = Union[RpaDirectDriver, RpaRpcClient]
 DEFAULT_MOVE_TO_JOG_SPEED_MM_S = 600.0
 
 # Driver-level default for the RPC sync request timeout (seconds); the
-# RpaRpcClient class default is 5.0 for direct constructions.
+# RpcRdDriver class default is 5.0 for direct constructions.
 DEFAULT_RPC_TIMEOUT_S = 30.0
 
 # Ruida test-hardware speed limits (mm/min base units): 400 mm/s cut,
@@ -97,39 +108,6 @@ def _unwrap_mm(value: object) -> Optional[float]:
     if isinstance(value, (list, tuple)):
         return value[0]  # type: ignore[return-value]
     return value  # type: ignore[return-value]
-
-
-def _stage_gluescript_document(
-    client: RpaRpcClient, gluescript_lines: list[str]
-) -> None:
-    """Stage the complete GlueScript transcript on the server via RPC.
-
-    The encoder ships the full transcript in
-    ``driver_data["rpa_gluescript"]``; the server's
-    ``exposed_stage_gluescript`` replays it wholesale into the TUI's
-    GlueScript driver and mirrors the assembled rpascript into the
-    loaded-script slot (``/list script``). ``exposed_new_gluescript``
-    clears the TUI-side document state first (loaded script, run flag,
-    .cglu path) — state that ``stage_gluescript`` itself does not reset.
-    A failed stage is torn down so a stale job cannot be run afterwards.
-
-    Args:
-        client: The connected RPC client.
-        gluescript_lines: The complete GlueScript transcript lines.
-
-    Raises:
-        RuntimeError: If the server rejects the staged document.
-    """
-    try:
-        root = client.root
-        root.exposed_new_gluescript()
-        root.exposed_stage_gluescript(gluescript_lines, require_complete=True)
-    except Exception:
-        try:
-            client._reset_staged()
-        except Exception:
-            logger.exception("Failed to reset staged state after stage error")
-        raise
 
 
 class RuidaRPAAdapter(Driver):
@@ -164,6 +142,7 @@ class RuidaRPAAdapter(Driver):
         super().__init__(context, machine)
         self._config: Dict[str, Any] = {}
         self._tui_mode: bool = False
+        self._rpc_timeout: float = DEFAULT_RPC_TIMEOUT_S
         self._backend: Optional[_RpaBackend] = None
         self._connection_task: Optional[asyncio.Task] = None
         self._keep_running: bool = False
@@ -200,18 +179,20 @@ class RuidaRPAAdapter(Driver):
 
     async def get_protect(self) -> bool:
         """Return whether protect mode is enabled."""
-        if self._backend is None:
+        backend = self._backend
+        if backend is None:
             return False
-        if isinstance(self._backend, RpaDirectDriver):
-            return self._backend.protect_enabled
-        return False
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, lambda: backend.protect_enabled
+        )
 
     async def set_protect(self, enabled: bool) -> None:
         """Enable or disable protect mode."""
         if self._backend is None:
             return
-        if isinstance(self._backend, RpaDirectDriver):
-            self._backend.set_protect(enabled)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._backend.set_protect, enabled)
 
     # --- Classmethods ---
 
@@ -321,10 +302,16 @@ class RuidaRPAAdapter(Driver):
         if not math.isfinite(timeout) or timeout <= 0:
             raise DriverSetupError("RPC timeout must be positive")
 
+        self._rpc_timeout = timeout
         self._seed_machine_speed_defaults()
 
         if self._tui_mode:
-            self._backend = RpaRpcClient(timeout=timeout)
+            # The RpcRdDriver self-connects in its constructor (opening
+            # its own RPyC TCP connection), so it is constructed per
+            # connection attempt inside _connection_loop rather than
+            # here — constructing it during setup would fail if the
+            # server is down.
+            self._backend = None
             logger.debug(
                 "RPA adapter configured for TUI RPC mode",
                 extra=self._log_extra("TUI_RPC"),
@@ -364,21 +351,22 @@ class RuidaRPAAdapter(Driver):
 
             connected: bool = False
             try:
-                backend = self._backend
-                if backend is None:
-                    raise DriverSetupError("Backend not initialized")
-
                 if self._tui_mode:
-                    client: RpaRpcClient = backend  # type: ignore
-                    rpc_ok = await loop.run_in_executor(None, client.connect)
-                    if not rpc_ok:
-                        raise ConnectionError(
-                            "Failed to establish RPyC connection"
+                    if RpcRdDriver is None:
+                        raise DriverSetupError(
+                            "rpalib is not installed — TUI RPC mode "
+                            "is unavailable"
                         )
+                    # Construct a fresh RpcRdDriver per attempt: its
+                    # constructor self-connects (opens its own RPyC TCP
+                    # connection), so a failed attempt is torn down and
+                    # rebuilt on the next retry.
+                    backend = RpcRdDriver(timeout=self._rpc_timeout)
+                    self._backend = backend
                     udp_host = self._config.get("udp_host")
                     usb_device = self._config.get("usb_device")
                     started = await loop.run_in_executor(
-                        None, client.start, udp_host, usb_device
+                        None, backend.start, udp_host, usb_device
                     )
                     connected = started
                     if connected:
@@ -388,30 +376,33 @@ class RuidaRPAAdapter(Driver):
                         # once per connection.
                         await loop.run_in_executor(
                             None,
-                            client.register_status_listener,
+                            backend.register_status_listener,
                             self._on_rpa_status,
                         )
                         await loop.run_in_executor(
                             None,
-                            client.register_error_listener,
+                            backend.register_error_listener,
                             self._on_rpa_error,
                         )
                         await loop.run_in_executor(
                             None,
-                            client.register_reply_listener,
+                            backend.register_reply_listener,
                             self._on_rpa_reply,
                         )
                         # Neutralize the server driver's default head/tail
-                        # composition: staged jobs are fully self-framed by
-                        # the encoder, and run_job(None) prepends the driver's
+                        # composition: jobs are fully self-framed by the
+                        # encoder, and run_job() prepends the driver's
                         # default head script otherwise.
                         await loop.run_in_executor(
-                            None, client.set_head_script, []
+                            None, backend.set_head_script, []
                         )
                         await loop.run_in_executor(
-                            None, client.set_tail_script, []
+                            None, backend.set_tail_script, []
                         )
                 else:
+                    backend = self._backend
+                    if backend is None:
+                        raise DriverSetupError("Backend not initialized")
                     driver: RpaDirectDriver = backend  # type: ignore
                     udp_host = self._config.get("udp_host")
                     usb_device = self._config.get("usb_device")
@@ -429,6 +420,16 @@ class RuidaRPAAdapter(Driver):
                         driver.register_status_listener(self._on_rpa_status)
                         driver.register_error_listener(self._on_rpa_error)
                         driver.register_reply_listener(self._on_rpa_reply)
+                        # Both modes now run via run_job(), which composes
+                        # head + job + tail; clear the wrapped driver's
+                        # default head/tail so self-framed encoder output
+                        # is not corrupted.
+                        await loop.run_in_executor(
+                            None, driver.gluescript.set_head_script, []
+                        )
+                        await loop.run_in_executor(
+                            None, driver.gluescript.set_tail_script, []
+                        )
 
                 if not connected:
                     raise ConnectionError(
@@ -452,22 +453,23 @@ class RuidaRPAAdapter(Driver):
                     await asyncio.sleep(self.CONNECTION_POLL_INTERVAL)
                     assert backend is not None
                     _backend = backend
-                    if self._tui_mode:
-                        client: RpaRpcClient = _backend  # type: ignore
-                        is_alive = await loop.run_in_executor(
-                            None, client.is_alive
-                        )
-                    else:
-                        driver: RpaDirectDriver = _backend  # type: ignore
-                        is_alive = await loop.run_in_executor(
-                            None, lambda: driver.is_connected
-                        )
+                    # is_connected is a blocking RPC round trip (TUI) or a
+                    # direct property read; evaluate it off the event loop
+                    # thread so a hung-but-alive server cannot freeze the UI.
+                    is_alive = await loop.run_in_executor(
+                        None, lambda: _backend.is_connected
+                    )
                     if not is_alive:
                         logger.warning(
                             "RPA connection lost",
                             extra=log_extra,
                         )
                         self._is_connected = False
+                        # The dead RpcRdDriver is intentionally NOT closed
+                        # here: the reconnect loop reassigns self._backend
+                        # on the next attempt, and CPython refcounting
+                        # collects the old driver via __del__ -> close().
+                        # Do not "fix" this into a double-close.
                         break
 
             except asyncio.CancelledError:
@@ -632,23 +634,16 @@ class RuidaRPAAdapter(Driver):
         )
         try:
             if self._tui_mode:
-                client: RpaRpcClient = self._backend  # type: ignore
-                # is_connected is a blocking RPyC round trip; evaluate
-                # it off the event loop thread like the poll loop does
-                # so a hung-but-alive server cannot freeze the UI.
+                client: RpcRdDriver = self._backend  # type: ignore
+                # stop() and close() are blocking RPyC round trips;
+                # evaluate them off the event loop thread so a
+                # hung-but-alive server cannot freeze the UI. close()
+                # is idempotent and swallows teardown errors, so it must
+                # run even when stop() raised on a dead transport.
                 try:
-                    is_alive = await loop.run_in_executor(
-                        None, lambda: client.is_connected
-                    )
-                    if is_alive:
-                        # Closing the connection is the cleanup: the
-                        # server unregisters this client's callbacks on
-                        # disconnect.
-                        await loop.run_in_executor(None, client.stop)
+                    await loop.run_in_executor(None, client.stop)
                 finally:
-                    # Disconnect must always run, even when stop() raised
-                    # on an already-dead transport.
-                    await loop.run_in_executor(None, client.disconnect)
+                    await loop.run_in_executor(None, client.close)
             else:
                 driver: RpaDirectDriver = self._backend  # type: ignore
                 if driver.is_connected:
@@ -695,41 +690,17 @@ class RuidaRPAAdapter(Driver):
             None, self._backend.run, script_lines, auto_checksum
         )
 
-    async def _run_staged_job(self, encoded: EncodedOutput) -> None:
-        """Run a job by staging its complete GlueScript transcript server-side.
+    def _backend_gluescript(self) -> Any:
+        """Return the live backend GlueScript the encoder authors into.
 
-        TUI RPC mode only: the encoded output carries the complete
-        GlueScript transcript in ``driver_data["rpa_gluescript"]``. The
-        transcript is staged wholesale on the server via
-        ``_stage_gluescript_document``, then the staged rpascript is
-        queued with ``run_staged_job``. A failed stage is torn down so a
-        stale job cannot be run afterwards.
-
-        Args:
-            encoded: The encoder output; must carry
-                ``driver_data["rpa_gluescript"]``.
-
-        Raises:
-            DriverSetupError: If the backend is not initialized or the
-                transcript is missing.
+        Direct mode wraps ``RdDriver`` (a GlueScript) behind
+        ``RpaDirectDriver``; RPC mode's ``RpcRdDriver`` IS a GlueScript.
         """
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
-        if encoded.driver_data.get("rpa_gluescript") is None:
-            raise DriverSetupError(
-                "TUI RPC mode requires the GlueScript transcript "
-                "(rpa_gluescript) — re-encode the job with the ruidarpa "
-                "encoder"
-            )
-        client: RpaRpcClient = self._backend  # type: ignore
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            _stage_gluescript_document,
-            client,
-            encoded.driver_data["rpa_gluescript"],
-        )
-        await loop.run_in_executor(None, client.run_staged_job)
+        if isinstance(self._backend, RpaDirectDriver):
+            return self._backend.gluescript
+        return self._backend
 
     # --- Job control ---
 
@@ -742,9 +713,6 @@ class RuidaRPAAdapter(Driver):
             Callable[[int], Union[None, Awaitable[None]]]
         ] = None,
     ) -> None:
-        text_lines = [
-            line.strip() for line in encoded.text.splitlines() if line.strip()
-        ]
         op_map = encoded.op_map
 
         if on_command_done is not None:
@@ -754,33 +722,39 @@ class RuidaRPAAdapter(Driver):
                 if inspect.isawaitable(result):
                     await result
 
-        logger.info(
-            "Executing %d rpascript commands",
-            len(text_lines),
-            extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
-        )
+        backend = self._backend_gluescript()
+        loop = asyncio.get_running_loop()
 
-        if not text_lines:
+        # Re-encode the ops directly into the live backend GlueScript so
+        # authoring and the boundary flushes reach the controller, then
+        # run the composed job. Authoring/flush are blocking RPCs, so the
+        # encode runs off the event loop thread.
+        encoder = RuidaRPAEncoder(gluescript=backend)
+        try:
+            reencoded = await loop.run_in_executor(
+                None, encoder.encode, ops, self._machine, doc
+            )
+        except Exception:
+            # Tear down the backend so a stale partial job cannot run. If
+            # the teardown itself fails (e.g. dead transport), log it and
+            # preserve the original encode error.
+            try:
+                await loop.run_in_executor(None, backend.new_gluescript)
+            except Exception:
+                logger.exception("Failed to reset backend after encode error")
+            raise
+
+        if not reencoded.text.strip():
             logger.debug(
                 "No rpascript commands to execute",
                 extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
             )
-        elif (
-            self._tui_mode
-            and encoded.driver_data.get("rpa_gluescript") is not None
-        ):
-            # TUI RPC stages the complete GlueScript transcript
-            # server-side; without a transcript the raw text path stays
-            # drop-in with direct mode.
-            await self._run_staged_job(encoded)
         else:
-            if self._tui_mode:
-                logger.debug(
-                    "TUI RPC without rpa_gluescript — falling back to raw "
-                    "rpascript text (drop-in with direct mode)",
-                    extra=self._log_extra("TUI_RPC"),
-                )
-            await self._run_script(text_lines, auto_checksum=True)
+            logger.info(
+                "Executing rpascript job via run_job",
+                extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
+            )
+            await loop.run_in_executor(None, backend.run_job)
 
         self.job_finished.send(self)
 

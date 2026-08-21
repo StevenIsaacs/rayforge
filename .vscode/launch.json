@@ -12,6 +12,7 @@
             "module": "rayforge.app",
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",
+            "justMyCode": false,
             // "args": "${command:pickArgs}",
             "env": {
                 // Customize if needed. This works for Fedora 41.

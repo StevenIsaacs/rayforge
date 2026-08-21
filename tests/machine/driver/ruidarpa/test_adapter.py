@@ -1,12 +1,13 @@
 """
 Adapter tests for the RuidaRPAAdapter.
 
-The adapter wraps either RpaDirectDriver (direct mode) or RpaRpcClient
+The adapter wraps either RpaDirectDriver (direct mode) or RpcRdDriver
 (RPC/TUI mode) as ``_backend``. These tests mock the backend and verify
 the adapter's public surface:
 
-- Stop/cleanup regression: backend stop()/disconnect() must actually run
-- run routing for jobs and runtime commands
+- Stop/cleanup regression: backend stop()/close() must actually run
+- run routing: run() re-encodes ops into the backend GlueScript and
+  runs via run_job()
 - Jog speed tracking: move_to() reuses the last jog() speed (default 600
   before any jog) and a speed-only jog updates the stored speed
 - Live bridge behavior per mode (no double-run in RPC mode)
@@ -14,8 +15,8 @@ the adapter's public surface:
 - set_wcs_offset failing loud while select_wcs still routes to run()
 - mm fix: status positions are not divided by 1000
 - Reconnect listener hygiene (unregister-before-register in direct mode)
-- Connect-time head/tail clearing: TUI RPC clears the server driver's
-  head/tail scripts to [] while direct mode never touches them
+- Connect-time head/tail clearing: both modes clear the wrapped
+  GlueScript's head/tail scripts to []
 - Paren-less backend property reads (``is_connected``)
 
 No real network or Ruida hardware is used; the backends are
@@ -26,12 +27,14 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import replace
-from typing import Callable, ClassVar
+from typing import Callable
 from unittest.mock import Mock, call
 
 import pytest
 import pytest_asyncio
 from raygeo.ops import Ops
+from rpalib.rpyc_client import RpcRdDriver
+from ruidadriver.rd_gluescript import GlueScript
 
 from rayforge.core.doc import Doc
 from rayforge.core.varset import FloatVar
@@ -47,31 +50,17 @@ from rayforge.machine.driver.ruidarpa.rpa_adapter import (
     DEFAULT_MAX_TRAVEL_SPEED_MMPM,
     DEFAULT_RPC_TIMEOUT_S,
     RuidaRPAAdapter,
-    _stage_gluescript_document,
     _unwrap_mm,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
     RpaDirectDriver,
 )
-from rayforge.machine.driver.ruidarpa.rpa_rpc_client import RpaRpcClient
 from rayforge.machine.models.laser import Laser
 from rayforge.machine.transport import TransportStatus
 from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 
 DIRECT_MODE = False
 RPC_MODE = True
-
-
-class _DeadTransportClient(Mock):
-    """RPC client mock whose ``is_connected`` read raises.
-
-    Models an RPyC transport that is already dead: the health probe
-    fails immediately instead of returning a value.
-    """
-
-    @property
-    def is_connected(self):
-        raise RuntimeError("transport dead")
 
 
 async def _wait_until(condition: Callable[[], bool], timeout: float = 2.0):
@@ -105,7 +94,9 @@ async def _run_connect_cycle(adapter: RuidaRPAAdapter, condition):
 
 
 @pytest_asyncio.fixture
-async def adapter_pair(isolated_context, isolated_machine, request):
+async def adapter_pair(
+    isolated_context, isolated_machine, request, monkeypatch
+):
     """Create a RuidaRPAAdapter whose backend is a mock for the mode.
 
     Parametrize with ``indirect=True`` over ``DIRECT_MODE`` (False) and
@@ -121,16 +112,17 @@ async def adapter_pair(isolated_context, isolated_machine, request):
     adapter = RuidaRPAAdapter(isolated_context, machine)
     adapter.setup(udp_host="127.0.0.1", tui=tui_mode)
 
-    backend_cls = RpaRpcClient if tui_mode else RpaDirectDriver
+    backend_cls = RpcRdDriver if tui_mode else RpaDirectDriver
     backend = Mock(spec=backend_cls)
     backend.start.return_value = True
     backend.is_connected = True
     backend.machine_status = {}
     if tui_mode:
-        # The RPC client has no unregister surface; expose tracked mocks
-        # so tests can assert the adapter never calls them.
-        backend.connect.return_value = True
-        backend.is_alive.return_value = True
+        # RpcRdDriver self-connects in its constructor; patch the class
+        # so the connection loop builds our mock instead of a real one.
+        monkeypatch.setattr(rpa_adapter, "RpcRdDriver", lambda **kw: backend)
+        # RpcRdDriver has no unregister surface; expose tracked mocks so
+        # tests can assert the adapter never calls them.
         backend.unregister_status_listener = Mock()
         backend.unregister_error_listener = Mock()
         backend.unregister_reply_listener = Mock()
@@ -151,18 +143,18 @@ class TestClassAttributes:
 
 
 class TestStopBackendRegression:
-    """Stop/disconnect must actually reach the backend (core bug fix)."""
+    """Stop/close must actually reach the backend (core bug fix)."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_stop_rpc_calls_stop_and_disconnect(self, adapter_pair):
-        """RPC stop must call client.stop() and client.disconnect()."""
+    async def test_stop_rpc_calls_stop_and_close(self, adapter_pair):
+        """RPC stop must call client.stop() and client.close()."""
         adapter, client = adapter_pair
         await adapter._stop_backend()
         client.stop.assert_called_once()
-        client.disconnect.assert_called_once()
+        client.close.assert_called_once()
         assert adapter._backend is client
 
     @pytest.mark.asyncio
@@ -204,31 +196,13 @@ class TestStopBackendRegression:
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_stop_rpc_stop_raises_disconnect_still_called(
-        self, adapter_pair
-    ):
-        """A raising stop() must not skip disconnect() (dead transport)."""
+    async def test_stop_rpc_stop_raises_close_still_called(self, adapter_pair):
+        """A raising stop() must not skip close() (dead transport)."""
         adapter, client = adapter_pair
         client.stop.side_effect = RuntimeError("transport dead")
         await adapter._stop_backend()
         client.stop.assert_called_once()
-        client.disconnect.assert_called_once()
-        assert adapter._backend is client
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_stop_rpc_is_connected_raises_disconnect_still_called(
-        self, adapter_pair
-    ):
-        """A raising is_connected read must still reach disconnect()."""
-        adapter, _client = adapter_pair
-        client = _DeadTransportClient(spec=RpaRpcClient)
-        adapter._backend = client
-        await adapter._stop_backend()
-        client.stop.assert_not_called()
-        client.disconnect.assert_called_once()
+        client.close.assert_called_once()
         assert adapter._backend is client
 
     @pytest.mark.asyncio
@@ -280,12 +254,12 @@ class TestStopBackendRegression:
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_cleanup_rpc_stops_and_disconnects(self, adapter_pair):
-        """cleanup() must reach client.stop()/disconnect()."""
+    async def test_cleanup_rpc_stops_and_closes(self, adapter_pair):
+        """cleanup() must reach client.stop()/close()."""
         adapter, client = adapter_pair
         await adapter.cleanup()
         client.stop.assert_called_once()
-        client.disconnect.assert_called_once()
+        client.close.assert_called_once()
         assert adapter._backend is None
 
     @pytest.mark.asyncio
@@ -302,21 +276,6 @@ class TestStopBackendRegression:
 
 class TestIsConnectedGating:
     """Backend ``is_connected`` is read paren-less and gates stop cleanup."""
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_stop_rpc_disconnected_disconnects_without_stop(
-        self, adapter_pair
-    ):
-        """A disconnected client skips stop() but still disconnects()."""
-        adapter, client = adapter_pair
-        client.is_connected = False
-        await adapter._stop_backend()
-        client.stop.assert_not_called()
-        client.disconnect.assert_called_once()
-        assert adapter._backend is client
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -337,7 +296,39 @@ class TestIsConnectedGating:
 
 
 class TestRunRouting:
-    """Jobs and runtime commands route through backend run()."""
+    """run() re-encodes ops into the backend GlueScript, then run_job()."""
+
+    @staticmethod
+    def _gluescript_backend():
+        """A real GlueScript with a mock run_job, usable as a run() backend."""
+        gs = GlueScript()
+        gs.run_job = Mock()
+        gs.new_gluescript = Mock(wraps=gs.new_gluescript)
+        return gs
+
+    @staticmethod
+    def _make_adapter(isolated_context, machine, tui_mode, gs):
+        """Build an adapter whose backend authors into the real GlueScript."""
+        adapter = RuidaRPAAdapter(isolated_context, machine)
+        adapter.setup(udp_host="127.0.0.1", tui=tui_mode)
+        if tui_mode:
+            adapter._backend = gs
+        else:
+            driver = RpaDirectDriver()
+            driver._driver = gs
+            adapter._backend = driver
+        return adapter
+
+    @staticmethod
+    def _job_ops(doc):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.move_to(5.0, 5.0, 0.0)
+        ops.line_to(10.0, 8.0, 0.0)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -354,113 +345,75 @@ class TestRunRouting:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
+        "tui_mode", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
     )
-    async def test_run_direct_mode_routes_text_through_run(self, adapter_pair):
-        """run() in direct mode must route the text through backend.run."""
-        adapter, backend = adapter_pair
-        encoded = EncodedOutput(
-            text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
-            op_map=MachineCodeOpMap(),
-        )
-        await adapter.run(encoded, Doc(), Ops())
-        backend.run.assert_called_once_with(
-            ["HOME_XY", "MOVE_NEAR_XY X=1.000mm Y=1.000mm"], True
-        )
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_run_rpc_stages_document_and_runs_staged_job(
-        self, adapter_pair
+    async def test_run_reencodes_and_runs_job(
+        self, isolated_context, isolated_machine, tui_mode
     ):
-        """run() in RPC mode must stage the full transcript server-side."""
-        adapter, client = adapter_pair
-        gluescript_lines = [
-            "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-            (
-                "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
-                "100.0, 20.0, 50.0, 50.0)"
-            ),
-            "move_xy_to(5.0, 5.0)",
-            "end_job()",
-        ]
-        encoded = EncodedOutput(
-            text="REF_POINT_SET\nMOVE_NEAR_XY X=5.000mm Y=5.000mm",
-            op_map=MachineCodeOpMap(),
-            driver_data={"rpa_gluescript": gluescript_lines},
-        )
-        await adapter.run(encoded, Doc(), Ops())
-        client.root.exposed_new_gluescript.assert_called_once_with()
-        client.root.exposed_stage_gluescript.assert_called_once_with(
-            gluescript_lines, require_complete=True
-        )
-        client.root.exposed_stage_gluescript_delta.assert_not_called()
-        client.run_staged_job.assert_called_once_with()
-        client.run.assert_not_called()
+        """run() must re-encode ops into the backend GlueScript and run it."""
+        machine = isolated_machine
+        gs = self._gluescript_backend()
+        adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
+        doc = Doc()
+        ops = self._job_ops(doc)
+        encoded = EncodedOutput(text="dummy", op_map=MachineCodeOpMap())
+
+        await adapter.run(encoded, doc, ops)
+
+        gs.run_job.assert_called_once_with()
+        # The encoder authored into the backend GlueScript.
+        assert any(line.startswith("declare_job(") for line in gs.gluescript)
+
+        await adapter.cleanup()
+        await machine.shutdown()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+        "tui_mode", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
     )
-    async def test_run_rpc_without_plan_falls_back_to_text(self, adapter_pair):
-        """run() in RPC mode without a plan must ship text via backend.run
-        (drop-in compatibility with the direct driver)."""
-        adapter, client = adapter_pair
-        encoded = EncodedOutput(
-            text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
-            op_map=MachineCodeOpMap(),
-        )
-        await adapter.run(encoded, Doc(), Ops())
-        client.run.assert_called_once_with(
-            ["HOME_XY", "MOVE_NEAR_XY X=1.000mm Y=1.000mm"], True
-        )
-        client.run_staged_job.assert_not_called()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair",
-        [DIRECT_MODE, RPC_MODE],
-        ids=["direct", "rpc"],
-        indirect=True,
-    )
-    async def test_run_with_empty_text_skips_backend(self, adapter_pair):
-        """Empty output must skip backend dispatch but still signal
-        job_finished."""
-        adapter, backend = adapter_pair
+    async def test_run_empty_ops_skips_run_job(
+        self, isolated_context, isolated_machine, tui_mode
+    ):
+        """run() with empty ops must not run a stale prior job."""
+        machine = isolated_machine
+        gs = self._gluescript_backend()
+        adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
+        doc = Doc()
         encoded = EncodedOutput(text="", op_map=MachineCodeOpMap())
-        fired = []
 
-        def _record_finished(sender):
-            fired.append(sender)
+        await adapter.run(encoded, doc, Ops())
 
-        adapter.job_finished.connect(_record_finished)
-        await adapter.run(encoded, Doc(), Ops())
-        assert fired == [adapter]
-        backend.run.assert_not_called()
-        run_staged_job = getattr(backend, "run_staged_job", None)
-        if run_staged_job is not None:
-            run_staged_job.assert_not_called()
+        gs.run_job.assert_not_called()
+
+        await adapter.cleanup()
+        await machine.shutdown()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
+        "tui_mode", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
     )
-    async def test_run_rpc_empty_gluescript_is_present_routes_to_staged(
-        self, adapter_pair
+    async def test_run_failed_encode_calls_new_gluescript_then_raises(
+        self, isolated_context, isolated_machine, tui_mode
     ):
-        """run() in RPC mode must treat an empty list transcript as present
-        and route to staged, never to raw text."""
-        adapter, client = adapter_pair
-        encoded = EncodedOutput(
-            text="HOME_XY\nMOVE_NEAR_XY X=1.000mm Y=1.000mm",
-            op_map=MachineCodeOpMap(),
-            driver_data={"rpa_gluescript": []},
-        )
-        await adapter.run(encoded, Doc(), Ops())
-        client.run_staged_job.assert_called_once_with()
-        client.run.assert_not_called()
+        """A failed encode must tear down the backend then re-raise."""
+        machine = isolated_machine
+        gs = self._gluescript_backend()
+        gs.stage_gluescript = Mock(side_effect=RuntimeError("stage failed"))
+        adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
+        doc = Doc()
+        ops = self._job_ops(doc)
+        encoded = EncodedOutput(text="dummy", op_map=MachineCodeOpMap())
+
+        with pytest.raises(RuntimeError, match="stage"):
+            await adapter.run(encoded, doc, ops)
+
+        # new_gluescript is called by the encode itself (at start and via
+        # declare_job) plus the teardown; the teardown must add at least one
+        # call beyond the encode's own resets.
+        assert gs.new_gluescript.call_count >= 2
+
+        await adapter.cleanup()
+        await machine.shutdown()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -603,126 +556,6 @@ class TestRunRouting:
             await adapter.select_wcs(wcs)
         assert adapter._selected_wcs == "MACHINE"
         backend.run.assert_not_called()
-
-
-class TestRunStagedJob:
-    """The TUI RPC staged pipeline stages the full transcript server-side."""
-
-    GLUESCRIPT_LINES: ClassVar[list[str]] = [
-        "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-        (
-            "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
-            "100.0, 20.0, 50.0, 50.0)"
-        ),
-        "move_xy_to(5.0, 5.0)",
-        "end_job()",
-    ]
-
-    def _encoded(self, gluescript_lines=GLUESCRIPT_LINES):
-        return EncodedOutput(
-            text="dummy",
-            op_map=MachineCodeOpMap(),
-            driver_data={"rpa_gluescript": gluescript_lines},
-        )
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_run_staged_job_stages_then_runs(self, adapter_pair):
-        """_run_staged_job must stage the transcript and run the staged job."""
-        adapter, client = adapter_pair
-        await adapter._run_staged_job(self._encoded())
-        client.root.exposed_new_gluescript.assert_called_once_with()
-        client.root.exposed_stage_gluescript.assert_called_once_with(
-            self.GLUESCRIPT_LINES, require_complete=True
-        )
-        client.root.exposed_stage_gluescript_delta.assert_not_called()
-        client.run_staged_job.assert_called_once_with()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_run_staged_job_missing_gluescript_raises(
-        self, adapter_pair
-    ):
-        """A transcript-less encoded output must fail fast in RPC mode."""
-        adapter, client = adapter_pair
-        with pytest.raises(DriverSetupError, match="rpa_gluescript"):
-            await adapter._run_staged_job(self._encoded(gluescript_lines=None))
-        client.root.exposed_new_gluescript.assert_not_called()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_run_staged_job_raises_when_not_initialized(
-        self, adapter_pair
-    ):
-        """A missing backend must fail fast."""
-        adapter, _client = adapter_pair
-        adapter._backend = None
-        with pytest.raises(DriverSetupError, match="Backend"):
-            await adapter._run_staged_job(self._encoded())
-
-
-class TestStageGluescriptDocument:
-    """_stage_gluescript_document stages the full transcript via RPC."""
-
-    GLUESCRIPT_LINES: ClassVar[list[str]] = [
-        "declare_job('Job', 'MACHINE', None, 1, 1, 0.0, 0.0)",
-        (
-            "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
-            "100.0, 20.0, 50.0, 50.0)"
-        ),
-        "move_xy_to(5.0, 5.0)",
-        "end_job()",
-    ]
-
-    def test_resets_before_staging(self):
-        """The pipeline starts from a clean server-side gluescript."""
-        client = Mock(spec=RpaRpcClient)
-        _stage_gluescript_document(client, [])
-        client.root.exposed_new_gluescript.assert_called_once_with()
-        client.root.exposed_stage_gluescript.assert_called_once_with(
-            [], require_complete=True
-        )
-        # The server-side gluescript cursor tracks the live machine
-        # position, so staging must not clobber it with a zero reset.
-        client.root.exposed_update_position.assert_not_called()
-
-    def test_stages_full_document_in_order(self):
-        """new_gluescript then stage_gluescript(lines, complete)."""
-        client = Mock(spec=RpaRpcClient)
-        _stage_gluescript_document(client, self.GLUESCRIPT_LINES)
-        client.root.exposed_new_gluescript.assert_called_once_with()
-        client.root.exposed_stage_gluescript.assert_called_once_with(
-            self.GLUESCRIPT_LINES, require_complete=True
-        )
-        client.root.exposed_stage_gluescript_delta.assert_not_called()
-        client.root.exposed_add_layer_action.assert_not_called()
-
-    def test_failed_stage_resets_staged_state(self):
-        """A rejected stage must tear down so no stale job can run."""
-        client = Mock(spec=RpaRpcClient)
-        client.root.exposed_stage_gluescript.side_effect = RuntimeError(
-            "Re-staged gluescript is missing end_job()"
-        )
-        with pytest.raises(RuntimeError, match="end_job"):
-            _stage_gluescript_document(client, self.GLUESCRIPT_LINES)
-        client._reset_staged.assert_called_once_with()
-
-    def test_failed_reset_logs_and_re_raises(self):
-        """A failing reset must not mask the original stage error."""
-        client = Mock(spec=RpaRpcClient)
-        client.root.exposed_stage_gluescript.side_effect = RuntimeError(
-            "stage failed"
-        )
-        client._reset_staged.side_effect = RuntimeError("reset failed")
-        with pytest.raises(RuntimeError, match="stage failed"):
-            _stage_gluescript_document(client, self.GLUESCRIPT_LINES)
-        client._reset_staged.assert_called_once_with()
 
 
 class TestWcsHandling:
@@ -1472,68 +1305,36 @@ class TestConnectClearsServerHeadTail:
     @pytest.mark.parametrize(
         "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
     )
-    async def test_direct_connect_never_clears_head_tail(self, adapter_pair):
-        """Direct mode has no head/tail surface and must not clear it."""
+    async def test_direct_connect_clears_wrapped_head_tail(self, adapter_pair):
+        """Direct connect must clear the wrapped driver's head/tail scripts."""
         adapter, backend = adapter_pair
         await _run_connect_cycle(adapter, lambda: adapter._is_connected)
-        assert not hasattr(backend, "set_head_script")
-        assert not hasattr(backend, "set_tail_script")
+        backend.gluescript.set_head_script.assert_any_call([])
+        backend.gluescript.set_tail_script.assert_any_call([])
 
 
 class TestHealthPoll:
-    """Poll health per mode: RPC probes is_alive, direct reads is_connected."""
+    """Poll health per mode: both modes read backend ``is_connected``."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
-    async def test_rpc_controller_down_keeps_rpc_alive(
+    async def test_rpc_controller_down_reconnects(
         self, adapter_pair, monkeypatch
     ):
-        """A controller going quiet must not tear down the RPC transport."""
+        """A controller going quiet must tear down and reconnect RPC."""
         adapter, backend = adapter_pair
         backend.is_connected = False
-        backend.is_alive.return_value = True
-        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
-
-        adapter._keep_running = True
-        await adapter._connect_implementation()
-        try:
-            await _wait_until(lambda: adapter._is_connected)
-            adapter._on_rpa_status("DISCONNECTED")
-            await _wait_until(lambda: not adapter._is_connected)
-            await asyncio.sleep(0.05)
-            assert backend.connect.call_count == 1
-            adapter._on_rpa_status("CONNECTED")
-            await _wait_until(lambda: adapter._is_connected)
-            assert backend.connect.call_count == 1
-        finally:
-            adapter._keep_running = False
-            task = adapter._connection_task
-            if task is not None:
-                task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
-    )
-    async def test_rpc_transport_dead_reconnects(
-        self, adapter_pair, monkeypatch
-    ):
-        """A failed is_alive probe must tear down and reconnect RPC."""
-        adapter, backend = adapter_pair
-        backend.is_alive.return_value = False
         monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
         monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
 
         adapter._keep_running = True
         await adapter._connect_implementation()
         try:
-            await _wait_until(lambda: backend.connect.call_count >= 2)
+            await _wait_until(lambda: backend.start.call_count >= 2)
             await _wait_until(lambda: not adapter._is_connected)
-            backend.disconnect.assert_not_called()
+            backend.close.assert_not_called()
             backend.stop.assert_not_called()
         finally:
             adapter._keep_running = False
@@ -1591,33 +1392,32 @@ class TestRpcTimeoutSetup:
         assert timeout_var.visible_when({"tui": False}) is False
 
     @pytest.mark.asyncio
-    async def test_setup_passes_timeout_to_rpc_client(
-        self, isolated_context, isolated_machine, monkeypatch
+    async def test_setup_tui_stores_timeout_without_constructing_backend(
+        self, isolated_context, isolated_machine
     ):
-        """setup(tui=True, timeout=42.0) must construct the client with it."""
+        """setup(tui=True, timeout=42.0) must store the timeout and leave the
+        backend unconstructed (RpcRdDriver self-connects per attempt)."""
         adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
-        mock_client_cls = Mock()
-        monkeypatch.setattr(rpa_adapter, "RpaRpcClient", mock_client_cls)
 
         adapter.setup(tui=True, timeout=42.0)
 
-        mock_client_cls.assert_called_once_with(timeout=42.0)
+        assert adapter._rpc_timeout == 42.0
+        assert adapter._backend is None
 
         await adapter.cleanup()
         await isolated_machine.shutdown()
 
     @pytest.mark.asyncio
-    async def test_setup_omits_timeout_uses_driver_default(
-        self, isolated_context, isolated_machine, monkeypatch
+    async def test_setup_tui_omits_timeout_uses_driver_default(
+        self, isolated_context, isolated_machine
     ):
         """setup(tui=True) without timeout must use DEFAULT_RPC_TIMEOUT_S."""
         adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
-        mock_client_cls = Mock()
-        monkeypatch.setattr(rpa_adapter, "RpaRpcClient", mock_client_cls)
 
         adapter.setup(tui=True)
 
-        mock_client_cls.assert_called_once_with(timeout=DEFAULT_RPC_TIMEOUT_S)
+        assert adapter._rpc_timeout == DEFAULT_RPC_TIMEOUT_S
+        assert adapter._backend is None
 
         await adapter.cleanup()
         await isolated_machine.shutdown()

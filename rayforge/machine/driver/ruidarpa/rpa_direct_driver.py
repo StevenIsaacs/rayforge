@@ -104,6 +104,27 @@ class RpaDirectDriver:
 
     # --- Encoder integration ---
 
+    @property
+    def gluescript(self) -> RdDriver:
+        """The wrapped RdDriver, created on first use.
+
+        The encoder authors ops directly into this GlueScript so a live
+        job can be re-encoded into the connected driver and run via
+        ``run_job()``.
+        """
+        return self._ensure_driver()
+
+    def run_job(
+        self, job: Optional[list[str]] = None, auto_checksum: bool = False
+    ) -> None:
+        """Run a job, composing head + job + tail on the connected driver.
+
+        Args:
+            job: Rpascript job lines; None runs the staged/current job.
+            auto_checksum: Whether to auto-calculate checksums.
+        """
+        self._require_connected().run_job(job, auto_checksum=auto_checksum)
+
     @staticmethod
     def create_encoder() -> "RuidaRPAEncoder":
         """Create an RPA encoder for converting Ops to rpascript."""

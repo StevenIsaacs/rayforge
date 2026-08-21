@@ -72,7 +72,15 @@ class RuidaRPAEncoder(OpsEncoder):
     by GlueScript from the actual cut extents.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, gluescript: Any = None) -> None:
+        """Create an encoder, optionally bound to an injected GlueScript.
+
+        When ``gluescript`` is provided (a live backend GlueScript such as
+        the wrapped RdDriver or an RpcRdDriver), the encoder authors ops
+        directly into it instead of creating its own ``GlueScript()``.
+        The injected instance survives ``_reset_state()`` across encodes.
+        """
+        self._injected_gluescript = gluescript
         self._reset_state()
 
     def _reset_state(self) -> None:
@@ -82,7 +90,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self.doc: Optional["Doc"] = None
         self.machine: Optional["Machine"] = None
         self.op_map: Optional[MachineCodeOpMap] = None
-        self._gluescript: Any = None
+        self._gluescript: Any = self._injected_gluescript
         self._layer_index_by_uid: Dict[str, int] = {}
         self._layer_key: int = 0
         self._layer: int = 0
@@ -137,8 +145,13 @@ class RuidaRPAEncoder(OpsEncoder):
         self._layer_index_by_uid = {
             layer.uid: i for i, layer in enumerate(doc.layers)
         }
-        gluescript_type: Any = GlueScript
-        self._gluescript = gluescript_type()
+        if self._gluescript is None:
+            gluescript_type: Any = GlueScript
+            self._gluescript = gluescript_type()
+        else:
+            # Injected backend: reset it for a fresh job so a prior
+            # encode's transcript does not leak into this one.
+            self._gluescript.new_gluescript()
 
         for i in range(ops.len()):
             self._snapshot_sections()
