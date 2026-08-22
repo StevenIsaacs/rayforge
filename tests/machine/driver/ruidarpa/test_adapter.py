@@ -27,8 +27,9 @@ import asyncio
 import contextlib
 import logging
 from dataclasses import replace
+from itertools import chain, repeat
 from typing import Callable
-from unittest.mock import Mock, call
+from unittest.mock import Mock, PropertyMock, call
 
 import pytest
 import pytest_asyncio
@@ -1326,17 +1327,21 @@ class TestHealthPoll:
     async def test_rpc_controller_down_reconnects(
         self, adapter_pair, monkeypatch
     ):
-        """A controller going quiet must tear down and reconnect RPC."""
+        """A controller going quiet must poll quietly, never recreate."""
         adapter, backend = adapter_pair
-        backend.is_connected = False
+        is_connected_mock = PropertyMock(return_value=False)
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
         monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
         monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
 
         adapter._keep_running = True
         await adapter._connect_implementation()
         try:
-            await _wait_until(lambda: backend.start.call_count >= 2)
-            await _wait_until(lambda: not adapter._is_connected)
+            await _wait_until(lambda: is_connected_mock.call_count >= 2)
+            assert backend.start.call_count == 1
+            assert adapter._backend is backend
             backend.close.assert_not_called()
             backend.stop.assert_not_called()
         finally:
@@ -1354,18 +1359,68 @@ class TestHealthPoll:
     async def test_direct_controller_down_reconnects(
         self, adapter_pair, monkeypatch
     ):
-        """A direct-mode controller going down must keep reconnecting."""
+        """A direct-mode controller going down must poll quietly."""
         adapter, backend = adapter_pair
-        backend.is_connected = False
+        is_connected_mock = PropertyMock(return_value=False)
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
         monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
         monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
 
         adapter._keep_running = True
         await adapter._connect_implementation()
         try:
-            await _wait_until(lambda: backend.start.call_count >= 2)
-            assert backend.start.call_count >= 2
+            await _wait_until(lambda: is_connected_mock.call_count >= 2)
+            assert backend.start.call_count == 1
             assert adapter._backend is backend
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair", [DIRECT_MODE], ids=["direct"], indirect=True
+    )
+    async def test_direct_exception_reuses_backend(
+        self, adapter_pair, monkeypatch, caplog
+    ):
+        """A direct-mode transport exception must warn once and reuse the
+        backend (never recreate)."""
+        adapter, backend = adapter_pair
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        # The same backend raises twice: on the first poll read and again
+        # after the second start(). The _stop_backend() reads in between
+        # (direct mode checks driver.is_connected to decide whether to
+        # unregister listeners) must return False quietly.
+        is_connected_mock = PropertyMock(
+            side_effect=chain(
+                [RuntimeError("transport dead")],
+                [False],
+                [False],
+                [RuntimeError("transport dead")],
+                repeat(False),
+            )
+        )
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
+
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: backend.start.call_count >= 3)
+            assert adapter._backend is backend
+            assert caplog.text.count("RPA reconnect attempt failed") == 1
         finally:
             adapter._keep_running = False
             task = adapter._connection_task
@@ -1382,12 +1437,15 @@ class TestRpcSingleInstanceReuse:
     async def test_rpc_reuses_single_instance_across_retries(
         self, isolated_context, isolated_machine, monkeypatch
     ):
-        """Machine-off retries must reuse one backend, never recreate it."""
+        """Machine-off polling must reuse one backend, never recreate it."""
         adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
         adapter.setup(udp_host="127.0.0.1", tui=True)
         backend = Mock(spec=RpcRdDriver)
         backend.start.return_value = True
-        backend.is_connected = False  # machine off
+        is_connected_mock = PropertyMock(return_value=False)
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
         constructor = Mock(return_value=backend)
         monkeypatch.setattr(rpa_adapter, "RpcRdDriver", constructor)
         monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
@@ -1396,8 +1454,9 @@ class TestRpcSingleInstanceReuse:
         adapter._keep_running = True
         await adapter._connect_implementation()
         try:
-            await _wait_until(lambda: backend.start.call_count >= 2)
+            await _wait_until(lambda: is_connected_mock.call_count >= 3)
             assert constructor.call_count == 1
+            assert backend.start.call_count == 1
             assert adapter._backend is backend
         finally:
             adapter._keep_running = False
@@ -1413,12 +1472,15 @@ class TestRpcSingleInstanceReuse:
     async def test_rpc_registers_listeners_once(
         self, isolated_context, isolated_machine, monkeypatch
     ):
-        """Listeners must register once across machine-off retries."""
+        """Listeners must register once across machine-off polling."""
         adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
         adapter.setup(udp_host="127.0.0.1", tui=True)
         backend = Mock(spec=RpcRdDriver)
         backend.start.return_value = True
-        backend.is_connected = False  # machine off
+        is_connected_mock = PropertyMock(return_value=False)
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
         constructor = Mock(return_value=backend)
         monkeypatch.setattr(rpa_adapter, "RpcRdDriver", constructor)
         monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
@@ -1427,7 +1489,7 @@ class TestRpcSingleInstanceReuse:
         adapter._keep_running = True
         await adapter._connect_implementation()
         try:
-            await _wait_until(lambda: backend.start.call_count >= 2)
+            await _wait_until(lambda: is_connected_mock.call_count >= 3)
             assert backend.register_status_listener.call_count == 1
             assert backend.register_error_listener.call_count == 1
             assert backend.register_reply_listener.call_count == 1
@@ -1454,7 +1516,28 @@ class TestRpcSingleInstanceReuse:
         def make_backend(**kwargs):
             b = Mock(spec=RpcRdDriver)
             b.start.return_value = True
-            b.is_connected = False
+            if not backends:
+                # First backend: machine off, then the server dies — the
+                # poll read raises, forcing a recreate.
+                monkeypatch.setattr(
+                    type(b),
+                    "is_connected",
+                    PropertyMock(
+                        side_effect=chain(
+                            [False, False, RuntimeError("server down")],
+                            repeat(False),
+                        )
+                    ),
+                    raising=False,
+                )
+            else:
+                # Subsequent backends: machine off, poll quietly.
+                monkeypatch.setattr(
+                    type(b),
+                    "is_connected",
+                    PropertyMock(return_value=False),
+                    raising=False,
+                )
             backends.append(b)
             return b
 
@@ -1466,13 +1549,263 @@ class TestRpcSingleInstanceReuse:
         adapter._keep_running = True
         await adapter._connect_implementation()
         try:
-            await _wait_until(
-                lambda: len(backends) > 0 and backends[0].start.call_count >= 2
-            )
-            first = backends[0]
-            first.start.side_effect = RuntimeError("transport dead")
             await _wait_until(lambda: constructor.call_count >= 2)
             assert constructor.call_count == 2
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+
+class TestRpcEmitOnceLogging:
+    """Connection-state log messages fire only on state transitions."""
+
+    @staticmethod
+    def _make_adapter(
+        isolated_context, isolated_machine, monkeypatch, factory
+    ):
+        """Build a TUI adapter whose backend comes from ``factory``."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        adapter.setup(udp_host="127.0.0.1", tui=True)
+        constructor = Mock(side_effect=factory)
+        monkeypatch.setattr(rpa_adapter, "RpcRdDriver", constructor)
+        monkeypatch.setattr(RuidaRPAAdapter, "CONNECTION_POLL_INTERVAL", 0.01)
+        monkeypatch.setattr(RuidaRPAAdapter, "RECONNECT_BASE_DELAY", 0.01)
+        return adapter, constructor
+
+    @pytest.mark.asyncio
+    async def test_rpc_machine_off_is_quiet(
+        self, isolated_context, isolated_machine, monkeypatch, caplog
+    ):
+        """Machine off must poll quietly with no connect/lost messages."""
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        is_connected_mock = PropertyMock(return_value=False)
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
+        adapter, _constructor = self._make_adapter(
+            isolated_context,
+            isolated_machine,
+            monkeypatch,
+            lambda **kw: backend,
+        )
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: is_connected_mock.call_count >= 3)
+            assert "Connected to Ruida controller via RPA" not in caplog.text
+            assert "RPA connection lost" not in caplog.text
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_connected_logged_once(
+        self, isolated_context, isolated_machine, monkeypatch, caplog
+    ):
+        """'Connected' must log once on the first is_connected True."""
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        is_connected_mock = PropertyMock(
+            side_effect=chain([False, False, True], repeat(True))
+        )
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
+        adapter, _constructor = self._make_adapter(
+            isolated_context,
+            isolated_machine,
+            monkeypatch,
+            lambda **kw: backend,
+        )
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(
+                lambda: "Connected to Ruida controller via RPA" in caplog.text
+            )
+            # Let several more polls run so the count assertion cannot race
+            # the next poll interval.
+            await _wait_until(lambda: is_connected_mock.call_count >= 5)
+            assert (
+                caplog.text.count("Connected to Ruida controller via RPA") == 1
+            )
+            assert adapter._is_connected is True
+            assert backend.start.call_count == 1
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_connection_lost_logged_once(
+        self, isolated_context, isolated_machine, monkeypatch, caplog
+    ):
+        """'RPA connection lost' must log once on the True->False edge."""
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        is_connected_mock = PropertyMock(
+            side_effect=chain([True, True, False], repeat(False))
+        )
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
+        adapter, _constructor = self._make_adapter(
+            isolated_context,
+            isolated_machine,
+            monkeypatch,
+            lambda **kw: backend,
+        )
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: "RPA connection lost" in caplog.text)
+            # Let several more polls run so the count assertion cannot race
+            # the next poll interval.
+            await _wait_until(lambda: is_connected_mock.call_count >= 5)
+            assert caplog.text.count("RPA connection lost") == 1
+            assert adapter._is_connected is False
+            assert adapter.state.status == DeviceStatus.UNKNOWN
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_server_down_warned_once(
+        self, isolated_context, isolated_machine, monkeypatch, caplog
+    ):
+        """A down server must warn 'unreachable' once, not per attempt."""
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        backends = []
+
+        def make_backend(**kwargs):
+            b = Mock(spec=RpcRdDriver)
+            b.start.return_value = True
+            if len(backends) < 2:
+                # First two backends: server still down — the poll read
+                # raises on each, forcing a recreate.
+                monkeypatch.setattr(
+                    type(b),
+                    "is_connected",
+                    PropertyMock(side_effect=RuntimeError("server down")),
+                    raising=False,
+                )
+            else:
+                # Third backend: server reachable, machine off.
+                monkeypatch.setattr(
+                    type(b),
+                    "is_connected",
+                    PropertyMock(return_value=False),
+                    raising=False,
+                )
+            backends.append(b)
+            return b
+
+        adapter, constructor = self._make_adapter(
+            isolated_context, isolated_machine, monkeypatch, make_backend
+        )
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: constructor.call_count >= 3)
+            assert caplog.text.count("RPA server unreachable") == 1
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_server_reachable_logged_once_on_recovery(
+        self, isolated_context, isolated_machine, monkeypatch, caplog
+    ):
+        """'RPA server reachable' fires once when the machine connects after
+        an unreachable episode."""
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        backends = []
+
+        def make_backend(**kwargs):
+            b = Mock(spec=RpcRdDriver)
+            b.start.return_value = True
+            if not backends:
+                # First backend: server down — the poll read raises.
+                monkeypatch.setattr(
+                    type(b),
+                    "is_connected",
+                    PropertyMock(side_effect=RuntimeError("server down")),
+                    raising=False,
+                )
+            else:
+                # Second backend: server back, machine off then on.
+                monkeypatch.setattr(
+                    type(b),
+                    "is_connected",
+                    PropertyMock(
+                        side_effect=chain([False, True], repeat(True))
+                    ),
+                    raising=False,
+                )
+            backends.append(b)
+            return b
+
+        adapter, _constructor = self._make_adapter(
+            isolated_context,
+            isolated_machine,
+            monkeypatch,
+            make_backend,
+        )
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        try:
+            await _wait_until(lambda: "RPA server reachable" in caplog.text)
+            assert caplog.text.count("RPA server reachable") == 1
+            assert caplog.text.count("RPA server unreachable") == 1
+            assert adapter._is_connected is True
         finally:
             adapter._keep_running = False
             task = adapter._connection_task

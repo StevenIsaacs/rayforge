@@ -145,6 +145,7 @@ class RuidaRPAAdapter(Driver):
         self._rpc_timeout: float = DEFAULT_RPC_TIMEOUT_S
         self._backend: Optional[_RpaBackend] = None
         self._listeners_registered: bool = False
+        self._unreachable_warned: bool = False
         self._connection_task: Optional[asyncio.Task] = None
         self._keep_running: bool = False
         self._is_connected: bool = False
@@ -305,6 +306,7 @@ class RuidaRPAAdapter(Driver):
 
         self._rpc_timeout = timeout
         self._listeners_registered = False
+        self._unreachable_warned = False
         self._seed_machine_speed_defaults()
 
         if self._tui_mode:
@@ -438,19 +440,11 @@ class RuidaRPAAdapter(Driver):
                         "Failed to connect to Ruida controller"
                     )
 
-                # --- Connected successfully ---
+                # start() succeeded (transport bound); the connection is
+                # confirmed by the poll loop via is_connected.
                 delay = self.RECONNECT_BASE_DELAY
 
-                self._is_connected = True
-                self.state.status = DeviceStatus.IDLE
-                self.state_changed.send(self, state=self.state)
-
-                logger.info(
-                    "Connected to Ruida controller via RPA",
-                    extra=log_extra,
-                )
-
-                # Poll connection health
+                prev_alive = False
                 while self._keep_running:
                     await asyncio.sleep(self.CONNECTION_POLL_INTERVAL)
                     assert backend is not None
@@ -461,35 +455,68 @@ class RuidaRPAAdapter(Driver):
                     is_alive = await loop.run_in_executor(
                         None, lambda: _backend.is_connected
                     )
-                    if not is_alive:
+                    if is_alive and not prev_alive:
+                        # False -> True edge: the machine came online (or was
+                        # already on when polling started). If we were in an
+                        # unreachable episode, the server is reachable again.
+                        if self._unreachable_warned:
+                            if self._tui_mode:
+                                logger.info(
+                                    "RPA server reachable",
+                                    extra=log_extra,
+                                )
+                            self._unreachable_warned = False
+                        self._is_connected = True
+                        self.state.status = DeviceStatus.IDLE
+                        self.state_changed.send(self, state=self.state)
+                        logger.info(
+                            "Connected to Ruida controller via RPA",
+                            extra=log_extra,
+                        )
+                    elif not is_alive and prev_alive:
+                        # True -> False edge: the connection was lost.
+                        self._is_connected = False
+                        self.state.status = DeviceStatus.UNKNOWN
+                        self.state_changed.send(self, state=self.state)
                         logger.warning(
                             "RPA connection lost",
                             extra=log_extra,
                         )
-                        self._is_connected = False
-                        # The backend is intentionally NOT closed here
-                        # because it is reused on the next reconnect
-                        # attempt (single-instance design); closing it
-                        # would force a fresh RPyC connection and
-                        # re-registration.
-                        break
+                    prev_alive = is_alive
 
             except asyncio.CancelledError:
                 logger.debug("Connection loop cancelled", extra=log_extra)
                 self._is_connected = False
                 break
             except Exception as e:
-                logger.warning(
-                    "RPA reconnect attempt failed: %s",
-                    e,
-                    extra=log_extra,
-                )
+                if not self._unreachable_warned:
+                    self._unreachable_warned = True
+                    if self._tui_mode:
+                        if isinstance(e, ConnectionError):
+                            logger.warning(
+                                "RPA connection attempt failed: %s",
+                                e,
+                                extra=log_extra,
+                            )
+                        else:
+                            logger.warning(
+                                "RPA server unreachable: %s",
+                                e,
+                                extra=log_extra,
+                            )
+                    else:
+                        logger.warning(
+                            "RPA reconnect attempt failed: %s",
+                            e,
+                            extra=log_extra,
+                        )
                 self.connection_status_changed.send(
-                    self,
-                    status=TransportStatus.ERROR,
-                    message=str(e),
+                    self, status=TransportStatus.ERROR, message=str(e)
                 )
                 self._is_connected = False
+                if self.state.status != DeviceStatus.UNKNOWN:
+                    self.state.status = DeviceStatus.UNKNOWN
+                    self.state_changed.send(self, state=self.state)
                 await self._stop_backend()
                 if self._tui_mode:
                     self._backend = None
@@ -539,14 +566,7 @@ class RuidaRPAAdapter(Driver):
                 self.connection_status_changed.send(
                     self, status=TransportStatus.CONNECTED, message=""
                 )
-                logger.info(
-                    "RPA connected via %s",
-                    "RPC" if self._tui_mode else "direct",
-                    extra=self._log_extra(
-                        "TUI_RPC" if self._tui_mode else "RPA"
-                    ),
-                )
-            elif event == "DISCONNECTED":
+            elif event in ("DISCONNECTED", "TERMINATED"):
                 self._is_connected = False
                 self.state.status = DeviceStatus.UNKNOWN
                 self.state_changed.send(self, state=self.state)
@@ -558,13 +578,6 @@ class RuidaRPAAdapter(Driver):
                     extra=self._log_extra(
                         "TUI_RPC" if self._tui_mode else "RPA"
                     ),
-                )
-            elif event == "TERMINATED":
-                self._is_connected = False
-                self.state.status = DeviceStatus.UNKNOWN
-                self.state_changed.send(self, state=self.state)
-                self.connection_status_changed.send(
-                    self, status=TransportStatus.DISCONNECTED, message=""
                 )
         elif isinstance(event, dict):
             # StatusDict or RPyC netref — convert to local dict for reliable
@@ -1008,6 +1021,7 @@ class RuidaRPAAdapter(Driver):
         await self._stop_backend()
         self._backend = None
         self._listeners_registered = False
+        self._unreachable_warned = False
 
         self.connection_status_changed.send(
             self, status=TransportStatus.DISCONNECTED, message=""
