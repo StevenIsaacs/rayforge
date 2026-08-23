@@ -1,13 +1,15 @@
-"""Regenerate the ruidarpa staged-job golden fixture.
+"""Regenerate the ruidarpa golden fixture.
 
 Run from the repo root inside the ruidarpa pixi environment:
 
     pixi run -e ruidarpa python \\
         tests/machine/driver/ruidarpa/golden/regen_golden.py
 
-The fixture locks the encoder's staged rpascript byte-for-byte. Regenerate
-it only when the encoder or upstream GlueScript staging legitimately
-changes the output; the golden tests then confirm the new bytes.
+The fixture locks the encoder's GlueScript transcript byte-for-byte
+(the ``staged_job.rpas`` filename is a historical misnomer — the fixture
+is the transcript, not the staged rpascript). Regenerate it only when
+the encoder or upstream GlueScript legitimately changes the transcript;
+the golden tests then confirm the new bytes.
 """
 
 import sys

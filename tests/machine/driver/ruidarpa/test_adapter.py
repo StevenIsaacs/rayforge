@@ -57,6 +57,7 @@ from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
     RpaDirectDriver,
 )
 from rayforge.machine.models.laser import Laser
+from rayforge.machine.models.machine import Origin
 from rayforge.machine.transport import TransportStatus
 from rayforge.pipeline.encoder.base import EncodedOutput, MachineCodeOpMap
 
@@ -297,14 +298,21 @@ class TestIsConnectedGating:
 
 
 class TestRunRouting:
-    """run() re-encodes ops into the backend GlueScript, then run_job()."""
+    """run() replays the encoded transcript into the backend, then
+    run_job()."""
 
     @staticmethod
     def _gluescript_backend():
-        """A real GlueScript with a mock run_job, usable as a run() backend."""
+        """A real GlueScript with a mock run_job, usable as a run() backend.
+
+        stage_gluescript is wrapped so the real re-staging still runs
+        (recording the call) while the transcript is replayed into the
+        live GlueScript.
+        """
         gs = GlueScript()
         gs.run_job = Mock()
         gs.new_gluescript = Mock(wraps=gs.new_gluescript)
+        gs.stage_gluescript = Mock(wraps=gs.stage_gluescript)
         return gs
 
     @staticmethod
@@ -348,21 +356,30 @@ class TestRunRouting:
     @pytest.mark.parametrize(
         "tui_mode", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
     )
-    async def test_run_reencodes_and_runs_job(
+    async def test_run_replays_transcript_and_runs_job(
         self, isolated_context, isolated_machine, tui_mode
     ):
-        """run() must re-encode ops into the backend GlueScript and run it."""
+        """run() must replay the encoded transcript into the backend and
+        run it."""
         machine = isolated_machine
         gs = self._gluescript_backend()
         adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
         doc = Doc()
         ops = self._job_ops(doc)
-        encoded = EncodedOutput(text="dummy", op_map=MachineCodeOpMap())
+        transcript = (
+            "declare_job('Rayforge Job', 'MACHINE', [0.0, 0.0], "
+            "1, 1, 0.0, 0.0)\n"
+            "move_xy_to(5.0, 5.0)\n"
+            "cut_xy_to(10.0, 8.0)\n"
+            "end_job()"
+        )
+        encoded = EncodedOutput(text=transcript, op_map=MachineCodeOpMap())
 
         await adapter.run(encoded, doc, ops)
 
+        gs.stage_gluescript.assert_called_once_with(transcript.splitlines())
         gs.run_job.assert_called_once_with()
-        # The encoder authored into the backend GlueScript.
+        # The transcript was replayed into the backend GlueScript.
         assert any(line.startswith("declare_job(") for line in gs.gluescript)
 
         await adapter.cleanup()
@@ -393,25 +410,69 @@ class TestRunRouting:
     @pytest.mark.parametrize(
         "tui_mode", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
     )
-    async def test_run_failed_encode_calls_new_gluescript_then_raises(
+    async def test_run_replays_machine_space_transcript_for_top_right(
         self, isolated_context, isolated_machine, tui_mode
     ):
-        """A failed encode must tear down the backend then re-raise."""
+        """run() must replay the machine-space transcript verbatim, never
+        re-encode the world-space ops (regression for the 180-degree
+        rotation bug)."""
+        machine = isolated_machine
+        machine.set_origin(Origin.TOP_RIGHT)
+        gs = self._gluescript_backend()
+        adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
+        doc = Doc()
+        ops = self._job_ops(doc)  # world-space ops, NOT re-encoded
+        transcript_lines = [
+            (
+                "declare_job('Rayforge Job', 'MACHINE', [0.0, 0.0], "
+                "1, 1, 0.0, 0.0)"
+            ),
+            "move_xy_to(195.0, 195.0)",
+            "cut_xy_to(190.0, 192.0)",
+            "end_job()",
+        ]
+        encoded = EncodedOutput(
+            text="\n".join(transcript_lines), op_map=MachineCodeOpMap()
+        )
+
+        try:
+            await adapter.run(encoded, doc, ops)
+        finally:
+            await adapter.cleanup()
+            await machine.shutdown()
+
+        gs.stage_gluescript.assert_called_once_with(transcript_lines)
+        gs.run_job.assert_called_once_with()
+        # The backend transcript is exactly the machine-space transcript —
+        # the old re-encode path would have produced world-space
+        # move_xy_to(5.0, 5.0).
+        assert gs.gluescript == transcript_lines
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tui_mode", [DIRECT_MODE, RPC_MODE], ids=["direct", "rpc"]
+    )
+    async def test_run_failed_stage_calls_new_gluescript_then_raises(
+        self, isolated_context, isolated_machine, tui_mode
+    ):
+        """A failed stage must tear down the backend then re-raise."""
         machine = isolated_machine
         gs = self._gluescript_backend()
         gs.stage_gluescript = Mock(side_effect=RuntimeError("stage failed"))
         adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
         doc = Doc()
-        ops = self._job_ops(doc)
-        encoded = EncodedOutput(text="dummy", op_map=MachineCodeOpMap())
+        transcript = (
+            "declare_job('Rayforge Job', 'MACHINE', [0.0, 0.0], "
+            "1, 1, 0.0, 0.0)\n"
+            "end_job()"
+        )
+        encoded = EncodedOutput(text=transcript, op_map=MachineCodeOpMap())
 
         with pytest.raises(RuntimeError, match="stage"):
-            await adapter.run(encoded, doc, ops)
+            await adapter.run(encoded, doc, Ops())
 
-        # new_gluescript is called by the encode itself (at start and via
-        # declare_job) plus the teardown; the teardown must add at least one
-        # call beyond the encode's own resets.
-        assert gs.new_gluescript.call_count >= 2
+        # The teardown must reset the backend after the stage failure.
+        assert gs.new_gluescript.call_count >= 1
 
         await adapter.cleanup()
         await machine.shutdown()

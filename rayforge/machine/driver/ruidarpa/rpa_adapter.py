@@ -42,7 +42,6 @@ from rayforge.machine.driver.driver import (
     PWMParams,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import RpaDirectDriver
-from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 from rayforge.machine.models.laser import LaserHead
 from rayforge.machine.transport import TransportStatus
 
@@ -709,10 +708,13 @@ class RuidaRPAAdapter(Driver):
         )
 
     def _backend_gluescript(self) -> Any:
-        """Return the live backend GlueScript the encoder authors into.
+        """Return the live backend GlueScript the transcript is replayed into.
 
         Direct mode wraps ``RdDriver`` (a GlueScript) behind
         ``RpaDirectDriver``; RPC mode's ``RpcRdDriver`` IS a GlueScript.
+        The adapter replays the encoded GlueScript transcript into this
+        instance via ``stage_gluescript``, which compiles it to rpascript
+        for ``run_job``.
         """
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
@@ -743,31 +745,32 @@ class RuidaRPAAdapter(Driver):
         backend = self._backend_gluescript()
         loop = asyncio.get_running_loop()
 
-        # Re-encode the ops directly into the live backend GlueScript so
-        # authoring and the boundary flushes reach the controller, then
-        # run the composed job. Authoring/flush are blocking RPCs, so the
-        # encode runs off the event loop thread.
-        encoder = RuidaRPAEncoder(gluescript=backend)
-        try:
-            reencoded = await loop.run_in_executor(
-                None, encoder.encode, ops, self._machine, doc
-            )
-        except Exception:
-            # Tear down the backend so a stale partial job cannot run. If
-            # the teardown itself fails (e.g. dead transport), log it and
-            # preserve the original encode error.
-            try:
-                await loop.run_in_executor(None, backend.new_gluescript)
-            except Exception:
-                logger.exception("Failed to reset backend after encode error")
-            raise
-
-        if not reencoded.text.strip():
+        # The encoded text IS the GlueScript transcript (the source);
+        # replay it into the live backend, which compiles it to rpascript
+        # via stage_gluescript. The ops param is unused for replay — it is
+        # kept for the Driver interface.
+        transcript = encoded.text.splitlines()
+        if not encoded.text.strip():
             logger.debug(
                 "No rpascript commands to execute",
                 extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
             )
         else:
+            try:
+                await loop.run_in_executor(
+                    None, backend.stage_gluescript, transcript
+                )
+            except Exception:
+                # Tear down the backend so a stale partial job cannot run.
+                # If the teardown itself fails (e.g. dead transport), log
+                # it and preserve the original stage error.
+                try:
+                    await loop.run_in_executor(None, backend.new_gluescript)
+                except Exception:
+                    logger.exception(
+                        "Failed to reset backend after stage error"
+                    )
+                raise
             logger.info(
                 "Executing rpascript job via run_job",
                 extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),

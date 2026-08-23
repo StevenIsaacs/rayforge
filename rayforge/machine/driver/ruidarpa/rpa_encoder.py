@@ -1,10 +1,13 @@
 """
-RPA Encoder - Produces rpascript output for Ruida Protocol Analyzer driver.
+RPA Encoder - Produces GlueScript transcripts for the Ruida Protocol
+Analyzer driver.
 
-Rpascript is the native command format for RdDriver. The encoder drives
-the ruida-pa GlueScript API (``rd_gluescript.GlueScript``), which owns
-job framing, layer attribute blocks, per-layer action routing, and the
-bounding-box math. Coordinates use mm natively (no unit conversion needed).
+The GlueScript transcript is the source: the encoder drives the ruida-pa
+GlueScript API (``rd_gluescript.GlueScript``), which owns job framing,
+layer attribute blocks, per-layer action routing, and the bounding-box
+math. The returned ``text`` is the transcript; the backend compiles it
+to rpascript (the compiled output) via ``stage_gluescript`` when the job
+runs. Coordinates use mm natively (no unit conversion needed).
 """
 
 from __future__ import annotations
@@ -65,9 +68,12 @@ _last_fallback_wcs: Optional[str] = None
 
 
 class RuidaRPAEncoder(OpsEncoder):
-    """Encodes Ops commands into rpascript text via ruida-pa GlueScript.
+    """Encodes Ops commands into a GlueScript transcript.
 
-    Each Ops command is translated into a GlueScript call so the staged
+    The transcript is the source: each Ops command is translated into a
+    GlueScript call line, and the encoder's ``text`` output IS that
+    transcript. The backend compiles it to rpascript (the compiled
+    output) via ``stage_gluescript`` when the job runs, so the staged
     rpascript stays controller-valid and the bounding boxes are computed
     by GlueScript from the actual cut extents.
     """
@@ -97,18 +103,23 @@ class RuidaRPAEncoder(OpsEncoder):
         self._section_type: Optional[SectionType] = None
         self._section_raster_mode: Optional[RasterMode] = None
         self._layer_mode: str = "VECTOR"
-        self._snapshot_key: int = 0
-        self._header_len: int = 0
-        self._actions_len: int = 0
+        self._snapshot_len: int = 0
         self._op_count: int = 0
-        self._op_contributions: Dict[int, List[Tuple]] = {}
+        self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
+        self._job_started: bool = False
+        self._job_ended: bool = False
 
     # -- Public API ---------------------------------------------------------
 
     def encode(
         self, ops: Ops, machine: "Machine", doc: "Doc"
     ) -> EncodedOutput:
-        """Encode Ops commands into rpascript text.
+        """Encode Ops commands into a GlueScript transcript.
+
+        The transcript IS the source: each Ops command is translated into
+        a GlueScript call line, and the returned ``text`` is that
+        transcript. The backend compiles it to rpascript (the compiled
+        output) via ``stage_gluescript`` when the job runs.
 
         Args:
             ops: Ops object from raygeo containing commands to encode.
@@ -116,8 +127,8 @@ class RuidaRPAEncoder(OpsEncoder):
             doc: The document being processed.
 
         Returns:
-            EncodedOutput with rpascript text, op_map, and the complete
-            GlueScript transcript in driver_data["rpa_gluescript"].
+            EncodedOutput whose text is the GlueScript transcript, with
+            an op_map spanning the transcript lines.
 
         Raises:
             RuntimeError: If the ruida-pa GlueScript API is unavailable or
@@ -129,6 +140,8 @@ class RuidaRPAEncoder(OpsEncoder):
                 "ruidadriver GlueScript is unavailable — install the "
                 "ruida-pa package to use the ruidarpa driver"
             )
+        # Version gate: stage_gluescript is the re-staging entry point the
+        # adapter relies on to compile the transcript into rpascript.
         if not hasattr(GlueScript, "stage_gluescript"):
             raise RuntimeError(
                 "GlueScript.stage_gluescript() is missing — ruida-pa "
@@ -158,23 +171,15 @@ class RuidaRPAEncoder(OpsEncoder):
             self._handle_command(ops, i, machine)
             self._record_contribution(i)
 
-        try:
-            self._gluescript.stage_gluescript()
-            lines = self._gluescript.rpascript
-        except RuntimeError as exc:
+        if not self._job_started or not self._job_ended:
             raise RuntimeError(
-                "Failed to stage rpascript — the ops sequence must start "
-                "with JOB_START and end with JOB_END"
-            ) from exc
+                "Ops sequence must start with JOB_START and end with JOB_END"
+            )
 
-        self._build_op_map(len(lines))
+        lines = list(self._gluescript.gluescript)
         text = "\n".join(lines)
-        gluescript_lines = list(self._gluescript.gluescript)
-        return EncodedOutput(
-            text=text,
-            op_map=self.op_map,
-            driver_data={"rpa_gluescript": gluescript_lines},
-        )
+        self._build_op_map(len(lines))
+        return EncodedOutput(text=text, op_map=self.op_map)
 
     # -- Command dispatch ---------------------------------------------------
 
@@ -530,6 +535,7 @@ class RuidaRPAEncoder(OpsEncoder):
     def _handle_job_start(self) -> None:
         """Declare the job in GlueScript, which emits the job header."""
         global _last_fallback_wcs
+        self._job_started = True
         label = (
             self.doc.name
             if self.doc is not None and self.doc.name
@@ -582,7 +588,6 @@ class RuidaRPAEncoder(OpsEncoder):
             min_power_1=power_pct,
             max_power_1=power_pct,
         )
-        self._op_contributions.setdefault(idx, []).append(("attrs", layer_key))
 
     def _compute_layer_mode(self, ops: Ops, idx: int) -> str:
         """Derive the layer mode from its ops sections.
@@ -613,8 +618,8 @@ class RuidaRPAEncoder(OpsEncoder):
 
     def _handle_job_end(self, idx: int) -> None:
         """Finalize the job in GlueScript, which emits END_JOB and EOF."""
+        self._job_ended = True
         self._gluescript.end_job()
-        self._op_contributions.setdefault(idx, []).append(("tail",))
 
     def _handle_workpiece_start(self, ops: Ops, idx: int) -> None:
         """Emit a workpiece start marker comment."""
@@ -646,115 +651,58 @@ class RuidaRPAEncoder(OpsEncoder):
     # -- Op map bookkeeping --------------------------------------------------
 
     def _snapshot_sections(self) -> None:
-        """Record section lengths before dispatching the current op."""
-        gs = self._gluescript
-        self._snapshot_key = self._layer_key
-        self._header_len = len(gs._job_header)
-        self._actions_len = len(gs._layer_actions.get(self._snapshot_key, []))
+        """Record the transcript length before dispatching the current op."""
+        self._snapshot_len = len(self._gluescript.gluescript)
 
     def _record_contribution(self, op_index: int) -> None:
-        """Record which output sections the last op contributed to."""
-        gs = self._gluescript
-        contributions: List[Tuple] = []
+        """Record the transcript span the last op appended.
 
-        header_delta = len(gs._job_header) - self._header_len
-        if header_delta > 0:
-            contributions.append(("header", self._header_len, header_delta))
-
-        actions_delta = (
-            len(gs._layer_actions.get(self._snapshot_key, []))
-            - self._actions_len
-        )
-        if actions_delta > 0:
-            contributions.append(
-                (
-                    "actions",
-                    self._snapshot_key,
-                    self._actions_len,
-                    actions_delta,
-                )
-            )
-
-        if contributions:
-            self._op_contributions[op_index] = contributions
-
-    def _build_op_map(self, line_count: int) -> None:
-        """Populate the op_map from the staged output layout.
-
-        GlueScript assembles the final rpascript as: job header, all layer
-        attribute blocks (sorted), LAST_LAYER, per-layer action blocks with
-        SELECT_LAYER prefixes (sorted), then END_JOB/EOF. The recorded
-        per-op contributions map onto that fixed layout exactly.
+        The span is only recorded when the op actually appended lines.
+        The guard also prevents an assert-crash when a pre-JOB_START op
+        appends lines that declare_job()'s internal new_gluescript()
+        wipes: the declare_job line then gets claimed by that op, which
+        is acceptable misattribution for an invalid sequence.
         """
         gs = self._gluescript
-        header_len = len(gs._job_header) + len(gs._inline_prelude)
+        end = len(gs.gluescript)
+        start = self._snapshot_len
+        if end > start:
+            self._op_contributions.setdefault(op_index, []).append(
+                (start, end)
+            )
 
-        attr_keys = sorted(gs._layer_attributes)
-        attrs_start: Dict[int, int] = {}
-        offset = header_len
-        for key in attr_keys:
-            attrs_start[key] = offset
-            offset += len(gs._layer_attributes[key])
+    def _build_op_map(self, line_count: int) -> None:
+        """Populate the op_map from the GlueScript transcript spans.
 
-        last_layer_pos: Optional[int] = None
-        if attr_keys:
-            last_layer_pos = offset
-            offset += 1
-
-        action_keys = sorted(gs._layer_actions)
-        actions_start: Dict[int, int] = {}
-        for key in action_keys:
-            actions_start[key] = offset + 1  # after the SELECT_LAYER line
-            offset += 1 + len(gs._layer_actions[key])
-
-        # Layout invariant: GlueScript assembles the rpascript as job
-        # header (+ inline prelude), sorted layer attribute blocks,
-        # LAST_LAYER, sorted per-layer action blocks (SELECT_LAYER +
-        # actions), then END_JOB and EOF. declare_layer/end_job write
-        # only to header/attrs, so the inline epilogue must stay empty
-        # and the tail is pinned to [offset, offset + 1] (END_JOB, EOF).
-        # If the epilogue ever becomes populated, tail lines shift and
-        # the op_map silently mis-maps them — update the layout-pin
-        # tests alongside any upstream GlueScript change.
-        tail_positions: List[int] = []
-        if last_layer_pos is not None:
-            tail_positions.append(last_layer_pos)
-        for key in action_keys:
-            tail_positions.append(actions_start[key] - 1)  # SELECT_LAYER
-        tail_positions.extend([offset, offset + 1])  # END_JOB, EOF
-
+        Each op's contribution is a contiguous span of transcript lines
+        recorded by _record_contribution. Spans are clamped to the final
+        transcript length: declare_job() internally calls
+        new_gluescript(), which wipes lines appended by any pre-JOB_START
+        op, so a recorded end can exceed the final length.
+        """
         line_spans: List[tuple[int, int]] = []
         machine_code_to_op = [-1] * line_count
         for op_index in range(self._op_count):
-            block = []
             contributions = self._op_contributions.get(op_index, [])
+            start = 0
+            end = 0
             for contribution in contributions:
-                kind = contribution[0]
-                if kind == "header":
-                    _, index_in_header, count = contribution
-                    block.extend(
-                        range(index_in_header, index_in_header + count)
-                    )
-                elif kind == "attrs":
-                    _, key = contribution
-                    start = attrs_start[key]
-                    block.extend(
-                        range(start, start + len(gs._layer_attributes[key]))
-                    )
-                elif kind == "actions":
-                    _, key, index_in_actions, count = contribution
-                    start = actions_start[key] + index_in_actions
-                    block.extend(range(start, start + count))
-                elif kind == "tail":
-                    block.extend(tail_positions)
-            block.sort()
-            if block:
-                line_spans.append((block[0], block[-1] - block[0] + 1))
-                for line_num in block:
-                    assert 0 <= line_num < line_count
-                    machine_code_to_op[line_num] = op_index
-            else:
+                contrib_start, contrib_end = contribution
+                if contrib_end > contrib_start:
+                    start = contrib_start
+                    end = contrib_end
+                    break
+            if end <= start:
                 line_spans.append((0, 0))
+                continue
+            end = min(end, line_count)
+            if end <= start:
+                line_spans.append((0, 0))
+                continue
+            line_spans.append((start, end - start))
+            for line_num in range(start, end):
+                assert 0 <= line_num < line_count
+                machine_code_to_op[line_num] = op_index
 
         self.op_map = MachineCodeOpMap.from_lists(
             line_spans, machine_code_to_op
