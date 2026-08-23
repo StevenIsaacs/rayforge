@@ -135,7 +135,7 @@ class RuidaRPAAdapter(Driver):
     # --- Reconnect constants ---
     CONNECTION_POLL_INTERVAL = 0.5
     RECONNECT_BASE_DELAY = 1.0
-    RECONNECT_MAX_DELAY = 30.0
+    RECONNECT_MAX_DELAY = 5.0
     RECONNECT_JITTER = 0.2  # ±20%
 
     def __init__(self, context: RayforgeContext, machine: Machine) -> None:
