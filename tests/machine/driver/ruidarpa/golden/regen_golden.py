@@ -60,8 +60,8 @@ def build_representative_job():
     """Return (doc, ops, machine) for the golden-fixture representative job.
 
     The job exercises two workflow-driven layers plus one defaults
-    layer, covering power clamping, near/far move and cut forms, a
-    linearized arc, a scan line, and per-op settings.
+    layer, covering raw power pass-through, near/far move and cut forms,
+    a linearized arc, a scan line, and per-op settings.
     """
     doc = Doc()
     for index, name in enumerate(("Cut", "Engrave", "Default")):
@@ -79,7 +79,7 @@ def build_representative_job():
     cut_workflow.add_step(cut_step)
 
     engrave_step = CutStep()
-    engrave_step.power = 0.05  # below 8% -> clamped to 8%
+    engrave_step.power = 0.5  # 50%
     engrave_step.cut_speed = 150
     engrave_step.frequency = 30000
     engrave_workflow = doc.layers[1].workflow
@@ -107,14 +107,14 @@ def build_representative_job():
     ops.ops_section_end(SectionType.VECTOR_OUTLINE)
     ops.layer_end(layer_uid=layer0)
 
-    # Layer 1: Engrave — image section, clamped power, far move/cut,
-    # scan line.
+    # Layer 1: Engrave — image section, low-power pass-through, far
+    # move/cut, scan line.
     layer1 = doc.layers[1].uid
     ops.layer_start(layer_uid=layer1)
     ops.ops_section_start(
         SectionType.RASTER_FILL, "wp-1", raster_mode=RasterMode.VARIABLE_POWER
     )
-    ops.set_power(0.05)
+    ops.set_power(0.05)  # low power passes through unclamped on power()
     ops.set_feed_rate(150)
     ops.set_frequency(30000)
     ops.move_to(20.0, 20.0, 0.0)

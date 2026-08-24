@@ -5,7 +5,7 @@ The encoder drives the ruida-pa GlueScript API to produce a GlueScript
 transcript (the source); the backend compiles it to rpascript via
 stage_gluescript when the job runs. Tests cover:
 - Job framing (declare_job / end_job)
-- Layer declaration from workflow steps (settings, defaults, power clamp)
+- Layer declaration from workflow steps (settings, defaults, raw power)
 - Move and cut transcript lines
 - Configuration actions (power, speed, frequency, pulse width, air assist)
 - Curve linearization (arcs, scan lines)
@@ -15,6 +15,7 @@ stage_gluescript when the job runs. Tests cover:
 
 import ast
 import logging
+from unittest.mock import Mock
 
 import pytest
 from raygeo.ops import Ops
@@ -76,6 +77,12 @@ def _declare_layer_mode(line: str) -> str:
     """Extract the mode argument from a declare_layer transcript line."""
     args = ast.literal_eval(line[len("declare_layer(") : -1])
     return args[2]
+
+
+def _declare_layer_overscan(line: str) -> str:
+    """Extract the overscan argument from a declare_layer transcript line."""
+    args = ast.literal_eval(line[len("declare_layer(") : -1])
+    return args[3]
 
 
 class TestRuidaRPAEncoderBasics:
@@ -185,10 +192,13 @@ class TestLayerDeclaration:
             "5.0, 20.0, 50.0, 50.0)" in result.text
         )
 
-    def test_power_below_minimum_is_clamped(
-        self, encoder, mock_machine, doc, caplog
+    def test_power_below_minimum_raises_from_gluescript(
+        self, encoder, mock_machine, doc
     ):
-        """Power below the 8% controller minimum must clamp up."""
+        """Power below the 8% controller minimum must raise in GlueScript.
+
+        The encoder passes the raw power through; GlueScript rejects it.
+        """
         step = CutStep()
         step.power = 0.05
         doc.layers[0].workflow.add_step(step)
@@ -198,13 +208,9 @@ class TestLayerDeclaration:
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
-        result = encoder.encode(ops, mock_machine, doc)
 
-        assert (
-            "declare_layer('Layer 1', '#00ccff', 'VECTOR', 'NONE', "
-            "8.333333333333334, 20.0, 8.0, 8.0)" in result.text
-        )
-        assert any("clamping" in record.message for record in caplog.records)
+        with pytest.raises(ValueError):
+            encoder.encode(ops, mock_machine, doc)
 
     def test_unknown_layer_uses_defaults(self, encoder, mock_machine, doc):
         """Layers absent from the document should still stage cleanly."""
@@ -292,20 +298,22 @@ class TestSettingsCommands:
 
         assert "power_range(50.0, 50.0)" in result.text
 
-    def test_power_action_below_minimum_clamps(
-        self, encoder, mock_machine, doc, caplog
+    def test_power_action_below_minimum_raises_from_gluescript(
+        self, encoder, mock_machine, doc
     ):
-        """Per-op SET_POWER below 8% must clamp with a warning."""
+        """Per-op SET_POWER below 8% must raise in GlueScript.
+
+        The encoder passes the raw power through; GlueScript rejects it.
+        """
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.set_power(0.05)
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
-        result = encoder.encode(ops, mock_machine, doc)
 
-        assert "power_range(8.0, 8.0)" in result.text
-        assert any("clamping" in record.message for record in caplog.records)
+        with pytest.raises(ValueError):
+            encoder.encode(ops, mock_machine, doc)
 
     def test_legacy_coolant_non_off_logs_warning(
         self, encoder, mock_machine, doc, caplog
@@ -539,6 +547,7 @@ class TestSectionPowerRouting:
         cases = [
             (RasterMode.VARIABLE_POWER, "IMAGE"),
             (RasterMode.DEPTH_MAP, "DEPTHMAP"),
+            (RasterMode.CONSTANT_POWER, "RASTER"),
             (None, "VECTOR"),
         ]
         for raster_mode, expected in cases:
@@ -644,6 +653,115 @@ class TestSectionPowerRouting:
             encoder.encode(ops, mock_machine, doc)
 
 
+class TestLayerOverscan:
+    """declare_layer overscan follows the layer's raster scan lines."""
+
+    def _overscan_job(self, doc, scan_end):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.scan_to(scan_end[0], scan_end[1], 0.0, bytearray([128, 128]))
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
+
+    def _declared_overscan(self, encoder, mock_machine, doc, ops):
+        result = encoder.encode(ops, mock_machine, doc)
+        declared = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("declare_layer(")
+        ]
+        return _declare_layer_overscan(declared[0])
+
+    def test_horizontal_scan_uses_x_bi(self, encoder, mock_machine, doc):
+        """A horizontal scan line must yield X_BI overscan."""
+        ops = self._overscan_job(doc, (5.0, 0.0))
+        assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
+            "X_BI"
+        )
+
+    def test_vertical_scan_uses_y_bi(self, encoder, mock_machine, doc):
+        """A vertical scan line must yield Y_BI overscan."""
+        ops = self._overscan_job(doc, (0.0, 5.0))
+        assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
+            "Y_BI"
+        )
+
+    def test_diagonal_scan_uses_none(self, encoder, mock_machine, doc):
+        """A diagonal scan line must yield NONE overscan."""
+        ops = self._overscan_job(doc, (5.0, 5.0))
+        assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
+            "NONE"
+        )
+
+    def test_vector_layer_uses_none(self, encoder, mock_machine, doc):
+        """A vector layer (no sections) must yield NONE overscan."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.set_power(0.5)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
+            "NONE"
+        )
+
+    def test_raster_layer_overscan_uses_angle(
+        self, encoder, mock_machine, doc
+    ):
+        """RASTER layers (CONSTANT_POWER) derive overscan from angle."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.CONSTANT_POWER,
+        )
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.scan_to(5.0, 0.0, 0.0, bytearray([255, 255]))
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.CONSTANT_POWER
+        )
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
+            "X_BI"
+        )
+
+    def test_raster_layer_without_scan_lines_uses_none(
+        self, encoder, mock_machine, doc
+    ):
+        """RASTER layers without scan lines must yield NONE overscan."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.set_power(0.5)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
+            "NONE"
+        )
+
+
 class TestCurveLinearization:
     """Tests for curve commands linearized into cut segments."""
 
@@ -669,7 +787,9 @@ class TestCurveLinearization:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.move_to(0.0, 0.0, 0.0)
-        power_values = bytearray([0, 128, 255, 128, 0])
+        # All values map above the 8% controller minimum so the raw
+        # power_range() pass-through does not raise in GlueScript.
+        power_values = bytearray([64, 128, 255, 128, 64])
         ops.scan_to(5.0, 0.0, 0.0, power_values)
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -678,6 +798,74 @@ class TestCurveLinearization:
         lines = result.text.split("\n")
         assert any(line.startswith("power_range(") for line in lines)
         assert any(line.startswith("cut_xy_to(") for line in lines)
+
+    def test_constant_power_scan_with_zero_pixels_emits_cuts(
+        self, mock_machine, doc
+    ):
+        """CONSTANT_POWER scan lines must always cut, never become moves.
+
+        Off-pixels carry 0.0 power, which must still be emitted through
+        power_range(0.0, 0.0) as a verification marker. A real GlueScript
+        raises ValueError on that call, so a mock is injected.
+        """
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.CONSTANT_POWER,
+        )
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.scan_to(4.0, 0.0, 0.0, bytearray([0, 255, 255, 0]))
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.CONSTANT_POWER
+        )
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+
+        mock_gluescript = Mock(spec=GlueScript)
+        mock_gluescript.gluescript = []
+        encoder = RuidaRPAEncoder(gluescript=mock_gluescript)
+        encoder.encode(ops, mock_machine, doc)
+
+        assert (0.0, 0.0) in [
+            call.args for call in mock_gluescript.power_range.call_args_list
+        ]
+        assert mock_gluescript.cut_xy_to.call_args_list
+        # The initial move_to(0.0, 0.0, 0.0) before the scan is a rapid
+        # move; the scan segments themselves must never become moves.
+        assert all(
+            call.args[0] == 0.0
+            for call in mock_gluescript.move_xy_to.call_args_list
+        )
+
+    def test_variable_power_scan_with_zero_pixels_emits_moves(
+        self, encoder, mock_machine, doc
+    ):
+        """VARIABLE_POWER scans keep moves for 0-power pixels."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.scan_to(4.0, 0.0, 0.0, bytearray([0, 255, 255, 0]))
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        lines = result.text.split("\n")
+        assert any(line.startswith("move_xy_to(") for line in lines)
+        assert any(line.startswith("cut_xy_to(") for line in lines)
+        assert "power_range(0.0, 0.0)" not in lines
+        assert "power(0.0)" not in lines
 
 
 class TestOpMapGeneration:

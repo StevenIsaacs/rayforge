@@ -5,7 +5,7 @@ GlueScript transcript byte-for-byte (the filename is a historical
 misnomer — the fixture is the transcript, not the staged rpascript).
 The representative job covers layer attribute blocks and per-op action
 lines across vector cuts and moves, a linearized arc, a scan line,
-power clamping, and the air-assist path.
+raw power pass-through, and the air-assist path.
 
 Regenerate the fixture with ``golden/regen_golden.py`` when the encoder
 or upstream GlueScript legitimately changes the transcript; do not
@@ -82,15 +82,15 @@ class TestGoldenStructure:
         assert lines[-1] == "end_job()"
 
     def test_layer_attribute_blocks(self):
-        """Layer attrs stage with workflow settings, clamps, and defaults."""
+        """Layer attrs stage with workflow settings, raw power, defaults."""
         text = _encode_representative_job()
         assert (
             "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
             "5.0, 20.0, 50.0, 50.0)" in text
         )
         assert (
-            "declare_layer('Engrave', '#33cc33', 'IMAGE', 'NONE', "
-            "2.5, 30.0, 8.0, 8.0)" in text
+            "declare_layer('Engrave', '#33cc33', 'IMAGE', 'X_BI', "
+            "2.5, 30.0, 50.0, 50.0)" in text
         )
         assert (
             "declare_layer('Default', '#00ccff', 'VECTOR', 'NONE', "
@@ -101,7 +101,7 @@ class TestGoldenStructure:
         """Per-op settings emit their transcript lines."""
         text = _encode_representative_job()
         assert "power(5.0)" in text
-        assert "power(0.0)" in text
+        assert "power(0.0)" not in text
         assert "cut_speed(4.166666666666667)" in text
         assert "frequency(25.0)" in text
         assert "pwm(50.0)" in text
