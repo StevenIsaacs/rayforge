@@ -102,9 +102,9 @@ class RuidaRPAEncoder(OpsEncoder):
         self.machine: Optional["Machine"] = None
         self.op_map: Optional[MachineCodeOpMap] = None
         self._gluescript: Any = self._injected_gluescript
-        self._layer_index_by_uid: Dict[str, int] = {}
         self._layer_key: int = 0
-        self._layer: int = 0
+        self._layer_uid: Optional[str] = None
+        self._layer_declared: bool = False
         self._section_type: Optional[SectionType] = None
         self._section_raster_mode: Optional[RasterMode] = None
         self._layer_mode: str = "VECTOR"
@@ -160,9 +160,6 @@ class RuidaRPAEncoder(OpsEncoder):
         self.machine = machine
         self.op_map = MachineCodeOpMap()
         self._op_count = ops.len()
-        self._layer_index_by_uid = {
-            layer.uid: i for i, layer in enumerate(doc.layers)
-        }
         if self._gluescript is None:
             gluescript_type: Any = GlueScript
             self._gluescript = gluescript_type()
@@ -226,6 +223,11 @@ class RuidaRPAEncoder(OpsEncoder):
         elif ct == CommandType.LAYER_START:
             self._handle_layer_start(ops, idx)
         elif ct == CommandType.LAYER_END:
+            if not self._layer_declared:
+                raise ValueError(
+                    "LAYER_END encountered before any WORKPIECE_START — "
+                    "every Rayforge layer must contain at least one workpiece"
+                )
             # GlueScript closes layers implicitly; an unclosed ops
             # section must not leak into the next layer. Reset the
             # layer mode so a stray section after LAYER_END fails
@@ -233,6 +235,7 @@ class RuidaRPAEncoder(OpsEncoder):
             self._section_type = None
             self._section_raster_mode = None
             self._layer_mode = "VECTOR"
+            self._layer_uid = None
         elif ct == CommandType.WORKPIECE_START:
             self._handle_workpiece_start(ops, idx)
         elif ct == CommandType.WORKPIECE_END:
@@ -288,13 +291,13 @@ class RuidaRPAEncoder(OpsEncoder):
             return
 
         # Correct only because _compute_layer_mode derives IMAGE/DEPTHMAP
-        # for image sections at LAYER_START.
+        # for image sections at WORKPIECE_START.
         if self._layer_mode not in ("IMAGE", "DEPTHMAP"):
             raise ValueError(
                 f"Image section {section_type.name} with raster mode "
                 f"{raster_mode.name} requires an IMAGE/DEPTHMAP layer, "
                 f"but the current layer mode is {self._layer_mode!r} — "
-                f"missing LAYER_START before the section"
+                f"missing WORKPIECE_START before the section"
             )
         self._gluescript.power(power_fraction * 100.0)
 
@@ -571,38 +574,24 @@ class RuidaRPAEncoder(OpsEncoder):
         self._gluescript.declare_job(label, ref_point, None, 1, 1, 0.0, 0.0)
 
     def _handle_layer_start(self, ops: Ops, idx: int) -> None:
-        """Declare the layer with settings from its first workflow step."""
-        layer_uid = ops.layer_uid(idx)
-        layer = self._find_layer(layer_uid)
-        self._layer = self._layer_index_by_uid.get(layer_uid, 0)
-        self._layer_key += 1
-        layer_key = self._layer_key
+        """Record the active layer uid for the next WORKPIECE_START.
 
-        speed_mms, frequency_khz, power_pct = self._layer_settings(layer)
-        layer_mode = self._compute_layer_mode(ops, idx)
-        self._layer_mode = layer_mode
-        overscan = self._compute_overscan(ops, idx, layer_mode)
-        self._gluescript.declare_layer(
-            label=(
-                layer.name if layer is not None else f"Layer {layer_key - 1}"
-            ),
-            color=(layer.color if layer is not None else _DEFAULT_LAYER_COLOR),
-            mode=layer_mode,
-            overscan=overscan,
-            speed=speed_mms,
-            frequency=frequency_khz,
-            min_power_1=power_pct,
-            max_power_1=power_pct,
-        )
+        LAYER_START emits nothing; the layer is declared when the first
+        workpiece of the layer begins, so each Rayforge workpiece maps
+        to its own Ruida layer.
+        """
+        self._layer_uid = ops.layer_uid(idx)
+        self._layer_key += 1
+        self._layer_declared = False
 
     def _compute_layer_mode(self, ops: Ops, idx: int) -> str:
         """Derive the layer mode from its ops sections.
 
-        Scans forward from the LAYER_START command to the next layer or
-        job boundary. Priority is DEPTHMAP > IMAGE > RASTER > VECTOR:
-        the first DEPTH_MAP section yields "DEPTHMAP", any VARIABLE_POWER
-        section yields "IMAGE", any CONSTANT_POWER section yields
-        "RASTER", and anything else defaults to "VECTOR".
+        Scans forward from the WORKPIECE_START command to the next
+        workpiece, layer, or job boundary. Priority is DEPTHMAP > IMAGE
+        > RASTER > VECTOR: the first DEPTH_MAP section yields "DEPTHMAP",
+        any VARIABLE_POWER section yields "IMAGE", any CONSTANT_POWER
+        section yields "RASTER", and anything else defaults to "VECTOR".
         """
         seen_variable_power = False
         seen_constant_power = False
@@ -611,6 +600,8 @@ class RuidaRPAEncoder(OpsEncoder):
             if command in (
                 CommandType.LAYER_END,
                 CommandType.LAYER_START,
+                CommandType.WORKPIECE_END,
+                CommandType.WORKPIECE_START,
                 CommandType.JOB_END,
             ):
                 break
@@ -632,13 +623,14 @@ class RuidaRPAEncoder(OpsEncoder):
     def _compute_overscan(self, ops: Ops, idx: int, layer_mode: str) -> str:
         """Derive the layer overscan from its raster scan lines.
 
-        Scans forward from the LAYER_START command to the next layer or
-        job boundary, tracking the current position and whether a raster
-        fill section is active. The first non-degenerate scan line
-        determines the overscan: horizontal lines yield "X_BI", vertical
-        lines yield "Y_BI", and diagonal lines (unsupported by the Ruida
-        controller) yield "NONE". Vector and depth-map layers are forced
-        to "NONE" by GlueScript's layer-mode override.
+        Scans forward from the WORKPIECE_START command to the next
+        workpiece, layer, or job boundary, tracking the current position
+        and whether a raster fill section is active. The first
+        non-degenerate scan line determines the overscan: horizontal
+        lines yield "X_BI", vertical lines yield "Y_BI", and diagonal
+        lines (unsupported by the Ruida controller) yield "NONE". Vector
+        and depth-map layers are forced to "NONE" by GlueScript's
+        layer-mode override.
         """
         if layer_mode not in ("IMAGE", "RASTER"):
             return "NONE"
@@ -649,6 +641,8 @@ class RuidaRPAEncoder(OpsEncoder):
             if command in (
                 CommandType.LAYER_END,
                 CommandType.LAYER_START,
+                CommandType.WORKPIECE_END,
+                CommandType.WORKPIECE_START,
                 CommandType.JOB_END,
             ):
                 break
@@ -685,9 +679,42 @@ class RuidaRPAEncoder(OpsEncoder):
         self._gluescript.end_job()
 
     def _handle_workpiece_start(self, ops: Ops, idx: int) -> None:
-        """Emit a workpiece start marker comment."""
+        """Declare the Ruida layer for this workpiece.
+
+        Each Rayforge workpiece becomes its own Ruida layer, so the
+        layer attribute block is emitted here (not at LAYER_START) using
+        the active layer's settings and the mode/overscan derived from
+        this workpiece's sections.
+        """
+        if self._layer_uid is None:
+            raise ValueError(
+                "WORKPIECE_START encountered before LAYER_START — "
+                "GlueScript routing requires an active layer"
+            )
+        layer_uid = self._layer_uid
         wp_uid = ops.workpiece_uid(idx)
         self._gluescript.comment([f"# Workpiece Start uid={wp_uid}"])
+
+        layer = self._find_layer(layer_uid)
+        label = (
+            layer.name if layer is not None else f"Layer {self._layer_key - 1}"
+        )
+        color = layer.color if layer is not None else _DEFAULT_LAYER_COLOR
+        speed_mms, frequency_khz, power_pct = self._layer_settings(layer)
+        layer_mode = self._compute_layer_mode(ops, idx)
+        self._layer_mode = layer_mode
+        overscan = self._compute_overscan(ops, idx, layer_mode)
+        self._gluescript.declare_layer(
+            label=label,
+            color=color,
+            mode=layer_mode,
+            overscan=overscan,
+            speed=speed_mms,
+            frequency=frequency_khz,
+            min_power_1=power_pct,
+            max_power_1=power_pct,
+        )
+        self._layer_declared = True
 
     def _handle_workpiece_end(self) -> None:
         """Emit a workpiece end marker comment."""

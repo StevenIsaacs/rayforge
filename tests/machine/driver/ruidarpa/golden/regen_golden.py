@@ -93,6 +93,7 @@ def build_representative_job():
     # arc, air assist.
     layer0 = doc.layers[0].uid
     ops.layer_start(layer_uid=layer0)
+    ops.workpiece_start("wp-0")
     ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
     ops.set_power(0.6)
     ops.set_feed_rate(250)
@@ -105,12 +106,14 @@ def build_representative_job():
     ops.set_air_assist(AirAssistMode.OFF)
     ops.dwell(250)
     ops.ops_section_end(SectionType.VECTOR_OUTLINE)
+    ops.workpiece_end("wp-0")
     ops.layer_end(layer_uid=layer0)
 
     # Layer 1: Engrave — image section, low-power pass-through, far
     # move/cut, scan line.
     layer1 = doc.layers[1].uid
     ops.layer_start(layer_uid=layer1)
+    ops.workpiece_start("wp-1")
     ops.ops_section_start(
         SectionType.RASTER_FILL, "wp-1", raster_mode=RasterMode.VARIABLE_POWER
     )
@@ -125,16 +128,19 @@ def build_representative_job():
     ops.ops_section_end(
         SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
     )
+    ops.workpiece_end("wp-1")
     ops.layer_end(layer_uid=layer1)
 
     # Layer 2: Default — vector outline, no workflow steps, encoder
     # defaults apply.
     layer2 = doc.layers[2].uid
     ops.layer_start(layer_uid=layer2)
+    ops.workpiece_start("wp-2")
     ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-2")
     ops.move_to(55.0, 22.0, 0.0)
     ops.line_to(57.0, 22.0, 0.0)
     ops.ops_section_end(SectionType.VECTOR_OUTLINE)
+    ops.workpiece_end("wp-2")
     ops.layer_end(layer_uid=layer2)
 
     ops.job_end()

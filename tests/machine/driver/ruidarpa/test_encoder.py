@@ -113,8 +113,10 @@ class TestRuidaRPAEncoderBasics:
         ops1 = Ops()
         ops1.job_start()
         ops1.layer_start(layer_uid=doc.layers[0].uid)
+        ops1.workpiece_start("wp-0")
         ops1.set_power(0.5)
         ops1.move_to(0.0, 0.0, 0.0)
+        ops1.workpiece_end("wp-0")
         ops1.layer_end(layer_uid=doc.layers[0].uid)
         ops1.job_end()
         encoder.encode(ops1, mock_machine, doc)
@@ -122,16 +124,18 @@ class TestRuidaRPAEncoderBasics:
         ops2 = Ops()
         ops2.job_start()
         ops2.layer_start(layer_uid=doc.layers[0].uid)
+        ops2.workpiece_start("wp-0")
         ops2.move_to(0.0, 0.0, 0.0)
+        ops2.workpiece_end("wp-0")
         ops2.layer_end(layer_uid=doc.layers[0].uid)
         ops2.job_end()
         result2 = encoder.encode(ops2, mock_machine, doc)
 
         assert encoder.active_laser == 1
-        # Second job: 0=job_start, 1=layer_start, 2=move_to,
-        # 3=layer_end, 4=job_end
-        assert result2.op_map.op_count == 5
-        assert result2.op_map.span_for_op(3) == (0, 0)
+        # Second job: 0=job_start, 1=layer_start, 2=workpiece_start,
+        # 3=move_to, 4=workpiece_end, 5=layer_end, 6=job_end
+        assert result2.op_map.op_count == 7
+        assert result2.op_map.span_for_op(5) == (0, 0)
 
 
 class TestJobStructure:
@@ -141,8 +145,10 @@ class TestJobStructure:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(5.0, 5.0, 0.0)
         ops.line_to(10.0, 8.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         return ops
@@ -164,6 +170,8 @@ class TestLayerDeclaration:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -183,6 +191,8 @@ class TestLayerDeclaration:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -206,6 +216,8 @@ class TestLayerDeclaration:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
 
@@ -217,7 +229,9 @@ class TestLayerDeclaration:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid="missing-layer-uid")
+        ops.workpiece_start("wp-0")
         ops.move_to(1.0, 1.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid="missing-layer-uid")
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -226,6 +240,65 @@ class TestLayerDeclaration:
             line.startswith("declare_layer(")
             for line in result.text.split("\n")
         )
+
+    def test_multi_workpiece_layer_declares_each_workpiece(
+        self, encoder, mock_machine, doc
+    ):
+        """One layer with two workpieces emits two declare_layer lines."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.move_to(1.0, 1.0, 0.0)
+        ops.workpiece_end("wp-0")
+        ops.workpiece_start("wp-1")
+        ops.move_to(2.0, 2.0, 0.0)
+        ops.workpiece_end("wp-1")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        declared = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("declare_layer(")
+        ]
+        assert len(declared) == 2
+        assert all("'Layer 1'" in line for line in declared)
+        assert all("'#00ccff'" in line for line in declared)
+
+    def test_per_workpiece_mode_from_sections(
+        self, encoder, mock_machine, doc
+    ):
+        """Two workpieces in one layer derive their own declare_layer modes."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.set_power(0.5)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.workpiece_end("wp-0")
+        ops.workpiece_start("wp-1")
+        ops.set_power(0.5)
+        ops.workpiece_end("wp-1")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        declared = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("declare_layer(")
+        ]
+        assert _declare_layer_mode(declared[0]) == "IMAGE"
+        assert _declare_layer_mode(declared[1]) == "VECTOR"
 
 
 class TestMoveCutForms:
@@ -236,7 +309,9 @@ class TestMoveCutForms:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(5.0, 5.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -248,8 +323,10 @@ class TestMoveCutForms:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.move_to(150.0, 0.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -261,8 +338,10 @@ class TestMoveCutForms:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.line_to(5.0, 5.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -274,8 +353,10 @@ class TestMoveCutForms:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.line_to(20.0, 0.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -291,7 +372,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_power(0.5)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -308,7 +391,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_power(0.05)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
 
@@ -322,7 +407,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_coolant(CoolantMode.FLOOD)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -337,7 +424,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_feed_rate(200)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -349,7 +438,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_rapid_rate(500)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -361,7 +452,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_frequency(20000)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -373,7 +466,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_pulse_width(50)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -388,7 +483,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.dwell(250)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -401,9 +498,11 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_air_assist(AirAssistMode.ON)
         ops.move_to(0.0, 0.0, 0.0)
         ops.set_air_assist(AirAssistMode.OFF)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -421,9 +520,11 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_head("laser-2")
         ops.set_power(0.5)
         ops.set_head("laser-1")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -448,7 +549,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_head("laser_2")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -459,7 +562,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_head("laser_1")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -476,7 +581,9 @@ class TestSettingsCommands:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_head("laser-3")
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -492,11 +599,13 @@ class TestSectionPowerRouting:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL, "wp-0", raster_mode=raster_mode
         )
         ops.set_power(power)
         ops.ops_section_end(SectionType.RASTER_FILL, raster_mode=raster_mode)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         return ops
@@ -554,6 +663,7 @@ class TestSectionPowerRouting:
             ops = Ops()
             ops.job_start()
             ops.layer_start(layer_uid=doc.layers[0].uid)
+            ops.workpiece_start("wp-0")
             if raster_mode is None:
                 ops.set_power(0.5)
             else:
@@ -566,6 +676,7 @@ class TestSectionPowerRouting:
                 ops.ops_section_end(
                     SectionType.RASTER_FILL, raster_mode=raster_mode
                 )
+            ops.workpiece_end("wp-0")
             ops.layer_end(layer_uid=doc.layers[0].uid)
             ops.job_end()
             result = encoder.encode(ops, mock_machine, doc)
@@ -583,6 +694,7 @@ class TestSectionPowerRouting:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -601,6 +713,7 @@ class TestSectionPowerRouting:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.DEPTH_MAP
         )
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -619,6 +732,7 @@ class TestSectionPowerRouting:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -628,6 +742,7 @@ class TestSectionPowerRouting:
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
         ops.set_power(0.5)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -636,10 +751,10 @@ class TestSectionPowerRouting:
         assert "power_range(50.0, 50.0)" in lines
         assert "power(50.0)" not in lines
 
-    def test_image_section_op_before_layer_start_raises(
+    def test_image_section_op_before_workpiece_start_raises(
         self, encoder, mock_machine, doc
     ):
-        """An image-section op before LAYER_START must fail loudly."""
+        """An image-section op before WORKPIECE_START must fail loudly."""
         ops = Ops()
         ops.job_start()
         ops.ops_section_start(
@@ -649,7 +764,7 @@ class TestSectionPowerRouting:
         )
         ops.set_power(0.5)
 
-        with pytest.raises(ValueError, match="LAYER_START"):
+        with pytest.raises(ValueError, match="WORKPIECE_START"):
             encoder.encode(ops, mock_machine, doc)
 
 
@@ -660,6 +775,7 @@ class TestLayerOverscan:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -670,6 +786,7 @@ class TestLayerOverscan:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         return ops
@@ -709,7 +826,9 @@ class TestLayerOverscan:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_power(0.5)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
@@ -723,6 +842,7 @@ class TestLayerOverscan:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -733,6 +853,7 @@ class TestLayerOverscan:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.CONSTANT_POWER
         )
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
@@ -746,6 +867,7 @@ class TestLayerOverscan:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -755,6 +877,7 @@ class TestLayerOverscan:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         assert self._declared_overscan(encoder, mock_machine, doc, ops) == (
@@ -770,8 +893,10 @@ class TestCurveLinearization:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -786,11 +911,13 @@ class TestCurveLinearization:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         # All values map above the 8% controller minimum so the raw
         # power_range() pass-through does not raise in GlueScript.
         power_values = bytearray([64, 128, 255, 128, 64])
         ops.scan_to(5.0, 0.0, 0.0, power_values)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -811,6 +938,7 @@ class TestCurveLinearization:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -821,6 +949,7 @@ class TestCurveLinearization:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.CONSTANT_POWER
         )
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
 
@@ -847,6 +976,7 @@ class TestCurveLinearization:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
@@ -857,6 +987,7 @@ class TestCurveLinearization:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -874,40 +1005,31 @@ class TestOpMapGeneration:
     def _structured_job(self, doc):
         ops = Ops()
         ops.job_start()  # 0 -> declare_job line
-        ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> declare_layer
-        ops.set_power(0.5)  # 2 -> power_range line
-        ops.move_to(5.0, 5.0, 0.0)  # 3 -> move_xy_to line
-        ops.line_to(10.0, 8.0, 0.0)  # 4 -> cut_xy_to line
-        ops.layer_end(layer_uid=doc.layers[0].uid)  # 5 -> nothing
-        ops.job_end()  # 6 -> end_job line
+        ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> nothing
+        ops.workpiece_start("wp-0")  # 2 -> comment + declare_layer
+        ops.set_power(0.5)  # 3 -> power_range line
+        ops.move_to(5.0, 5.0, 0.0)  # 4 -> move_xy_to line
+        ops.line_to(10.0, 8.0, 0.0)  # 5 -> cut_xy_to line
+        ops.workpiece_end("wp-0")  # 6 -> nothing
+        ops.layer_end(layer_uid=doc.layers[0].uid)  # 7 -> nothing
+        ops.job_end()  # 8 -> end_job line
         return ops
 
     def test_every_op_has_entry(self, encoder, mock_machine, doc):
         """Every op index must be present in the op_map."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
 
-        assert result.op_map.op_count == 7
+        assert result.op_map.op_count == 9
 
     def test_job_start_maps_to_header(self, encoder, mock_machine, doc):
-        """JOB_START should map to every line before the first layer attr."""
+        """JOB_START should map to the declare_job header line."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
-        lines = result.text.split("\n")
-        first_attr = next(
-            i
-            for i, line in enumerate(lines)
-            if line.startswith("declare_layer(")
-        )
 
-        expected = list(range(first_attr))
-        assert result.op_map.span_for_op(0) == (
-            expected[0],
-            expected[-1] - expected[0] + 1,
-        )
-        for line_num in expected:
-            assert result.op_map.op_for_line(line_num) == 0
+        assert result.op_map.span_for_op(0) == (0, 1)
+        assert result.op_map.op_for_line(0) == 0
 
-    def test_layer_start_maps_to_attrs(self, encoder, mock_machine, doc):
-        """LAYER_START should map to the layer attribute block."""
+    def test_workpiece_start_maps_to_attrs(self, encoder, mock_machine, doc):
+        """WORKPIECE_START should map to the layer attribute block."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
         first_attr = next(
@@ -921,13 +1043,13 @@ class TestOpMapGeneration:
             if line.startswith("power_range(")
         )
 
-        expected = list(range(first_attr, last_layer))
-        assert result.op_map.span_for_op(1) == (
+        expected = list(range(first_attr - 1, last_layer))
+        assert result.op_map.span_for_op(2) == (
             expected[0],
             expected[-1] - expected[0] + 1,
         )
         for line_num in expected:
-            assert result.op_map.op_for_line(line_num) == 1
+            assert result.op_map.op_for_line(line_num) == 2
 
     def test_action_ops_map_to_action_lines(self, encoder, mock_machine, doc):
         """Set/move/cut ops should map to their action lines."""
@@ -945,18 +1067,24 @@ class TestOpMapGeneration:
             i for i, line in enumerate(lines) if line.startswith("cut_xy_to(")
         )
 
-        assert result.op_map.span_for_op(2) == (power_line, 1)
-        assert result.op_map.op_for_line(power_line) == 2
-        assert result.op_map.span_for_op(3) == (move_line, 1)
-        assert result.op_map.op_for_line(move_line) == 3
-        assert result.op_map.span_for_op(4) == (cut_line, 1)
-        assert result.op_map.op_for_line(cut_line) == 4
+        assert result.op_map.span_for_op(3) == (power_line, 1)
+        assert result.op_map.op_for_line(power_line) == 3
+        assert result.op_map.span_for_op(4) == (move_line, 1)
+        assert result.op_map.op_for_line(move_line) == 4
+        assert result.op_map.span_for_op(5) == (cut_line, 1)
+        assert result.op_map.op_for_line(cut_line) == 5
 
     def test_layer_end_maps_to_nothing(self, encoder, mock_machine, doc):
         """LAYER_END produces no transcript lines."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
 
-        assert result.op_map.span_for_op(5) == (0, 0)
+        assert result.op_map.span_for_op(7) == (0, 0)
+
+    def test_layer_start_emits_nothing(self, encoder, mock_machine, doc):
+        """LAYER_START produces no transcript lines."""
+        result = encoder.encode(self._structured_job(doc), mock_machine, doc)
+
+        assert result.op_map.span_for_op(1) == (0, 0)
 
     def test_job_end_maps_to_tail(self, encoder, mock_machine, doc):
         """JOB_END should map to the end_job line."""
@@ -964,8 +1092,8 @@ class TestOpMapGeneration:
         lines = result.text.split("\n")
         end_job_line = lines.index("end_job()")
 
-        assert result.op_map.span_for_op(6) == (end_job_line, 1)
-        assert result.op_map.op_for_line(end_job_line) == 6
+        assert result.op_map.span_for_op(8) == (end_job_line, 1)
+        assert result.op_map.op_for_line(end_job_line) == 8
 
     def test_reverse_mapping_is_consistent(self, encoder, mock_machine, doc):
         """Every line must map back to its owning op."""
@@ -981,17 +1109,23 @@ class TestOpMapGeneration:
     def _three_layer_job(self, doc):
         ops = Ops()
         ops.job_start()  # 0 -> declare_job line
-        ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> declare_layer
-        ops.set_power(0.5)  # 2 -> power_range line
-        ops.move_to(5.0, 5.0, 0.0)  # 3 -> move_xy_to line
-        ops.layer_end(layer_uid=doc.layers[0].uid)  # 4 -> nothing
-        ops.layer_start(layer_uid=doc.layers[1].uid)  # 5 -> declare_layer
-        ops.move_to(1.0, 1.0, 0.0)  # 6 -> move_xy_to line
-        ops.layer_end(layer_uid=doc.layers[1].uid)  # 7 -> nothing
-        ops.layer_start(layer_uid=doc.layers[2].uid)  # 8 -> declare_layer
-        ops.line_to(9.0, 9.0, 0.0)  # 9 -> cut_xy_to line
-        ops.layer_end(layer_uid=doc.layers[2].uid)  # 10 -> nothing
-        ops.job_end()  # 11 -> end_job line
+        ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> nothing
+        ops.workpiece_start("wp-0")  # 2 -> comment + declare_layer
+        ops.set_power(0.5)  # 3 -> power_range line
+        ops.move_to(5.0, 5.0, 0.0)  # 4 -> move_xy_to line
+        ops.workpiece_end("wp-0")  # 5 -> nothing
+        ops.layer_end(layer_uid=doc.layers[0].uid)  # 6 -> nothing
+        ops.layer_start(layer_uid=doc.layers[1].uid)  # 7 -> nothing
+        ops.workpiece_start("wp-1")  # 8 -> comment + declare_layer
+        ops.move_to(1.0, 1.0, 0.0)  # 9 -> move_xy_to line
+        ops.workpiece_end("wp-1")  # 10 -> nothing
+        ops.layer_end(layer_uid=doc.layers[1].uid)  # 11 -> nothing
+        ops.layer_start(layer_uid=doc.layers[2].uid)  # 12 -> nothing
+        ops.workpiece_start("wp-2")  # 13 -> comment + declare_layer
+        ops.line_to(9.0, 9.0, 0.0)  # 14 -> cut_xy_to line
+        ops.workpiece_end("wp-2")  # 15 -> nothing
+        ops.layer_end(layer_uid=doc.layers[2].uid)  # 16 -> nothing
+        ops.job_end()  # 17 -> end_job line
         return ops
 
     def test_three_layer_op_map_positions(self, encoder, mock_machine, doc):
@@ -1015,34 +1149,34 @@ class TestOpMapGeneration:
         assert attr0 < attr1 < attr2 < end_job
         assert end_job == len(lines) - 1
 
-        assert op_map.span_for_op(0) == (0, attr0)
-        assert op_map.span_for_op(1) == (attr0, 1)
-        assert op_map.span_for_op(5) == (attr1, 1)
-        assert op_map.span_for_op(8) == (attr2, 1)
+        assert op_map.span_for_op(0) == (0, 1)
+        assert op_map.span_for_op(2) == (attr0 - 1, 2)
+        assert op_map.span_for_op(8) == (attr1 - 1, 2)
+        assert op_map.span_for_op(13) == (attr2 - 1, 2)
         power_line = next(
             i
             for i, line in enumerate(lines)
             if line.startswith("power_range(")
         )
-        assert op_map.span_for_op(2) == (power_line, 1)
-        assert op_map.op_for_line(power_line) == 2
+        assert op_map.span_for_op(3) == (power_line, 1)
+        assert op_map.op_for_line(power_line) == 3
         move3 = next(
             i for i, line in enumerate(lines) if line == "move_xy_to(5.0, 5.0)"
         )
-        assert op_map.span_for_op(3) == (move3, 1)
-        assert op_map.op_for_line(move3) == 3
+        assert op_map.span_for_op(4) == (move3, 1)
+        assert op_map.op_for_line(move3) == 4
         move6 = next(
             i for i, line in enumerate(lines) if line == "move_xy_to(1.0, 1.0)"
         )
-        assert op_map.span_for_op(6) == (move6, 1)
-        assert op_map.op_for_line(move6) == 6
+        assert op_map.span_for_op(9) == (move6, 1)
+        assert op_map.op_for_line(move6) == 9
         cut9 = next(
             i for i, line in enumerate(lines) if line == "cut_xy_to(9.0, 9.0)"
         )
-        assert op_map.span_for_op(9) == (cut9, 1)
-        assert op_map.op_for_line(cut9) == 9
-        assert op_map.span_for_op(11) == (end_job, 1)
-        assert op_map.op_for_line(end_job) == 11
+        assert op_map.span_for_op(14) == (cut9, 1)
+        assert op_map.op_for_line(cut9) == 14
+        assert op_map.span_for_op(17) == (end_job, 1)
+        assert op_map.op_for_line(end_job) == 17
 
 
 class TestOpMapLayoutPinning:
@@ -1052,13 +1186,17 @@ class TestOpMapLayoutPinning:
         """Header/attrs/actions/end_job keep fixed positions."""
         ops = Ops()
         ops.job_start()  # 0 -> declare_job line
-        ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> declare_layer
-        ops.move_to(5.0, 5.0, 0.0)  # 2 -> move_xy_to line
-        ops.layer_end(layer_uid=doc.layers[0].uid)  # 3 -> nothing
-        ops.layer_start(layer_uid=doc.layers[1].uid)  # 4 -> declare_layer
-        ops.line_to(10.0, 8.0, 0.0)  # 5 -> cut_xy_to line
-        ops.layer_end(layer_uid=doc.layers[1].uid)  # 6 -> nothing
-        ops.job_end()  # 7 -> end_job line
+        ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> nothing
+        ops.workpiece_start("wp-0")  # 2 -> comment + declare_layer
+        ops.move_to(5.0, 5.0, 0.0)  # 3 -> move_xy_to line
+        ops.workpiece_end("wp-0")  # 4 -> nothing
+        ops.layer_end(layer_uid=doc.layers[0].uid)  # 5 -> nothing
+        ops.layer_start(layer_uid=doc.layers[1].uid)  # 6 -> nothing
+        ops.workpiece_start("wp-1")  # 7 -> comment + declare_layer
+        ops.line_to(10.0, 8.0, 0.0)  # 8 -> cut_xy_to line
+        ops.workpiece_end("wp-1")  # 9 -> nothing
+        ops.layer_end(layer_uid=doc.layers[1].uid)  # 10 -> nothing
+        ops.job_end()  # 11 -> end_job line
         result = encoder.encode(ops, mock_machine, doc)
         lines = result.text.split("\n")
         op_map = result.op_map
@@ -1080,14 +1218,14 @@ class TestOpMapLayoutPinning:
         assert end_job == len(lines) - 1
         assert attr0 < move2 < attr1 < cut5 < end_job
 
-        assert op_map.span_for_op(0) == (0, attr0)
-        assert op_map.span_for_op(1) == (attr0, 1)
-        assert op_map.span_for_op(2) == (move2, 1)
-        assert op_map.op_for_line(move2) == 2
-        assert op_map.span_for_op(4) == (attr1, 1)
-        assert op_map.span_for_op(5) == (cut5, 1)
-        assert op_map.op_for_line(cut5) == 5
-        assert op_map.span_for_op(7) == (end_job, 1)
+        assert op_map.span_for_op(0) == (0, 1)
+        assert op_map.span_for_op(2) == (attr0 - 1, 2)
+        assert op_map.span_for_op(3) == (move2, 1)
+        assert op_map.op_for_line(move2) == 3
+        assert op_map.span_for_op(7) == (attr1 - 1, 2)
+        assert op_map.span_for_op(8) == (cut5, 1)
+        assert op_map.op_for_line(cut5) == 8
+        assert op_map.span_for_op(11) == (end_job, 1)
 
         for line_num in range(len(lines)):
             op_index = op_map.op_for_line(line_num)
@@ -1129,19 +1267,48 @@ class TestErrorHandling:
         with pytest.raises(ValueError, match="LAYER_START"):
             encoder.encode(ops, mock_machine, doc)
 
+    def test_workpiece_start_before_layer_start_raises(
+        self, encoder, mock_machine, doc
+    ):
+        """WORKPIECE_START before LAYER_START must fail loudly."""
+        ops = Ops()
+        ops.job_start()
+        ops.workpiece_start("wp-0")
+
+        with pytest.raises(
+            ValueError, match="WORKPIECE_START encountered before LAYER_START"
+        ):
+            encoder.encode(ops, mock_machine, doc)
+
+    def test_layer_end_without_workpiece_raises(
+        self, encoder, mock_machine, doc
+    ):
+        """LAYER_END without any WORKPIECE_START must fail loudly."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+
+        with pytest.raises(ValueError, match="WORKPIECE_START"):
+            encoder.encode(ops, mock_machine, doc)
+
 
 def _plan_job(doc):
     """Return Ops for a small two-layer plan test job."""
     ops = Ops()
     ops.job_start()
     ops.layer_start(layer_uid=doc.layers[0].uid)
+    ops.workpiece_start("wp-0")
     ops.set_power(0.5)
     ops.move_to(5.0, 5.0, 0.0)
     ops.line_to(10.0, 8.0, 0.0)
+    ops.workpiece_end("wp-0")
     ops.layer_end(layer_uid=doc.layers[0].uid)
     ops.layer_start(layer_uid=doc.layers[1].uid)
+    ops.workpiece_start("wp-1")
     ops.set_feed_rate(200)
     ops.move_to(20.0, 20.0, 0.0)
+    ops.workpiece_end("wp-1")
     ops.layer_end(layer_uid=doc.layers[1].uid)
     ops.job_end()
     return ops
@@ -1205,6 +1372,7 @@ class TestTranscriptOutput:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.set_head("laser-2")
         ops.ops_section_start(
             SectionType.RASTER_FILL,
@@ -1216,6 +1384,7 @@ class TestTranscriptOutput:
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
         ops.set_power(0.5)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
@@ -1318,8 +1487,10 @@ class TestInjectedGluescript:
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
         ops.move_to(5.0, 5.0, 0.0)
         ops.line_to(10.0, 8.0, 0.0)
+        ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
         return ops
