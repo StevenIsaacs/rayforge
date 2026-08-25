@@ -340,6 +340,28 @@ class RuidaRPAAdapter(Driver):
             name="ruidarpa-connection-loop",
         )
 
+    def _set_connected(self, connected: bool, log_message: str) -> None:
+        """Record a connection-state transition and notify observers."""
+        self._is_connected = connected
+        self.state.status = (
+            DeviceStatus.IDLE if connected else DeviceStatus.UNKNOWN
+        )
+        # connection_status_changed is sent BEFORE state_changed so the
+        # connection notification cannot be lost if a state_changed receiver
+        # raises.
+        status = (
+            TransportStatus.CONNECTED
+            if connected
+            else TransportStatus.DISCONNECTED
+        )
+        self.connection_status_changed.send(self, status=status, message="")
+        self.state_changed.send(self, state=self.state)
+        extra = self._log_extra("TUI_RPC" if self._tui_mode else "RPA")
+        if connected:
+            logger.info(log_message, extra=extra)
+        else:
+            logger.warning(log_message, extra=extra)
+
     async def _connection_loop(self) -> None:
         """Background reconnection loop with exponential backoff."""
         loop = asyncio.get_running_loop()
@@ -465,22 +487,12 @@ class RuidaRPAAdapter(Driver):
                                     extra=log_extra,
                                 )
                             self._unreachable_warned = False
-                        self._is_connected = True
-                        self.state.status = DeviceStatus.IDLE
-                        self.state_changed.send(self, state=self.state)
-                        logger.info(
-                            "Connected to Ruida controller via RPA",
-                            extra=log_extra,
+                        self._set_connected(
+                            True, "Connected to Ruida controller via RPA"
                         )
                     elif not is_alive and prev_alive:
                         # True -> False edge: the connection was lost.
-                        self._is_connected = False
-                        self.state.status = DeviceStatus.UNKNOWN
-                        self.state_changed.send(self, state=self.state)
-                        logger.warning(
-                            "RPA connection lost",
-                            extra=log_extra,
-                        )
+                        self._set_connected(False, "RPA connection lost")
                     prev_alive = is_alive
 
             except asyncio.CancelledError:
@@ -558,26 +570,12 @@ class RuidaRPAAdapter(Driver):
         if RdStatusEvent is not None and isinstance(event, RdStatusEvent):
             event = event.value
         if isinstance(event, str):
-            if event == "CONNECTED":
-                self._is_connected = True
-                self.state.status = DeviceStatus.IDLE
-                self.state_changed.send(self, state=self.state)
-                self.connection_status_changed.send(
-                    self, status=TransportStatus.CONNECTED, message=""
-                )
-            elif event in ("DISCONNECTED", "TERMINATED"):
-                self._is_connected = False
-                self.state.status = DeviceStatus.UNKNOWN
-                self.state_changed.send(self, state=self.state)
-                self.connection_status_changed.send(
-                    self, status=TransportStatus.DISCONNECTED, message=""
-                )
-                logger.warning(
-                    "RPA disconnected",
-                    extra=self._log_extra(
-                        "TUI_RPC" if self._tui_mode else "RPA"
-                    ),
-                )
+            if event == "CONNECTED" and not self._is_connected:
+                self._set_connected(True, "RPA connected")
+            elif (
+                event in ("DISCONNECTED", "TERMINATED") and self._is_connected
+            ):
+                self._set_connected(False, "RPA disconnected")
         elif isinstance(event, dict):
             # StatusDict or RPyC netref — convert to local dict for reliable
             # type handling

@@ -1265,6 +1265,9 @@ class TestStringStatusEvents:
         state_mock = Mock()
         adapter.connection_status_changed.send = connection_mock
         adapter.state_changed.send = state_mock
+        adapter._on_rpa_status("CONNECTED")
+        connection_mock.reset_mock()
+        state_mock.reset_mock()
         adapter._on_rpa_status("DISCONNECTED")
         assert adapter._is_connected is False
         assert adapter.state.status == DeviceStatus.UNKNOWN
@@ -1291,6 +1294,9 @@ class TestStringStatusEvents:
         state_mock = Mock()
         adapter.connection_status_changed.send = connection_mock
         adapter.state_changed.send = state_mock
+        adapter._on_rpa_status("CONNECTED")
+        connection_mock.reset_mock()
+        state_mock.reset_mock()
         adapter._on_rpa_status("TERMINATED")
         assert adapter._is_connected is False
         assert adapter.state.status == DeviceStatus.UNKNOWN
@@ -1302,6 +1308,49 @@ class TestStringStatusEvents:
         assert state_mock.call_args.kwargs["state"].status == (
             DeviceStatus.UNKNOWN
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_status_redundant_events_are_inert(
+        self, adapter_pair, caplog
+    ):
+        """Repeated CONNECTED/DISCONNECTED events without a state
+        transition must not re-emit signals or log."""
+        caplog.set_level(
+            logging.INFO,
+            logger="rayforge.machine.driver.ruidarpa.rpa_adapter",
+        )
+        adapter, _backend = adapter_pair
+        connection_mock = Mock()
+        state_mock = Mock()
+        adapter.connection_status_changed.send = connection_mock
+        adapter.state_changed.send = state_mock
+        # Already connected: redundant CONNECTED is inert.
+        adapter._on_rpa_status("CONNECTED")
+        assert caplog.text.count("RPA connected") == 1
+        connection_mock.reset_mock()
+        state_mock.reset_mock()
+        adapter._on_rpa_status("CONNECTED")
+        connection_mock.assert_not_called()
+        state_mock.assert_not_called()
+        # Now disconnect, then send redundant DISCONNECTED/TERMINATED.
+        adapter._on_rpa_status("DISCONNECTED")
+        assert caplog.text.count("RPA disconnected") == 1
+        connection_mock.reset_mock()
+        state_mock.reset_mock()
+        adapter._on_rpa_status("DISCONNECTED")
+        connection_mock.assert_not_called()
+        state_mock.assert_not_called()
+        adapter._on_rpa_status("TERMINATED")
+        connection_mock.assert_not_called()
+        state_mock.assert_not_called()
+        assert caplog.text.count("RPA connected") == 1
+        assert caplog.text.count("RPA disconnected") == 1
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1867,6 +1916,141 @@ class TestRpcEmitOnceLogging:
             assert caplog.text.count("RPA server reachable") == 1
             assert caplog.text.count("RPA server unreachable") == 1
             assert adapter._is_connected is True
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_poll_emits_connection_status_on_edges(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """The poll loop emits connection_status_changed on both edges."""
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        is_connected_mock = PropertyMock(
+            side_effect=chain([False, False, True, True, False], repeat(False))
+        )
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
+        adapter, _constructor = self._make_adapter(
+            isolated_context,
+            isolated_machine,
+            monkeypatch,
+            lambda **kw: backend,
+        )
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+        connection_mock = Mock()
+        adapter.connection_status_changed.send = connection_mock
+        try:
+            await _wait_until(
+                lambda: any(
+                    c.kwargs.get("status") == TransportStatus.DISCONNECTED
+                    for c in connection_mock.call_args_list
+                )
+            )
+            # Let several more polls run so the count assertions cannot race
+            # the next poll interval.
+            await _wait_until(lambda: is_connected_mock.call_count >= 7)
+            assert (
+                sum(
+                    1
+                    for c in connection_mock.call_args_list
+                    if c.kwargs.get("status") == TransportStatus.CONNECTED
+                )
+                == 1
+            )
+            assert (
+                sum(
+                    1
+                    for c in connection_mock.call_args_list
+                    if c.kwargs.get("status") == TransportStatus.DISCONNECTED
+                )
+                == 1
+            )
+        finally:
+            adapter._keep_running = False
+            task = adapter._connection_task
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        await adapter.cleanup()
+        await isolated_machine.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_rpc_poll_wins_edge_then_late_callback_is_inert(
+        self, isolated_context, isolated_machine, monkeypatch
+    ):
+        """A late callback for an edge the poll loop already handled must be
+        inert — exactly one emission per direction."""
+        backend = Mock(spec=RpcRdDriver)
+        backend.start.return_value = True
+        is_connected_mock = PropertyMock(
+            side_effect=chain(
+                [False, False, True, True, True, True, False], repeat(False)
+            )
+        )
+        monkeypatch.setattr(
+            type(backend), "is_connected", is_connected_mock, raising=False
+        )
+        adapter, _constructor = self._make_adapter(
+            isolated_context,
+            isolated_machine,
+            monkeypatch,
+            lambda **kw: backend,
+        )
+        connection_mock = Mock()
+        state_mock = Mock()
+        adapter.connection_status_changed.send = connection_mock
+        adapter.state_changed.send = state_mock
+        adapter._keep_running = True
+        await adapter._connect_implementation()
+
+        def connected_count():
+            return sum(
+                1
+                for c in connection_mock.call_args_list
+                if c.kwargs.get("status") == TransportStatus.CONNECTED
+            )
+
+        def disconnected_count():
+            return sum(
+                1
+                for c in connection_mock.call_args_list
+                if c.kwargs.get("status") == TransportStatus.DISCONNECTED
+            )
+
+        try:
+            # The poll loop wins the False->True edge first.
+            await _wait_until(
+                lambda: (
+                    adapter._is_connected is True and connected_count() == 1
+                )
+            )
+            # A late CONNECTED callback for the same edge must be inert.
+            adapter._on_rpa_status("CONNECTED")
+            assert adapter._is_connected is True
+            assert connected_count() == 1
+            # The poll loop wins the True->False edge next.
+            await _wait_until(
+                lambda: (
+                    adapter._is_connected is False
+                    and disconnected_count() == 1
+                )
+            )
+            # A late DISCONNECTED callback must be inert too.
+            adapter._on_rpa_status("DISCONNECTED")
+            assert adapter._is_connected is False
+            assert disconnected_count() == 1
+            assert connected_count() == 1
         finally:
             adapter._keep_running = False
             task = adapter._connection_task
