@@ -7,6 +7,7 @@ and snapshot the rendered UI.
 
 Targets (``config-wizard:<step>``):
 
+* ``permissions``   — Step 0 (permission pre-flight)
 * ``profile``      — Step 1 (pick source)
 * ``controller``   — Step 2 (choose controller)
 * ``connect``      — Step 3 (connection)
@@ -25,6 +26,7 @@ import time
 
 from utils import (
     get_target,
+    restore_config,
     run_on_main_thread,
     set_window_size,
     take_screenshot,
@@ -70,6 +72,7 @@ def wizard_step_for(target: str) -> str:
     return target.split(":")[-1].replace("-", "_")
 
 
+@restore_config
 def main():
     target = get_target("config-wizard:connect")
     if not target.startswith("config-wizard:"):
@@ -106,6 +109,34 @@ def main():
         run_on_main_thread(suppress_auto_probe)
 
     run_on_main_thread(lambda: wizard._navigate_to(step))
+
+    if step == "permissions":
+        # The pre-flight page reflects the host's actual permissions;
+        # seed representative issues so the screenshot shows the
+        # remediation instructions.
+        def seed_issues():
+            from rayforge.shared.util.permissions import PermissionIssue
+
+            page = wizard._get_page("permissions")
+            page._rebuild(
+                [
+                    PermissionIssue(
+                        category="serial",
+                        title="Serial Port Access",
+                        summary=(
+                            "Serial ports were detected, but your user "
+                            "cannot open them."
+                        ),
+                        commands=["sudo usermod -a -G dialout $USER"],
+                        note=(
+                            "Log out and log back in for the change to "
+                            "take effect."
+                        ),
+                    ),
+                ]
+            )
+
+        run_on_main_thread(seed_issues)
     time.sleep(0.5)
     take_screenshot(target_to_filename(target))
 

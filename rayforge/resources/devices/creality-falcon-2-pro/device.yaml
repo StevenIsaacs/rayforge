@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: Creality Falcon 2 Pro 40W
+  vendor: Creality
+  model: Falcon 2 Pro 40W
   description: Enclosed 40W diode laser engraver with 300x300mm work area
 machine:
   driver: GrblSerialDriver
@@ -16,8 +18,11 @@ machine:
   max_travel_speed: 25000
   max_cut_speed: 3000
   home_on_start: false
+  has_z: false
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 40
     frame_power_percent: 0.1
     spot_size_mm:
     - 0.1

@@ -226,6 +226,9 @@ class RayforgeContext:
             logger.info("Lazy loading machine manager")
             self._machine_mgr = MachineManager(MACHINE_DIR)
             if not self._machine_mgr.machines:
+                # Creates a marked placeholder machine so the app stays
+                # usable. On first launch the UI presents the setup
+                # wizard instead of silently keeping the placeholder.
                 self._machine_mgr.create_default_machine()
         return self._machine_mgr
 
@@ -329,13 +332,16 @@ class RayforgeContext:
     def device_profile_mgr(self) -> "DeviceProfileManager":
         """Returns the device profile manager."""
         if self._device_profile_mgr is None:
+            from . import config
             from .config import BUILTIN_DEVICES_DIR, USER_DEVICES_DIR
+            from .machine.device import discovery_journal
             from .machine.device.manager import DeviceProfileManager
 
             logger.info("Lazy loading device profile manager")
             self._device_profile_mgr = DeviceProfileManager(
                 [BUILTIN_DEVICES_DIR, USER_DEVICES_DIR],
                 install_dir=USER_DEVICES_DIR,
+                journal_file=discovery_journal.journal_file(config.CONFIG_DIR),
             )
             self._device_profile_mgr.discover(context=self)
         return self._device_profile_mgr

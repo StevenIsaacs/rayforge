@@ -5,6 +5,86 @@ All notable changes to Rayforge will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.10.3
+
+### Changed
+
+- AppStream metainfo entries reordered and corrected to pass the
+  Flathub linter
+
+### Internal
+
+- Added AppStream metainfo validation to lint
+
+## 1.10.2
+
+### Added
+
+- Laser heads now carry physical power data: emission wavelength and
+  optical output wattage, with researched values shipped for all
+  built-in device profiles and effective fallback values shown when
+  unset. These values are not used by any feature yet; they lay the
+  groundwork for upcoming physics-based features. Laser settings are
+  split into Properties and Optics groups
+- Machines created from a device profile now detect when that profile
+  has changed and offer a review dialog listing every differing
+  setting before applying updates
+- The Creality Falcon 10W preamble now turns on the extraction fan
+- New device profile for the NEJE Master 2s
+
+### Changed
+
+- Upgrade raygeo to 1.45.1
+
+### Fixed
+
+- Framing applied the active work coordinate system offset twice,
+  driving the head toward doubled coordinates (#362)
+- A failed background job rebuild could wedge all later job sends;
+  failures now surface as an error instead of blocking forever
+- Toggling "Rescan Content" on a contour step now takes effect, and
+  the threshold row appears directly below it
+- Built-in device profiles for two-axis lasers now correctly report
+  no Z axis, and the Z setting survives wizard edits and profile
+  exports
+- Numeric spin entries no longer lose in-progress text when a value
+  gets clamped or after switching the display unit
+- The 3D simulator camera no longer overshoots or spins wildly on
+  far clicks; pan, zoom, and orbit now track the pointer consistently
+  in every view
+- The simulator always turns the laser off at the end of a job
+- Expected cancellations during rapid rebuilds no longer produce
+  tracebacks in the log
+- Jog panel "Home All" button now sends $H instead of per-axis
+  homing commands, fixing a hang on firmwares that do not support
+  $HX/$HY/$HZ (#363)
+
+## 1.10.1
+
+### Fixed
+
+- GRBL: the driver now owns the hold/pause state, so the hold/resume
+  toggle stays in sync and Resume actually sends "~" instead of
+  re-sending "!" (pause)
+- GRBL: status polling is no longer starved while the send loop waits
+  on a full RX buffer, so driver state no longer goes stale during
+  pauses and buffer stalls
+- GRBL: a job is now aborted (with a connection error) instead of
+  retrying forever when the device stops responding during a buffer
+  stall
+- GRBL: realtime console commands (~, !, ?) are sent directly via the
+  control path instead of being streamed as buffered gcode, so they no
+  longer queue behind commands or start phantom jobs
+- GRBL: the UI now reflects the RUN state at job start when status
+  polling is disabled
+- Refusing to start a job while another is running now shows an
+  actionable message telling the user to wait for it to finish or press
+  Stop
+- Machine job failure notifications are now localized per job type
+  (frame vs. send) with complete, translatable sentences
+- The camera calibration wizard now passes the generated CharucoBoard
+  to the capture page, so Capture Frame works again
+
 ## 1.10.0
 
 ### Added

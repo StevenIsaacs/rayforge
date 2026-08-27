@@ -8,6 +8,16 @@ from blinker import Signal
 
 from ...context import get_context
 from ...shared.tasker import task_mgr
+from ..device.profile import DeviceProfile
+from ..device.profile_diff import (
+    SettingDiff,
+    find_outdated_profiles,
+    split_reviewable,
+)
+from ..device.schema_migration import (
+    CURRENT_SCHEMA_VERSION,
+    find_schema_migrations,
+)
 from ..driver.driver import ResourceBusyError
 from .controller import MachineController
 from .machine import Machine
@@ -201,12 +211,22 @@ class MachineManager:
     def get_machine_by_id(self, machine_id):
         return self.machines.get(machine_id)
 
+    def get_placeholder_machines(self) -> list["Machine"]:
+        """Returns all machines that are still untouched placeholders."""
+        return [m for m in self.machines.values() if m.placeholder]
+
     def get_machines(self) -> list["Machine"]:
         """Returns a list of all managed machines, sorted by name."""
         return sorted(self.machines.values(), key=lambda m: m.name)
 
     def create_default_machine(self):
         machine = Machine(get_context())
+        # Mark it so the UI can offer the setup wizard while this
+        # placeholder is still the active machine.
+        machine.placeholder = True
+        # Fresh machines already carry current defaults; stamp them so
+        # they never trigger the schema-migration review dialog.
+        machine.schema_version = CURRENT_SCHEMA_VERSION
         self.add_machine(machine)
         return machine
 
@@ -249,6 +269,50 @@ class MachineManager:
     def on_machine_changed(self, machine, **kwargs):
         self.save_machine(machine)
         self.machine_updated.send(self, machine_id=machine.id)
+
+    def get_pending_profile_reviews(
+        self,
+    ) -> list[tuple[Machine, DeviceProfile]]:
+        """Returns ``(machine, profile)`` pairs whose source device
+        profile changed since the machine's last review and has at
+        least one reviewable setting difference.
+
+        Pairs whose profile changed but where the machine already
+        matches (no diff) are silently marked reviewed so they do not
+        re-trigger. The manager owns the profile lookup and the
+        silent-stamping; callers only need to present the returned
+        pairs.
+        """
+        context = get_context()
+        profiles_by_id = {
+            p.id: p for p in context.device_profile_mgr.get_all()
+        }
+        outdated = find_outdated_profiles(self.get_machines(), profiles_by_id)
+        reviewable, nothing_to_do = split_reviewable(outdated)
+        for machine, profile in nothing_to_do:
+            machine.reviewed_profile_hash = profile.content_hash()
+            machine.changed.send(machine)
+        return reviewable
+
+    def get_pending_schema_migrations(
+        self,
+    ) -> list[tuple[Machine, list[SettingDiff]]]:
+        """Returns ``(machine, diffs)`` pairs for every loaded machine
+        whose ``schema_version`` is older than the current one and that
+        has at least one reviewable setting diff.
+
+        The manager owns the machine list and the schema-version
+        comparison; callers (the UI) only need to present the returned
+        diffs.
+        """
+        pending: list[tuple[Machine, list[SettingDiff]]] = []
+        for machine in self.machines.values():
+            if machine.schema_version >= CURRENT_SCHEMA_VERSION:
+                continue
+            diffs = find_schema_migrations(machine)
+            if diffs:
+                pending.append((machine, diffs))
+        return pending
 
     def load(self):
         for file in self.base_dir.glob("*.yaml"):

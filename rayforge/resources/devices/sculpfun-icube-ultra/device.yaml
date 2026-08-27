@@ -19,8 +19,11 @@ machine:
   supports_arcs: true
   supports_curves: false
   home_on_start: false
+  has_z: false
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 12
     frame_power_percent: 2.0
     focus_power_percent: 1.0
     spot_size_mm:

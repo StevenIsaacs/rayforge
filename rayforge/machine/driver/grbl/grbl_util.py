@@ -13,6 +13,48 @@ from ..driver import DeviceError, DeviceState, DeviceStatus, Pos
 # GRBL $13 setting key: "Report in inches" (boolean).
 GRBL_REPORT_INCHES_KEY = "13"
 
+# GRBL realtime command characters. The firmware executes these
+# immediately upon reception: they bypass the RX buffer, must never
+# be queued behind buffered gcode, and never produce an 'ok' ack.
+GRBL_REALTIME_COMMANDS = frozenset({"?", "~", "!"})
+
+# Matches Grbl / grblHAL welcome banners ("Grbl 1.1f ['$' for help]")
+# and realtime status reports ("<Idle|MPos:...>"). Also matches
+# build-info / feedback messages ("[VER:...]", "[OPT:...]",
+# "[MSG:...]"): some forks never mention Grbl in their boot output
+# and instead greet with $I-style lines (e.g. the Sculpfun iCube).
+# Used to claim a serial port during device discovery.
+grbl_discovery_re = re.compile(
+    rb"\bgrbl(?:hal)?\b|<(?:Idle|Run|Hold|Alarm|Home)[,|>]"
+    rb"|\[(?:VER|OPT|MSG|GC):",
+    re.IGNORECASE,
+)
+
+
+def is_grbl_output(data: bytes) -> bool:
+    """True when raw serial output identifies a Grbl device."""
+    return bool(grbl_discovery_re.search(data))
+
+
+def split_realtime_commands(
+    lines: list[str],
+) -> tuple[list[str], list[str]]:
+    """
+    Split command lines into realtime commands and regular gcode.
+
+    Returns ``(gcode_lines, realtime_lines)``, preserving the order
+    within each group.
+    """
+    gcode = []
+    realtime = []
+    for line in lines:
+        if line in GRBL_REALTIME_COMMANDS:
+            realtime.append(line)
+        else:
+            gcode.append(line)
+    return gcode, realtime
+
+
 _gcode_comment_re = re.compile(r"\([^)]*\)")
 
 
@@ -641,6 +683,50 @@ def extract_device_name(build_info: list[str]) -> str:
             if build_name:
                 return build_name
     return "Unknown Grbl Device"
+
+
+def extract_device_name_from_output(data: bytes) -> str | None:
+    """
+    Extract a human-readable device name from raw serial output, as
+    captured during device discovery.
+
+    Returns the machine name when the output carries one (e.g. Grbl's
+    ``[MSG:machine:...]`` line or a ``[VER:...]`` build name). When no
+    name is present (e.g. a stock Grbl whose banner only states its
+    version), falls back to the first informative banner line — a
+    ``Grbl``/``GrblHAL`` version line, a build-info ``[VER:...]`` /
+    ``[OPT:...]`` / ``[MSG:...]`` line, or a status report — skipping
+    bare ``ok``/``error:`` acks that are merely responses to the
+    scanner's nudge characters. Returns None only when the output has
+    no usable line at all.
+    """
+    lines = data.decode("ascii", errors="replace").splitlines()
+    name = extract_device_name(lines)
+    if name and name != "Unknown Grbl Device":
+        return name
+    return _extract_grbl_banner(lines)
+
+
+def _extract_grbl_banner(lines: list[str]) -> str | None:
+    """The first GRBL output line worth showing as a banner, skipping
+    bare protocol acknowledgements and stray bytes from a DTR-reset
+    glitch."""
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if _is_grbl_ack(line):
+            continue
+        return line[:80]
+    return None
+
+
+def _is_grbl_ack(line: str) -> bool:
+    """True when *line* is a bare ``ok``/``error:`` acknowledgement,
+    possibly preceded by stray non-printable bytes (e.g. a NULL byte
+    or a replacement character from a DTR-reset glitch)."""
+    stripped = line.lstrip("\ufffd").lstrip("\x00")
+    return stripped == "ok" or stripped.startswith("error:")
 
 
 def version_supports_single_axis_homing(

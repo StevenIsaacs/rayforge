@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: Atomstack X40 Pro
+  vendor: Atomstack
+  model: X40 Pro
   description: 40W diode laser engraver with 400x400mm work area and air assist
 machine:
   driver: GrblSerialDriver
@@ -14,8 +16,11 @@ machine:
   max_travel_speed: 10000
   max_cut_speed: 3000
   home_on_start: true
+  has_z: false
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 40
     frame_power_percent: 1.0
     focus_power_percent: 1.0
     spot_size_mm:

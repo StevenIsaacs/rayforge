@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: xTool D1 Pro
+  vendor: xTool
+  model: D1 Pro
   description: Diode laser engraver with 430x390mm work area, connected via Wi-Fi
 machine:
   driver: GrblNetworkDriver
@@ -12,12 +14,15 @@ machine:
   max_travel_speed: 3000
   max_cut_speed: 1000
   home_on_start: true
+  has_z: false
   driver_args:
     host: ''
     port: 8080
     ws_port: 8081
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 20
     frame_power_percent: 1.0
     focus_power_percent: 1.0
     spot_size_mm:

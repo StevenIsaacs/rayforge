@@ -7,6 +7,7 @@ from raygeo.geo.types import Polygon, Rect
 from ..types import EntityID
 
 if TYPE_CHECKING:
+    from ..commands.mirror import MirrorAxis
     from ..constraints import Constraint
     from ..registry import EntityRegistry
 
@@ -18,6 +19,9 @@ class Entity:
         self.id: EntityID = id
         self.construction = construction
         self.invisible = False
+        # True if this entity was created as a copy of a pattern/array
+        # instance. Rendered with a distinct dashed style.
+        self.pattern_copy = False
         self.type = "entity"
         # Constrained state is calculated by solver
         self.constrained = False
@@ -97,6 +101,17 @@ class Entity:
         """
         return []
 
+    def mirror(self, axis: "MirrorAxis") -> None:
+        """
+        Updates entity-specific non-point state for a mirror transform.
+
+        Point positions are mirrored centrally by the command (since points
+        are shared resources in the registry). This method handles only
+        entity-internal state such as bezier control-point deltas or arc
+        chirality. The default is a no-op: entities whose geometry is fully
+        defined by their control points need no special handling.
+        """
+
     def is_contained_by(
         self,
         rect: Rect,
@@ -172,16 +187,15 @@ class Entity:
         }
         if self.invisible:
             data["invisible"] = True
+        if self.pattern_copy:
+            data["pattern_copy"] = True
         return data
 
-    @classmethod
-    def _from_dict_base(cls, data: dict[str, Any]) -> dict[str, Any]:
-        """Extract base entity attributes from a dictionary."""
-        return {
-            "id": data["id"],
-            "construction": data.get("construction", False),
-            "invisible": data.get("invisible", False),
-        }
+    def restore_base_flags(self, data: dict[str, Any]) -> None:
+        """Restores base flags serialized by to_dict() but not accepted
+        as constructor arguments."""
+        self.invisible = data.get("invisible", False)
+        self.pattern_copy = data.get("pattern_copy", False)
 
     def __repr__(self) -> str:
         return f"Entity(id={self.id}, type={self.type})"

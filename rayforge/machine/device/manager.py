@@ -9,10 +9,13 @@ from typing import TYPE_CHECKING, Optional
 import yaml
 
 from ...core.model import ModelLibrary
+from ..discovery import DeviceIdentity
+from . import discovery_journal
 from .lightburn_importer import (
     ImportSummary,
     convert_to_profile,
 )
+from .matching import ProfileMatch, score_profile
 from .profile import (
     CURRENT_API_VERSION,
     DIALECT_FILENAME,
@@ -86,9 +89,11 @@ class DeviceProfileManager:
         self,
         source_dirs: list[Path] | None = None,
         install_dir: Path | None = None,
+        journal_file: Path | None = None,
     ):
         self._source_dirs: list[Path] = source_dirs or []
         self._install_dir: Path | None = install_dir
+        self._journal_file: Path | None = journal_file
         self._profiles: dict[str, DeviceProfile] = {}
         self._load_errors: dict[str, str] = {}
 
@@ -140,6 +145,40 @@ class DeviceProfileManager:
 
     def get_load_errors(self) -> dict[str, str]:
         return dict(self._load_errors)
+
+    def match_device(self, identity: DeviceIdentity) -> list["ProfileMatch"]:
+        """
+        Score every known device profile against a discovered
+        device's *identity* and return the nonzero-confidence
+        candidates, best first.
+
+        Confidence runs from 0.0 (no match) to 1.0 (certain). Only an
+        exact vendor-specific USB vid/pid declared by a profile earns
+        1.0 — stock USB-serial bridge ids (CH340, CP210x, ...) are
+        shared across unrelated products and are capped well below
+        that. Text evidence contributes independently: vendor tokens
+        branded into the USB description or a ``/dev/serial/by-id``
+        link name score mid-range, vendor + model tokens higher.
+        Generic chip names never count as brand words; corporate
+        suffixes ("Technology", "Inc.", ...) are stripped before
+        matching. Declared usb_ids act as positive evidence only — a
+        pid mismatch lowers confidence but never excludes a profile,
+        since one product line can ship with different bridges.
+
+        Callers adopt a result unasked only via :func:`certain_match`;
+        everything else belongs in front of the user.
+        """
+        matches = [
+            ProfileMatch(profile=profile, confidence=confidence)
+            for profile in self._profiles.values()
+            if (confidence := score_profile(profile, identity)) > 0.0
+        ]
+        matches.sort(key=lambda m: (-m.confidence, m.profile.name.lower()))
+        if self._journal_file is not None:
+            discovery_journal.record_match(
+                self._journal_file, identity, matches
+            )
+        return matches
 
     def load_profile(self, path: Path) -> DeviceProfile:
         """
@@ -310,7 +349,12 @@ class DeviceProfileManager:
 
         with tempfile.TemporaryDirectory() as tmp:
             pkg_dir = Path(tmp) / safe
-            export_machine_to_dir(machine, pkg_dir, model_mgr)
+            export_machine_to_dir(
+                machine,
+                pkg_dir,
+                model_mgr,
+                usb_ids=self._source_profile_usb_ids(machine),
+            )
 
             tmp_zip = Path(tmp) / "output.zip"
             pkg_resolved = pkg_dir.resolve()
@@ -325,6 +369,22 @@ class DeviceProfileManager:
             shutil.move(str(tmp_zip), str(zip_path))
 
         return zip_path
+
+    def _source_profile_usb_ids(
+        self, machine: "Machine"
+    ) -> list[tuple[int, int | None]]:
+        """
+        The usb ids declared by the machine's source profile, used as
+        export fallback when the machine itself carries no observed
+        vid/pid.
+        """
+        source_id = getattr(machine, "source_profile_id", None)
+        if not source_id:
+            return []
+        for profile in self._profiles.values():
+            if profile.id == source_id and profile.meta.usb_ids:
+                return profile.meta.usb_ids
+        return []
 
     def _scan_directory(self, directory: Path):
         for child in sorted(directory.iterdir()):

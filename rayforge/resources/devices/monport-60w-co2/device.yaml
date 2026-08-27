@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: Monport 60W CO2
+  vendor: Monport
+  model: 60W CO2
   description: 60W CO2 laser cutter with 600x400mm work area and Ruida controller
 machine:
   driver: RuidaDriver
@@ -18,6 +20,8 @@ machine:
     jog_port: 50210
   heads:
   - max_power: 1000
+    wavelength_nm: 10600
+    max_power_watts: 60
     frame_power_percent: 0.0
     focus_power_percent: 0.0
     spot_size_mm:

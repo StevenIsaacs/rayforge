@@ -1,28 +1,75 @@
 """UI tests for the Unified Machine Configuration Wizard."""
 
+import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
 from gi.repository import Adw
 
+from rayforge.machine.device.matching import (
+    CONFIDENCE_CERTAIN,
+    CONFIDENCE_VENDOR_TOKENS,
+    ProfileMatch,
+)
 from rayforge.machine.device.profile import (
     DeviceMeta,
     DeviceProfile,
     MachineConfig,
 )
+from rayforge.machine.discovery import DeviceIdentity
+from rayforge.machine.driver.grbl import GrblSerialDriver
 from rayforge.machine.models.machine import Origin
+from rayforge.shared.util.permissions import PermissionIssue
 from rayforge.ui_gtk.machine.unified_wizard import UnifiedWizard
 from rayforge.ui_gtk.machine.wizard_pages.ai_lookup_page import AILookupPage
 from rayforge.ui_gtk.machine.wizard_pages.camera_page import CameraPage
 from rayforge.ui_gtk.machine.wizard_pages.connection_page import ConnectionPage
 from rayforge.ui_gtk.machine.wizard_pages.controller_page import ControllerPage
+from rayforge.ui_gtk.machine.wizard_pages.discover_page import DiscoverPage
+from rayforge.ui_gtk.machine.wizard_pages.permissions_page import (
+    PermissionsPage,
+)
 from rayforge.ui_gtk.machine.wizard_pages.probe_page import ProbePage
+from rayforge.ui_gtk.machine.wizard_pages.profile_page import ProfilePage
 from rayforge.ui_gtk.machine.wizard_pages.provider_page import AIProviderPage
 from rayforge.ui_gtk.machine.wizard_pages.review_page import ReviewPage
 
 _CAMERA_PATCH_TARGET = (
     "rayforge.ui_gtk.machine.wizard_pages.camera_page.get_sorted_by_id_paths"
 )
+
+_PERMISSIONS_PATCH_TARGET = (
+    "rayforge.ui_gtk.machine.unified_wizard.check_permissions"
+)
+_DISCOVER_PATCH_TARGET = (
+    "rayforge.ui_gtk.machine.wizard_pages.discover_page.find_all_devices"
+)
+
+
+def _match_result(
+    profile: DeviceProfile | None,
+    confidence: float = CONFIDENCE_CERTAIN,
+) -> list[ProfileMatch]:
+    """A match_device() return value; empty means no candidate."""
+    if profile is None:
+        return []
+    return [ProfileMatch(profile=profile, confidence=confidence)]
+
+
+@pytest.fixture(autouse=True)
+def _inert_device_discovery():
+    """Wizard construction opens the discover page, which would start
+    scanning real serial ports, and runs filesystem-only permission
+    checks whose outcome depends on the host. Keep every test inert."""
+
+    async def _fake_find_all_devices(driver_classes=None, **kwargs):
+        return []
+
+    with (
+        patch(_DISCOVER_PATCH_TARGET, _fake_find_all_devices),
+        patch(_PERMISSIONS_PATCH_TARGET, return_value=[]),
+    ):
+        yield
 
 
 def _profile(driver=None):
@@ -42,9 +89,99 @@ def _make_wizard(ui_context_initializer):
 
 
 @pytest.mark.ui
-def test_wizard_starts_on_profile_page(ui_context_initializer):
+def test_wizard_starts_on_discover_page(ui_context_initializer):
     wizard = _make_wizard(ui_context_initializer)
-    assert wizard.stack.get_visible_child_name() == "profile"
+    assert wizard.stack.get_visible_child_name() == "discover"
+
+
+def _serial_issue():
+    return PermissionIssue(
+        category="serial",
+        title="Serial Port Access",
+        summary="Serial ports cannot be opened.",
+        commands=["sudo usermod -a -G dialout $USER"],
+        note="Log out and back in.",
+    )
+
+
+@pytest.mark.ui
+def test_wizard_starts_on_permissions_page_when_issues(ui_context_initializer):
+    issues = [_serial_issue()]
+    with patch(_PERMISSIONS_PATCH_TARGET, return_value=issues):
+        wizard = _make_wizard(ui_context_initializer)
+    assert wizard.stack.get_visible_child_name() == "permissions"
+    # The pre-flight page never blocks the flow.
+    assert wizard.next_btn.get_visible()
+    assert wizard.next_btn.get_sensitive()
+    assert not wizard.skip_btn.get_visible()
+
+
+@pytest.mark.ui
+def test_permissions_next_routes_to_discover(ui_context_initializer):
+    issues = [_serial_issue()]
+    with patch(_PERMISSIONS_PATCH_TARGET, return_value=issues):
+        wizard = _make_wizard(ui_context_initializer)
+    assert wizard._next_step_after("permissions") == "discover"
+    wizard._on_next_clicked(wizard.next_btn)
+    assert wizard.stack.get_visible_child_name() == "discover"
+
+
+@pytest.mark.ui
+def test_permissions_page_never_shows_back(ui_context_initializer):
+    """The pre-flight page opens the wizard; Back has no meaning there,
+    even when reached again via the history stack."""
+    wizard = _make_wizard(ui_context_initializer)
+    wizard._navigate_to("permissions")
+    wizard._history.append("discover")
+    wizard._update_footer("permissions", wizard._get_page("permissions"))
+    assert not wizard.back_btn.get_visible()
+
+
+@pytest.mark.ui
+def test_permissions_page_lists_copyable_commands(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    wizard._navigate_to("permissions")
+    page = wizard._get_page("permissions")
+    assert isinstance(page, PermissionsPage)
+
+    issue = PermissionIssue(
+        category="serial",
+        title="Serial Port Access",
+        summary="Serial ports cannot be opened.",
+        commands=[
+            "sudo snap set system experimental.hotplug=true",
+            "sudo snap connect rayforge:serial-port",
+        ],
+    )
+    page._rebuild([issue])
+
+    assert [r._command for r in page._command_rows] == [
+        "sudo snap set system experimental.hotplug=true",
+        "sudo snap connect rayforge:serial-port",
+    ]
+    assert page.ready is True
+
+
+@pytest.mark.ui
+def test_permissions_page_shows_ok_state_when_clear(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    wizard._navigate_to("permissions")
+    page = wizard._get_page("permissions")
+    assert isinstance(page, PermissionsPage)
+
+    page._rebuild([])
+    assert page._command_rows == []
+    assert page.intro_label.get_text() != ""
+
+
+@pytest.mark.ui
+def test_initial_step_skips_permissions_when_check_fails(
+    ui_context_initializer,
+):
+    """A broken permission check must never trap the user."""
+    with patch(_PERMISSIONS_PATCH_TARGET, side_effect=RuntimeError("boom")):
+        wizard = _make_wizard(ui_context_initializer)
+    assert wizard._initial_step() == "discover"
 
 
 @pytest.mark.ui
@@ -60,6 +197,13 @@ def test_button_bar_lives_inside_main_box(ui_context_initializer):
 def test_footer_action_buttons_follow_page(ui_context_initializer):
     wizard = _make_wizard(ui_context_initializer)
 
+    discover_page = wizard._get_page("discover")
+    assert discover_page is not None
+    assert [b.get_label() for b in wizard._footer_action_buttons] == [
+        b.get_label() for b in discover_page.footer_buttons()
+    ]
+
+    wizard._navigate_to("profile")
     profile_page = wizard._get_page("profile")
     assert profile_page is not None
     assert [b.get_label() for b in wizard._footer_action_buttons] == [
@@ -99,6 +243,8 @@ def test_wizard_step_order_declared():
     from rayforge.ui_gtk.machine.unified_wizard import _STEP_ORDER
 
     assert _STEP_ORDER == [
+        "permissions",
+        "discover",
         "profile",
         "controller",
         "connect",
@@ -236,16 +382,43 @@ def test_source_selected_other_goes_to_controller(ui_context_initializer):
 
 
 @pytest.mark.ui
-def test_known_profile_skips_ai_hw_head_pages(ui_context_initializer):
-    """A picked profile carries trusted specs, so after Connection the
-    wizard skips probe, AI, hardware and head — landing on Rotary.
-    Imports are not fully reliable, so they keep hardware/head (but
-    still skip the AI pages)."""
+def test_clone_profile_preserves_all_config_fields(ui_context_initializer):
+    """The working-profile clone must carry every MachineConfig field
+    (e.g. has_z) and the stable meta id, so machines created from the
+    wizard match direct profile creation."""
+    from dataclasses import fields as dc_fields
+
+    src = _profile()
+    src.meta.id = "test-machine"
+    src.machine_config.has_z = False
+    src.machine_config.max_cut_speed = 4242
+
+    wizard = _make_wizard(ui_context_initializer)
+    cloned = wizard._clone_profile(src)
+
+    for f in dc_fields(MachineConfig):
+        assert getattr(cloned.machine_config, f.name) == getattr(
+            src.machine_config, f.name
+        ), f"clone dropped field '{f.name}'"
+    assert cloned.meta.id == "test-machine"
+    assert cloned.dialect_config == src.dialect_config
+    assert isinstance(cloned.meta, DeviceMeta)
+    # The review page renames the machine via profile.meta.name.
+    cloned.meta.name = "Renamed Machine"
+
+
+@pytest.mark.ui
+def test_known_profile_skips_to_review(ui_context_initializer):
+    """A picked profile carries trusted specs and optional hardware,
+    so after Connection the wizard skips probe, AI, hardware, head,
+    rotary and camera — landing on Review. Imports are not fully
+    reliable, so they keep hardware/head (but still skip the AI
+    pages)."""
     wizard = _make_wizard(ui_context_initializer)
     wizard._on_profile_source_selected(
         None, kind="profile", profile=_profile(driver="RuidaDriver")
     )
-    assert wizard._next_step_after("connect") == "rotary"
+    assert wizard._next_step_after("connect") == "review"
     assert {
         "controller",
         "probe",
@@ -253,6 +426,8 @@ def test_known_profile_skips_ai_hw_head_pages(ui_context_initializer):
         "ai_lookup",
         "hardware",
         "head",
+        "rotary",
+        "camera",
     } <= wizard._skipped_steps_set
 
 
@@ -319,10 +494,12 @@ def test_materialize_machine_emits_profile_created(ui_context_initializer):
 
 @pytest.mark.ui
 def test_profile_page_hides_next_button(ui_context_initializer):
-    """Step 1 advances only via explicit source selection, so the
-    generic Next button must not appear next to "Other / Unknown
-    Device…" — otherwise the two look like duplicate primary actions."""
+    """The profile step advances only via explicit source selection,
+    so the generic Next button must not appear next to "Other /
+    Unknown Device…" — otherwise the two look like duplicate primary
+    actions."""
     wizard = _make_wizard(ui_context_initializer)
+    wizard._navigate_to("profile")
     assert not wizard.next_btn.get_visible()
 
 
@@ -331,6 +508,7 @@ def test_back_visible_and_returns_to_profile_after_source(
     ui_context_initializer,
 ):
     wizard = _make_wizard(ui_context_initializer)
+    wizard._navigate_to("profile")
     wizard._on_profile_source_selected(
         None, kind="profile", profile=_profile()
     )
@@ -343,6 +521,7 @@ def test_back_visible_and_returns_to_profile_after_source(
 @pytest.mark.ui
 def test_back_visible_after_other_source(ui_context_initializer):
     wizard = _make_wizard(ui_context_initializer)
+    wizard._navigate_to("profile")
     wizard._on_profile_source_selected(None, kind="other", profile=None)
     assert wizard.stack.get_visible_child_name() == "controller"
     assert wizard.back_btn.get_visible()
@@ -418,8 +597,8 @@ def test_skip_button_only_on_optional_pages(ui_context_initializer):
         wizard._navigate_to(name)
         assert wizard.skip_btn.get_visible(), name
     for name in (
+        "discover",
         "profile",
-        "controller",
         "connect",
         "probe",
         "ai_lookup",
@@ -702,3 +881,877 @@ def test_ai_lookup_page_progress_bar_tracks_lookup(ui_context_initializer):
     assert page._progress_bar.get_visible()
     page._stop_pulse()
     assert not page._progress_bar.get_visible()
+
+
+def _discovered_device(**overrides):
+    from rayforge.machine.discovery import DiscoveredDevice
+
+    defaults = {
+        "driver_name": "GrblSerialDriver",
+        "params": {"port": "/dev/ttyUSB0", "baudrate": 115200},
+        "label": "GRBL device",
+        "detail": "/dev/ttyUSB0 at 115200 baud",
+        "identity": DeviceIdentity(firmware="grbl", banner="Grbl 1.1f"),
+    }
+    defaults.update(overrides)
+    return DiscoveredDevice(**defaults)
+
+
+@pytest.mark.ui
+def test_discover_page_lists_devices(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    assert wizard.stack.get_visible_child_name() == "discover"
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    page._apply_scan_result([])
+    assert page.status_label.get_text() == "No devices detected yet"
+    assert page.status_box.get_visible()
+
+    with patch.object(GrblSerialDriver, "supports_probing", False):
+        page._apply_scan_result([_discovered_device()])
+    assert not page.status_box.get_visible()
+    assert list(page._device_rows) == ["GrblSerialDriver:/dev/ttyUSB0"]
+    row = page._device_rows["GrblSerialDriver:/dev/ttyUSB0"]
+    assert row.get_title() == "GRBL device"
+    subtitle = row.get_subtitle()
+    assert subtitle is not None
+    assert "/dev/ttyUSB0 at 115200 baud" in subtitle
+
+    # A held device is not rescanned, so its row survives empty scan
+    # results; only unplugging (port gone from the system) removes it.
+    page._apply_scan_result([])
+    assert list(page._device_rows) == ["GrblSerialDriver:/dev/ttyUSB0"]
+
+
+@pytest.mark.ui
+def test_discover_page_select_button(ui_context_initializer):
+    """Every device row carries a Select button; clicking it picks
+    the device just like activating the row."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    with patch.object(GrblSerialDriver, "supports_probing", False):
+        page._apply_scan_result([_discovered_device()])
+    row = page._device_rows["GrblSerialDriver:/dev/ttyUSB0"]
+    assert row.select_button is not None
+    assert row.select_button.get_label() == "Select"
+
+    selected = {}
+    page.device_selected.connect(
+        lambda sender, **kw: selected.update(kw), weak=False
+    )
+    row.select_button.emit("clicked")
+    assert selected["device"].key == "GrblSerialDriver:/dev/ttyUSB0"
+
+
+@pytest.mark.ui
+def test_discover_page_marks_already_configured_device(
+    ui_context_initializer,
+):
+    """A device whose connection key matches a configured machine is
+    shown as read-only: insensitive, with a "Configured" badge and no
+    Select button, and it is never probed."""
+    from rayforge.machine.models.machine import Machine
+
+    context = ui_context_initializer
+    # The default placeholder machine must not count as configured.
+    assert any(m.placeholder for m in context.machine_mgr.get_machines())
+
+    machine = Machine(context)
+    machine.placeholder = False
+    machine.name = "My Workshop Laser"
+    machine.driver_name = "GrblSerialDriver"
+    machine.driver_args = {"port": "/dev/ttyUSB0", "baudrate": 115200}
+    machine.set_axis_extents(400, 300)
+    context.machine_mgr.add_machine(machine)
+
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+    page._refresh_configured_keys()
+    assert "GrblSerialDriver:/dev/ttyUSB0" in page._configured_keys
+
+    with (
+        patch.object(GrblSerialDriver, "supports_probing", True),
+        patch(
+            "rayforge.ui_gtk.machine.wizard_pages.discover_page.task_mgr"
+        ) as tm,
+    ):
+        page._apply_scan_result([_discovered_device()])
+        # Configured devices are never probed.
+        assert not tm.add_coroutine.called
+
+    row = page._device_rows["GrblSerialDriver:/dev/ttyUSB0"]
+    assert row.configured is True
+    assert row.select_button is None
+    assert not row.get_activatable()
+    # The row shows the configured machine's real name and work area,
+    # not the generic discovery label.
+    assert row.get_title() == "My Workshop Laser"
+    subtitle = row.get_subtitle()
+    assert subtitle is not None
+    assert "/dev/ttyUSB0 at 115200 baud" in subtitle
+    assert "400" in subtitle
+    assert "300" in subtitle
+
+
+@pytest.mark.ui
+def test_discover_page_unconfigured_device_has_select_button(
+    ui_context_initializer,
+):
+    """A device with no matching configured machine keeps its Select
+    button and stays activatable."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+    page._refresh_configured_keys()
+
+    with patch.object(GrblSerialDriver, "supports_probing", False):
+        page._apply_scan_result([_discovered_device()])
+    row = page._device_rows["GrblSerialDriver:/dev/ttyUSB0"]
+    assert row.configured is False
+    assert row.select_button is not None
+    assert row.select_button.get_label() == "Select"
+    assert row.get_activatable()
+
+
+@pytest.mark.ui
+def test_discover_page_placeholder_machine_ignored(
+    ui_context_initializer,
+):
+    """Placeholder machines are auto-created stubs, so a device sharing
+    their connection key is still selectable."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+    # The default placeholder has no driver, but even if it had one it
+    # would be ignored.
+    page._refresh_configured_keys()
+    assert page._configured_keys == set()
+
+
+@pytest.mark.ui
+def test_discover_page_next_is_configure_manually(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    assert wizard.stack.get_visible_child_name() == "discover"
+    assert wizard.next_btn.get_label() == "Configure Manually"
+    assert wizard.next_btn.get_visible()
+    assert wizard.next_btn.get_sensitive()
+
+
+@pytest.mark.ui
+def test_discover_configure_manually_goes_to_profile(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    wizard.next_btn.emit("clicked")
+    assert wizard.stack.get_visible_child_name() == "profile"
+
+
+@pytest.mark.ui
+def test_device_selected_with_match_skips_to_probe(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    matched = DeviceProfile(
+        meta=DeviceMeta(name="Frob One", vendor="Frobnicate"),
+        machine_config=MachineConfig(driver="GrblSerialDriver"),
+        dialect_config={},
+    )
+    device = _discovered_device()
+    # Keep the auto-started probe on the next step inert.
+    with (
+        patch("rayforge.ui_gtk.machine.wizard_pages.probe_page.task_mgr"),
+        patch.object(
+            type(ui_context_initializer.device_profile_mgr),
+            "match_device",
+            return_value=_match_result(matched),
+        ),
+    ):
+        wizard._on_device_selected(page, device=device)
+
+    assert wizard.stack.get_visible_child_name() == "probe"
+    assert wizard.profile.name == "Frob One"
+    mc = wizard.profile.machine_config
+    assert mc.driver == "GrblSerialDriver"
+    assert mc.driver_args == {"port": "/dev/ttyUSB0", "baudrate": 115200}
+    assert {"profile", "controller", "connect"} <= wizard._skipped_steps_set
+
+
+@pytest.mark.ui
+def test_probe_result_adopts_matched_profile(ui_context_initializer):
+    """The probe's build info names the device, so the wizard re-runs
+    profile matching: a unique match adopts the curated profile and
+    reroutes to the known-machine flow."""
+    wizard = _make_wizard(ui_context_initializer)
+    discover_page = wizard._get_page("discover")
+    assert isinstance(discover_page, DiscoverPage)
+
+    with patch("rayforge.ui_gtk.machine.wizard_pages.probe_page.task_mgr"):
+        wizard._on_device_selected(
+            discover_page, device=_discovered_device(identity=DeviceIdentity())
+        )
+    assert wizard.stack.get_visible_child_name() == "probe"
+    assert wizard._source is None
+
+    # The probe returns a profile built from $I/$$ answers.
+    probed = DeviceProfile(
+        meta=DeviceMeta(name="Frob One"),
+        machine_config=MachineConfig(
+            driver="GrblSerialDriver",
+            driver_args={"port": "/dev/ttyUSB0", "baudrate": 115200},
+            driver_config={"rx_buffer_size": 31},
+            axis_extents=(120.0, 120.0),
+        ),
+        dialect_config={},
+    )
+    curated = DeviceProfile(
+        meta=DeviceMeta(name="Frob One", vendor="Frobnicate"),
+        machine_config=MachineConfig(
+            driver="GrblSerialDriver",
+            axis_extents=(150.0, 150.0),
+        ),
+        dialect_config={},
+    )
+    with patch.object(
+        type(ui_context_initializer.device_profile_mgr),
+        "match_device",
+        return_value=_match_result(curated),
+    ):
+        wizard._on_probe_succeeded(
+            None, profile=probed, warnings=["laser mode off"]
+        )
+
+    assert wizard._source is not None
+    assert wizard._source["kind"] == "profile"
+    assert wizard.profile.name == "Frob One"
+    mc = wizard.profile.machine_config
+    assert mc.driver_args == {"port": "/dev/ttyUSB0", "baudrate": 115200}
+    # Live connection facts survive; curated specs are trusted over
+    # the probe's readings.
+    assert mc.driver_config == {"rx_buffer_size": 31}
+    assert mc.axis_extents == (150.0, 150.0)
+
+    # Known-machine flow: everything through camera is skipped; the
+    # profile is the source of truth for optional hardware too.
+    assert wizard._next_step_after("probe") == "review"
+    assert {
+        "ai_provider",
+        "ai_lookup",
+        "hardware",
+        "head",
+        "rotary",
+        "camera",
+    } <= wizard._skipped_steps_set
+
+
+@pytest.mark.ui
+def test_smoothie_driver_routes_to_probe(ui_context_initializer):
+    """Smoothie now supports probing, so the wizard routes from the
+    connection page to the probe page instead of skipping it."""
+    wizard = _make_wizard(ui_context_initializer)
+    wizard.profile = _profile(driver="SmoothieDriver")
+    assert wizard._next_step_after("connect") == "probe"
+    assert "probe" not in wizard._skipped_steps_set
+
+
+@pytest.mark.ui
+def test_smoothie_probe_merges_profile(ui_context_initializer):
+    """A successful Smoothie probe merges axis extents, speeds, and
+    acceleration into the working profile, exactly like GRBL/Marlin."""
+    wizard = _make_wizard(ui_context_initializer)
+    probed = DeviceProfile(
+        meta=DeviceMeta(name="Smoothieware"),
+        machine_config=MachineConfig(
+            driver="SmoothieDriver",
+            driver_args={"host": "192.168.1.50", "port": 23},
+            driver_config={"firmware_version": "edge-1234abc1"},
+            axis_extents=(200.0, 300.0),
+            max_travel_speed=30000,
+            max_cut_speed=30000,
+            acceleration=1000,
+        ),
+        dialect_config={},
+    )
+    with (
+        patch(
+            "rayforge.ui_gtk.machine.unified_wizard.is_ai_configured",
+            return_value=False,
+        ),
+        patch.object(
+            type(ui_context_initializer.device_profile_mgr),
+            "match_device",
+            return_value=[],
+        ),
+    ):
+        wizard._on_probe_succeeded(None, profile=probed, warnings=[])
+        # No curated profile matched and no source: the flow continues
+        # to the AI provider entry step (then hardware).
+        assert wizard._source is None
+        assert wizard._next_step_after("probe") == "ai_provider"
+
+    mc = wizard.profile.machine_config
+    assert mc.axis_extents == (200.0, 300.0)
+    assert mc.max_travel_speed == 30000
+    assert mc.max_cut_speed == 30000
+    assert mc.acceleration == 1000
+    assert mc.driver_config == {"firmware_version": "edge-1234abc1"}
+
+
+@pytest.mark.ui
+def test_curated_dialect_config_wins_over_probe(ui_context_initializer):
+    """A curated profile's dialect_config is not overwritten by the
+    probe's detection."""
+    wizard = _make_wizard(ui_context_initializer)
+
+    curated_dialect = {"laser_on": "M3 S{power:.0f}", "laser_off": "M5"}
+    wizard.profile = DeviceProfile(
+        meta=DeviceMeta(name="Curated Machine"),
+        machine_config=MachineConfig(driver="GrblSerialDriver"),
+        dialect_config=dict(curated_dialect),
+    )
+
+    probed = DeviceProfile(
+        meta=DeviceMeta(name="Auto"),
+        machine_config=MachineConfig(
+            driver="GrblSerialDriver",
+            axis_extents=(200.0, 200.0),
+        ),
+        dialect_config={"laser_on": "M4 S0", "laser_off": "M5"},
+    )
+
+    with patch.object(
+        type(ui_context_initializer.device_profile_mgr),
+        "match_device",
+        return_value=[],
+    ):
+        wizard._on_probe_succeeded(None, profile=probed, warnings=[])
+
+    assert wizard.profile.dialect_config["laser_on"] == "M3 S{power:.0f}"
+
+
+@pytest.mark.ui
+def test_device_selected_captures_usb_identity(ui_context_initializer):
+    """The discovered device's USB identity is kept for the created
+    machine, so exporting the machine later carries the vid/pid."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    device = _discovered_device(
+        identity=DeviceIdentity(usb_vid=0x1A86, usb_pid=0x7523)
+    )
+    with (
+        patch.object(GrblSerialDriver, "supports_probing", False),
+        patch.object(
+            type(ui_context_initializer.device_profile_mgr),
+            "match_device",
+            return_value=[],
+        ),
+    ):
+        wizard._on_device_selected(page, device=device)
+
+    assert wizard._discovered_usb == (0x1A86, 0x7523)
+
+
+@pytest.mark.ui
+def test_device_selected_with_uncertain_match_shows_picker(
+    ui_context_initializer,
+):
+    """A plausible-but-not-certain profile match never gets adopted
+    unasked: the wizard falls back to the profile picker, which lists
+    the ranked candidates."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    candidate = DeviceProfile(
+        meta=DeviceMeta(name="Frob One", vendor="Frobnicate"),
+        machine_config=MachineConfig(driver="GrblSerialDriver"),
+        dialect_config={},
+    )
+    with (
+        patch.object(GrblSerialDriver, "supports_probing", False),
+        patch.object(
+            type(ui_context_initializer.device_profile_mgr),
+            "match_device",
+            return_value=_match_result(candidate, CONFIDENCE_VENDOR_TOKENS),
+        ),
+    ):
+        wizard._on_device_selected(page, device=_discovered_device())
+
+    assert wizard.stack.get_visible_child_name() == "profile"
+    assert wizard._source is None
+    assert wizard.aux_state.get("discovered") is not None
+    assert wizard.profile.name != "Frob One"
+
+
+@pytest.mark.ui
+def test_device_selected_without_match_probes_device(ui_context_initializer):
+    """No profile match, but a probe-capable driver: ask the device
+    itself instead of making the user pick from the catalog."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    # No tokens → no profile can match; the probe auto-starts on
+    # entry, so keep its task manager inert.
+    with patch("rayforge.ui_gtk.machine.wizard_pages.probe_page.task_mgr"):
+        wizard._on_device_selected(
+            page, device=_discovered_device(identity=DeviceIdentity())
+        )
+
+    assert wizard.stack.get_visible_child_name() == "probe"
+    mc = wizard.profile.machine_config
+    assert mc.driver == "GrblSerialDriver"
+    assert mc.driver_args == {"port": "/dev/ttyUSB0", "baudrate": 115200}
+    assert wizard.aux_state.get("discovered") is not None
+    assert {"controller", "connect"} <= wizard._skipped_steps_set
+
+
+@pytest.mark.ui
+def test_device_selected_without_match_shows_profile(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    # A driver that cannot probe falls back to the profile picker.
+    with patch.object(GrblSerialDriver, "supports_probing", False):
+        wizard._on_device_selected(
+            page, device=_discovered_device(identity=DeviceIdentity())
+        )
+
+    assert wizard.stack.get_visible_child_name() == "profile"
+    mc = wizard.profile.machine_config
+    assert mc.driver == "GrblSerialDriver"
+    assert mc.driver_args == {"port": "/dev/ttyUSB0", "baudrate": 115200}
+
+    profile_page = wizard._get_page("profile")
+    assert isinstance(profile_page, ProfilePage)
+    assert profile_page.hint_row.get_visible()
+
+    # Picking "Device Not Listed" keeps the discovered driver and
+    # collected data; with complete connection args the remaining
+    # known-data steps are skipped and the unknown-machine flow
+    # (AI lookup) begins.
+    wizard._on_profile_source_selected(
+        profile_page, kind="other", profile=None
+    )
+    assert wizard.stack.get_visible_child_name() == "ai_provider"
+    assert wizard.profile.machine_config.driver == "GrblSerialDriver"
+    assert wizard.profile.machine_config.driver_args == {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 115200,
+    }
+
+
+def _octoprint_device():
+    """A device discovered over mDNS, as network discovery yields it."""
+    return _discovered_device(
+        driver_name="OctoPrintDriver",
+        params={"host": "192.168.1.42", "port": 80},
+        label="OctoPrint",
+        detail="192.168.1.42:80 (octopi.local)",
+        identity=DeviceIdentity(
+            firmware="octoprint", banner="OctoPrint on octopi"
+        ),
+    )
+
+
+@pytest.mark.ui
+def test_discover_page_lists_network_device(ui_context_initializer):
+    """mDNS-found devices appear like serial ones, are never held on
+    a serial port, and vanish again when the network loses them."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    page._apply_scan_result([_octoprint_device()])
+    key = "OctoPrintDriver:192.168.1.42:80"
+    assert list(page._device_rows) == [key]
+    assert page.session.held_ports == set()
+    row = page._device_rows[key]
+    assert row.get_title() == "OctoPrint"
+    subtitle = row.get_subtitle()
+    assert subtitle is not None
+    assert "192.168.1.42:80" in subtitle
+
+    # No serial port to hold: an empty rescan drops the row.
+    page._apply_scan_result([])
+    assert list(page._device_rows) == []
+
+
+@pytest.mark.ui
+def test_octoprint_device_selected_goes_to_connect(ui_context_initializer):
+    """Selecting a discovered OctoPrint server keeps the resolved
+    address and asks for the missing API key on the connect page."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    with patch.object(
+        type(ui_context_initializer.device_profile_mgr),
+        "match_device",
+        return_value=[],
+    ):
+        wizard._on_device_selected(page, device=_octoprint_device())
+
+    # host/port alone don't complete the connection args (no API
+    # key yet), so the profile picker comes first.
+    assert wizard.stack.get_visible_child_name() == "profile"
+    mc = wizard.profile.machine_config
+    assert mc.driver == "OctoPrintDriver"
+    assert mc.driver_args == {"host": "192.168.1.42", "port": 80}
+
+    profile_page = wizard._get_page("profile")
+    assert isinstance(profile_page, ProfilePage)
+    wizard._on_profile_source_selected(
+        profile_page, kind="other", profile=None
+    )
+
+    assert wizard.stack.get_visible_child_name() == "connect"
+    connect_page = wizard._get_page("connect")
+    assert isinstance(connect_page, ConnectionPage)
+    values = connect_page.connect_widget.get_values()
+    assert values.get("host") == "192.168.1.42"
+    assert values.get("port") == 80
+    # The API key is still missing: not ready to continue.
+    assert connect_page.ready is False
+
+
+@pytest.mark.ui
+def test_octoprint_device_with_path_prefills_connect(ui_context_initializer):
+    """A path forwarded from the mDNS TXT record prefills the
+    connection page's path field and survives into driver_args."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    device = _discovered_device(
+        driver_name="OctoPrintDriver",
+        params={
+            "host": "192.168.1.42",
+            "port": 80,
+            "path": "/octoprint",
+        },
+        label="OctoPrint",
+        detail="192.168.1.42:80 (octopi.local)",
+        identity=DeviceIdentity(
+            firmware="octoprint", banner="OctoPrint on octopi"
+        ),
+    )
+
+    with patch.object(
+        type(ui_context_initializer.device_profile_mgr),
+        "match_device",
+        return_value=[],
+    ):
+        wizard._on_device_selected(page, device=device)
+
+    assert wizard.stack.get_visible_child_name() == "profile"
+    wizard._on_profile_source_selected(
+        wizard._get_page("profile"), kind="other", profile=None
+    )
+
+    assert wizard.stack.get_visible_child_name() == "connect"
+    connect_page = wizard._get_page("connect")
+    assert isinstance(connect_page, ConnectionPage)
+    values = connect_page.connect_widget.get_values()
+    assert values.get("host") == "192.168.1.42"
+    assert values.get("path") == "/octoprint"
+    # host/port/path present but API key still missing: not ready.
+    assert connect_page.ready is False
+
+
+@pytest.mark.ui
+def test_esp3d_device_selected_goes_to_probe(ui_context_initializer):
+    """A discovered ESP3D board (GrblNetworkDriver) needs nothing
+    beyond its resolved address — every other setup var has a
+    default — so the wizard goes straight to probing."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    device = _discovered_device(
+        driver_name="GrblNetworkDriver",
+        params={"host": "192.168.1.60", "port": 80},
+        label="GRBL (Network)",
+        detail="192.168.1.60:80 (esp3d.local)",
+        identity=DeviceIdentity(firmware="grblnetwork", banner="ESP3D"),
+    )
+
+    with (
+        patch("rayforge.ui_gtk.machine.wizard_pages.probe_page.task_mgr"),
+        patch.object(
+            type(ui_context_initializer.device_profile_mgr),
+            "match_device",
+            return_value=[],
+        ),
+    ):
+        wizard._on_device_selected(page, device=device)
+
+    assert wizard.stack.get_visible_child_name() == "probe"
+    mc = wizard.profile.machine_config
+    assert mc.driver == "GrblNetworkDriver"
+    assert mc.driver_args == {"host": "192.168.1.60", "port": 80}
+    # host alone completes GrblNetworkDriver's required args; the
+    # connect page never comes up.
+    assert "connect" in wizard._skipped_steps_set
+
+
+def _probed_profile(name="Mystery CNC", **machine_overrides):
+    return DeviceProfile(
+        meta=DeviceMeta(name=name),
+        machine_config=MachineConfig(
+            driver="GrblSerialDriver", **machine_overrides
+        ),
+        dialect_config={},
+    )
+
+
+@pytest.mark.ui
+def test_device_selected_with_probe_data_and_match_completes_flow(
+    ui_context_initializer,
+):
+    """Probe data collected on the discover page + a unique profile
+    match: everything through the camera step is skipped and the
+    user lands directly on the review."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    probed = _probed_profile(
+        "Frob One",
+        driver_config={"rx_buffer_size": 31},
+        axis_extents=(120.0, 120.0),
+    )
+    curated = DeviceProfile(
+        meta=DeviceMeta(name="Frob One", vendor="Frobnicate"),
+        machine_config=MachineConfig(
+            driver="GrblSerialDriver", axis_extents=(150.0, 150.0)
+        ),
+        dialect_config={},
+    )
+    device = _discovered_device(
+        identity=DeviceIdentity(), probe_profile=probed
+    )
+    with patch.object(
+        type(ui_context_initializer.device_profile_mgr),
+        "match_device",
+        return_value=_match_result(curated),
+    ):
+        wizard._on_device_selected(page, device=device)
+
+    assert wizard.stack.get_visible_child_name() == "review"
+    assert wizard.profile.name == "Frob One"
+    mc = wizard.profile.machine_config
+    # Live connection facts survive; curated specs are trusted.
+    assert mc.driver_args == {"port": "/dev/ttyUSB0", "baudrate": 115200}
+    assert mc.driver_config == {"rx_buffer_size": 31}
+    assert mc.axis_extents == (150.0, 150.0)
+    assert {
+        "profile",
+        "controller",
+        "connect",
+        "probe",
+        "ai_provider",
+        "ai_lookup",
+        "hardware",
+        "head",
+        "rotary",
+        "camera",
+    } <= wizard._skipped_steps_set
+
+
+@pytest.mark.ui
+def test_device_selected_with_probe_data_without_match_filters_profiles(
+    ui_context_initializer,
+):
+    """Probe data without a match: the profile picker comes up (not
+    the probe page), the probed specs are already in place, and
+    picking a profile completes the known-machine flow."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    probed = _probed_profile(axis_extents=(120.0, 120.0))
+    device = _discovered_device(
+        identity=DeviceIdentity(), probe_profile=probed
+    )
+    wizard._on_device_selected(page, device=device)
+
+    assert wizard.stack.get_visible_child_name() == "profile"
+    assert {"controller", "connect", "probe"} <= wizard._skipped_steps_set
+    assert wizard.profile.machine_config.axis_extents == (120.0, 120.0)
+
+    profile_page = wizard._get_page("profile")
+    assert isinstance(profile_page, ProfilePage)
+
+    curated = DeviceProfile(
+        meta=DeviceMeta(name="Frob One", vendor="Frobnicate"),
+        machine_config=MachineConfig(
+            driver="GrblSerialDriver", axis_extents=(150.0, 150.0)
+        ),
+        dialect_config={},
+    )
+    wizard._on_profile_source_selected(
+        profile_page, kind="profile", profile=curated
+    )
+    assert wizard.stack.get_visible_child_name() == "review"
+    assert wizard.profile.machine_config.axis_extents == (150.0, 150.0)
+    assert wizard.profile.machine_config.driver_args == {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 115200,
+    }
+
+
+@pytest.mark.ui
+def test_discover_page_probes_and_enriches_found_device(
+    ui_context_initializer,
+):
+    """A found device is probed automatically; the row then shows
+    the machine's own name and work area."""
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    device = _discovered_device()
+    with (
+        patch(
+            "rayforge.ui_gtk.machine.wizard_pages.discover_page.get_context",
+            return_value=ui_context_initializer,
+        ),
+        patch(
+            "rayforge.ui_gtk.machine.wizard_pages.discover_page.task_mgr"
+        ) as tm,
+    ):
+        page._apply_scan_result([device])
+        assert tm.add_coroutine.called
+        assert page.session.held_ports == {"/dev/ttyUSB0"}
+
+        probed = _probed_profile("Sculpfun iCube", axis_extents=(120.0, 120.0))
+        task = MagicMock()
+        task.result.return_value = (probed, [])
+        tm.schedule_on_main_thread.side_effect = lambda fn: fn()
+        page._on_probe_done(task, device)
+
+    row = page._device_rows["GrblSerialDriver:/dev/ttyUSB0"]
+    assert row.get_title() == "Sculpfun iCube"
+    assert row.device.probe_profile is probed
+    subtitle = row.get_subtitle()
+    assert subtitle is not None
+    assert "/dev/ttyUSB0 at 115200 baud" in subtitle
+    assert "120" in subtitle
+
+    # The enriched device is what selection emits.
+    selected = {}
+    page.device_selected.connect(
+        lambda sender, **kw: selected.update(kw), weak=False
+    )
+    page._on_row_activated(row)
+    assert selected["device"].probe_profile is probed
+
+
+@pytest.mark.ui
+def test_discover_page_rescan_excludes_and_prunes(ui_context_initializer):
+    wizard = _make_wizard(ui_context_initializer)
+    page = wizard._get_page("discover")
+    assert isinstance(page, DiscoverPage)
+
+    with patch.object(GrblSerialDriver, "supports_probing", False):
+        page._apply_scan_result([_discovered_device()])
+    assert page.session.held_ports == {"/dev/ttyUSB0"}
+
+    # Rescans keep away from ports whose devices are already held.
+    captured = {}
+
+    async def fake_find(driver_classes=None, exclude_ports=None, **kwargs):
+        captured["exclude_ports"] = set(exclude_ports or ())
+
+    with (
+        patch(
+            "rayforge.ui_gtk.machine.wizard_pages.discover_page"
+            ".find_all_devices",
+            fake_find,
+        ),
+        patch(
+            "rayforge.ui_gtk.machine.wizard_pages.discover_page.task_mgr"
+        ) as tm,
+    ):
+        page._start_scan()
+        coro = tm.add_coroutine.call_args.args[0]
+        asyncio.run(coro(None))
+    assert captured["exclude_ports"] == {"/dev/ttyUSB0"}
+
+    # A device that is unplugged is pruned and its port freed.
+    with patch(
+        "rayforge.ui_gtk.machine.wizard_pages.discover_page.SerialTransport"
+    ) as transport:
+        transport.list_port_info.return_value = []
+        present = page._present_ports()
+    assert present is not None
+    page._prune_absent_ports(present)
+    assert page._device_rows == {}
+    assert page.session.held_ports == set()
+
+
+@pytest.mark.ui
+def test_profile_page_suggests_matching_candidates(ui_context_initializer):
+    """With a pending discovered device, the profile list narrows to
+    the matcher's nonzero-confidence candidates, best first; searching
+    broadens it back to the full catalog."""
+    from rayforge.machine.driver import normalize_tokens
+
+    wizard = _make_wizard(ui_context_initializer)
+    profile_page = wizard._get_page("profile")
+    assert isinstance(profile_page, ProfilePage)
+
+    frob = DeviceProfile(
+        meta=DeviceMeta(name="Frob One", vendor="Frobnicate"),
+        machine_config=MachineConfig(driver="GrblSerialDriver"),
+        dialect_config={},
+    )
+    frob_pro = DeviceProfile(
+        meta=DeviceMeta(name="Frob Pro", vendor="Frobnicate", model="Pro"),
+        machine_config=MachineConfig(driver="GrblSerialDriver"),
+        dialect_config={},
+    )
+    device = _discovered_device(
+        identity=DeviceIdentity(tokens=normalize_tokens("Frobnicate laser"))
+    )
+    wizard.aux_state = {"discovered": device}
+
+    mgr = ui_context_initializer.device_profile_mgr
+    ranked = [
+        ProfileMatch(profile=frob_pro, confidence=CONFIDENCE_VENDOR_TOKENS),
+        ProfileMatch(profile=frob, confidence=CONFIDENCE_VENDOR_TOKENS),
+    ]
+    with (
+        patch(
+            "rayforge.ui_gtk.machine.wizard_pages.profile_page.get_context",
+            return_value=ui_context_initializer,
+        ),
+        patch.object(mgr, "match_device", return_value=ranked),
+        patch.object(mgr, "get_all", return_value=[frob, frob_pro]),
+    ):
+        profile_page.enter(wizard.profile)
+        titles = _visible_profile_titles(profile_page)
+        assert titles == ["Frob Pro", "Frob One"]
+
+        # Searching broadens the list back to the full catalog.
+        # (search-changed is delay-debounced by GTK, so filter
+        # explicitly here.)
+        profile_page.search_entry.set_text("gadget")
+        profile_page._filter_and_populate_list()
+        titles = _visible_profile_titles(profile_page)
+        assert titles == []
+
+
+def _visible_profile_titles(page: ProfilePage) -> list[str]:
+    titles = []
+    index = 0
+    while (row := page.list_box.get_row_at_index(index)) is not None:
+        titles.append(row.get_title())  # type: ignore[attr-defined]
+        index += 1
+    return titles

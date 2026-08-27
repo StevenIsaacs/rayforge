@@ -41,6 +41,7 @@ class SketchTool(ABC):
     LABEL: str | None = None
     SHORTCUTS: ClassVar[list[str]] = []
     CURSOR_ICON: str | None = None
+    SHOW_IN_PIE: bool = True
 
     def __init__(self, element: SketchElement):
         self.element = element
@@ -139,6 +140,19 @@ class SketchTool(ABC):
         Override in subclasses for context-sensitive visibility.
         """
         return self.ICON is not None and self.LABEL is not None
+
+    def is_available_for_edit(self, pattern) -> bool:
+        """
+        Returns True if this tool can edit the given pattern definition.
+        Pattern tools override this; all other tools return False.
+        """
+        return False
+
+    def set_edit_target(self, pattern) -> None:
+        """
+        Arms a pattern tool for editing an existing pattern definition.
+        Must be called before the tool is activated. No-op by default.
+        """
 
     def shortcut_is_active(self) -> bool:
         """

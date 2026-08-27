@@ -12,7 +12,9 @@ Replaces the legacy ``MachineProfileSelectorDialog`` + ``ConfigWizard``
 pair.
 """
 
+import copy
 import logging
+from dataclasses import replace as dc_replace
 from gettext import gettext as _
 from typing import Any
 
@@ -24,13 +26,16 @@ from ...camera.models.camera import Camera
 from ...camera.v4l import display_name
 from ...context import get_context
 from ...core.ai.spec_lookup import is_ai_configured
-from ...machine.device.profile import (
-    DeviceMeta,
-    DeviceProfile,
-    MachineConfig,
+from ...machine.device.matching import ProfileMatch, certain_match
+from ...machine.device.profile import DeviceProfile
+from ...machine.driver import (
+    DeviceIdentity,
+    DiscoveredDevice,
+    get_driver_cls,
+    normalize_tokens,
 )
-from ...machine.driver import get_driver_cls
 from ...machine.driver.dummy import NoDeviceDriver
+from ...shared.util.permissions import check_permissions
 from ..camera.wizard.wizard import CameraWizard
 from ..shared.patched_dialog_window import PatchedDialogWindow
 from .wizard_pages import WizardPage, empty_profile
@@ -38,8 +43,10 @@ from .wizard_pages.ai_lookup_page import AILookupPage
 from .wizard_pages.camera_page import CameraPage
 from .wizard_pages.connection_page import ConnectionPage
 from .wizard_pages.controller_page import ControllerPage
+from .wizard_pages.discover_page import DiscoverPage
 from .wizard_pages.hardware_page import HardwarePage
 from .wizard_pages.head_page import HeadPage
+from .wizard_pages.permissions_page import PermissionsPage
 from .wizard_pages.probe_page import ProbePage
 from .wizard_pages.profile_page import ProfilePage
 from .wizard_pages.provider_page import AIProviderPage
@@ -50,8 +57,12 @@ logger = logging.getLogger(__name__)
 
 
 # Ordered list of step names the wizard knows about. Adaptive routing
-# may skip individual entries based on the user's choices.
+# may skip individual entries based on the user's choices. The
+# "permissions" pre-flight only appears when a hardware permission
+# check fails; see _initial_step().
 _STEP_ORDER: list[str] = [
+    "permissions",
+    "discover",
     "profile",
     "controller",
     "connect",
@@ -96,6 +107,10 @@ class UnifiedWizard(PatchedDialogWindow):
         # None for "Other / unknown machine". Used to skip the AI
         # lookup steps when the specs are already in the profile.
         self._source: dict[str, Any] | None = None
+        # USB identity of the discovered device this setup started
+        # from, if any; stamped onto the created machine so exports
+        # can carry it.
+        self._discovered_usb: tuple[int, int | None] | None = None
 
         self.toast_overlay = Adw.ToastOverlay()
         self.set_content(self.toast_overlay)
@@ -139,10 +154,26 @@ class UnifiedWizard(PatchedDialogWindow):
 
         self._build_buttons(self._main_box)
 
-        # Initial state: profile page is step 1.
-        self._navigate_to("profile", record_history=False)
+        # Initial state: the permission pre-flight page when a
+        # hardware access problem was detected, discovery otherwise.
+        self._navigate_to(self._initial_step(), record_history=False)
 
     # ----- public API ----------------------------------------------------
+
+    def _initial_step(self) -> str:
+        """The page to open the wizard on.
+
+        Runs the cheap filesystem-only serial/camera checks and routes
+        to the permissions pre-flight only when something is actually
+        inaccessible; "no devices plugged in" is not a permission
+        problem and must not delay setup.
+        """
+        try:
+            issues = check_permissions()
+        except Exception:
+            logger.exception("Permission check failed")
+            return "discover"
+        return "permissions" if issues else "discover"
 
     def show_error(self, heading: str, body: str) -> None:
         """Convenience: surface a transient error to the user."""
@@ -206,7 +237,11 @@ class UnifiedWizard(PatchedDialogWindow):
     def _get_page(self, name: str) -> WizardPage | None:
         # Step 1 traverses the wizard in declared order — only "next",
         # "back", "skip", and the adaptive router call this.
-        if name == "profile":
+        if name == "discover":
+            cls = DiscoverPage
+        elif name == "permissions":
+            cls = PermissionsPage
+        elif name == "profile":
             cls = ProfilePage
         elif name == "controller":
             cls = ControllerPage
@@ -249,7 +284,9 @@ class UnifiedWizard(PatchedDialogWindow):
             return None
 
     def _wire_page_signals(self, page: WizardPage, name: str) -> None:
-        if isinstance(page, ProfilePage):
+        if isinstance(page, DiscoverPage):
+            page.device_selected.connect(self._on_device_selected)
+        elif isinstance(page, ProfilePage):
             page.source_selected.connect(self._on_profile_source_selected)
         elif isinstance(page, ControllerPage):
             page.controller_selected.connect(self._on_controller_selected)
@@ -295,8 +332,12 @@ class UnifiedWizard(PatchedDialogWindow):
         # Header title reflects the current step.
         self.set_title(page.title or _("Add a Machine"))
 
-        # Back button visible when there's history.
-        self.back_btn.set_visible(bool(self._history))
+        # Back button visible when there's history. The permission
+        # pre-flight is the wizard's entry page and has no meaningful
+        # "before", so it never offers Back.
+        self.back_btn.set_visible(
+            bool(self._history) and name != "permissions"
+        )
 
         # Skip button is only meaningful on optional steps where it is
         # semantically distinct from Next: the AI provider page (skip =
@@ -310,7 +351,10 @@ class UnifiedWizard(PatchedDialogWindow):
         # Next vs Create: Create replaces Next on the final step
         # ("review"). Pages that opt out of the generic Next (e.g.
         # Step 1, which advances via explicit source selection) hide
-        # it entirely so no dead buttons sit on the footer.
+        # it entirely so no dead buttons sit on the footer. Pages may
+        # relabel Next (e.g. "Configure Manually" on the discover
+        # step).
+        self.next_btn.set_label(page.next_label or _("Next"))
         self.next_btn.set_visible(name != "review" and page.next_on_footer)
         self.create_btn.set_visible(name == "review")
 
@@ -383,6 +427,9 @@ class UnifiedWizard(PatchedDialogWindow):
         context = get_context()
         machine = self.profile.create_machine(context)
 
+        if self._discovered_usb is not None:
+            machine.usb_vid, machine.usb_pid = self._discovered_usb
+
         # Apply session-only aux_state on the live machine.
         reverse = self.aux_state.get("reverse", {})
         if reverse.get("x"):
@@ -402,11 +449,11 @@ class UnifiedWizard(PatchedDialogWindow):
         """Where the wizard enters the AI flow after probing/connection.
 
         A known profile or import already carries the machine specs,
-        so the AI provider / lookup steps are skipped entirely. A known
-        *profile* also trusts the work-area and head specs, so the
-        hardware and head steps are skipped too (the user still adds
-        rotary modules / cameras). Imports are not 100% reliable, so
-        the user is walked through hardware and head with prefilled
+        so the AI provider / lookup steps are skipped entirely. A
+        known *profile* is the source of truth for the whole machine
+        — specs, head, rotary modules, cameras — so everything up to
+        the review is skipped. Imports are not 100% reliable, so the
+        user is walked through hardware and head with prefilled
         values they can correct. For "Other / unknown machine", the
         user is first asked on the provider page when none is
         configured; otherwise the lookup page comes up directly.
@@ -414,9 +461,16 @@ class UnifiedWizard(PatchedDialogWindow):
         kind = self._source_kind()
         if kind == "profile":
             self._skipped_steps_set.update(
-                {"ai_provider", "ai_lookup", "hardware", "head"}
+                {
+                    "ai_provider",
+                    "ai_lookup",
+                    "hardware",
+                    "head",
+                    "rotary",
+                    "camera",
+                }
             )
-            return "rotary"
+            return "review"
         if kind == "import":
             self._skipped_steps_set.update({"ai_provider", "ai_lookup"})
             return "hardware"
@@ -425,6 +479,17 @@ class UnifiedWizard(PatchedDialogWindow):
     def _next_step_after(self, name: str) -> str | None:
         """Decides the next step using the adaptive routing rules."""
         mc = self.profile.machine_config
+
+        if name == "discover":
+            # Plain Next means "Configure Manually" — the regular
+            # profile-first flow. (Selecting a found device routes
+            # via _on_device_selected instead.)
+            return "profile"
+
+        if name == "permissions":
+            # The pre-flight page never blocks; Next always leads to
+            # discovery.
+            return "discover"
 
         if name == "profile":
             # Routing is set by source_selected signal. If we got here
@@ -462,6 +527,11 @@ class UnifiedWizard(PatchedDialogWindow):
             return self._ai_entry_step()
 
         if name == "probe":
+            # A discovery-originated probe that did not resolve to a
+            # profile continues on the (candidate-ranked) profile
+            # picker; manual flows go on to the AI/manual steps.
+            if self._source is None and self.aux_state.get("discovered"):
+                return "profile"
             return self._ai_entry_step()
 
         if name == "ai_provider":
@@ -496,19 +566,201 @@ class UnifiedWizard(PatchedDialogWindow):
             return
         self._navigate_to(next_step)
 
+    def _on_device_selected(self, sender, *, device: DiscoveredDevice) -> None:
+        """Step 1: the user picked an automatically discovered device.
+
+        The device arrives with everything collected without
+        interaction: driver, connection parameters, and — when the
+        driver supports probing — the machine's own answers about
+        its identity and specs. All of it feeds one profile match;
+        on a certain match (confidence 1.0) the curated profile is
+        adopted and the wizard continues with whatever data is still
+        missing. Otherwise the user picks a profile from the ranked
+        candidate list, with the collected data already in place.
+        """
+        self.profile = empty_profile()
+        self.profile.machine_config.driver = device.driver_name
+        self._overlay_driver_args(device)
+        if device.identity.usb_vid is not None:
+            self._discovered_usb = (
+                device.identity.usb_vid,
+                device.identity.usb_pid,
+            )
+        if device.probe_profile is not None:
+            self._merge_driver_config(device.probe_profile)
+
+        matches: list[ProfileMatch] = []
+        try:
+            matches = get_context().device_profile_mgr.match_device(
+                self._probe_identity(device)
+            )
+        except Exception:
+            logger.exception("Profile matching failed")
+
+        certain = certain_match(matches)
+        if certain is not None:
+            self._adopt_matched_profile(certain.profile, device)
+            self.aux_state = {}
+            if self._connection_args_complete():
+                self._skipped_steps_set.add("connect")
+                self._navigate_to(self._device_selected_next_step(device))
+            else:
+                self._navigate_to("connect")
+            return
+
+        # No profile match. The collected data still pre-fills the
+        # machine; the user confirms which one it is from a filtered
+        # list. The wizard-level probe page only comes up when the
+        # page-level probe could not produce data.
+        self.aux_state = {"discovered": device}
+        self._source = None
+        self._skipped_steps_set.add("controller")
+        if device.probe_profile is not None:
+            self._merge_probe_specs(device.probe_profile)
+            self._skipped_steps_set.add("probe")
+        if not self._connection_args_complete():
+            self._navigate_to("profile")
+            return
+        self._skipped_steps_set.add("connect")
+        if device.probe_profile is None and self._driver_can_probe(device):
+            self._navigate_to("probe")
+            return
+        self._navigate_to("profile")
+
+    def _device_selected_next_step(self, device: DiscoveredDevice) -> str:
+        """Where to go after adopting a discovered device's parameters.
+
+        With probe data already collected there is nothing left to
+        run; otherwise a probe on the dedicated page verifies the
+        connection and collects the machine's specs.
+        """
+        if device.probe_profile is not None:
+            self._skipped_steps_set.add("probe")
+            return self._ai_entry_step()
+        if self._driver_can_probe(device):
+            return "probe"
+        return self._ai_entry_step()
+
+    def _driver_can_probe(self, device: DiscoveredDevice) -> bool:
+        driver_cls = get_driver_cls(device.driver_name)
+        return (
+            driver_cls is not None
+            and driver_cls is not NoDeviceDriver
+            and driver_cls.supports_probing
+        )
+
+    def _probe_identity(self, device: DiscoveredDevice) -> DeviceIdentity:
+        """The device's identity, strengthened by what its probe
+        reported (e.g. Grbl's ``[MSG:machine:...]`` name)."""
+        identity = device.identity
+        name = device.probe_name
+        if name is None:
+            return identity
+        return DeviceIdentity(
+            firmware=identity.firmware,
+            banner=name,
+            usb_vid=identity.usb_vid,
+            usb_pid=identity.usb_pid,
+            tokens=identity.tokens | normalize_tokens(name),
+        )
+
+    def _adopt_matched_profile(
+        self, matched: DeviceProfile, device: DiscoveredDevice
+    ) -> None:
+        """Adopts a curated profile, keeping the live connection
+        facts (driver_args and driver_config) collected from the
+        actual device."""
+        live_args = dict(self.profile.machine_config.driver_args or {})
+        live_config = dict(self.profile.machine_config.driver_config or {})
+        self.profile = self._clone_profile(matched)
+        self.profile.machine_config.driver_args = live_args or None
+        if live_config:
+            curated = self.profile.machine_config.driver_config or {}
+            self.profile.machine_config.driver_config = {
+                **curated,
+                **live_config,
+            }
+        self._source = {
+            "kind": "profile",
+            "profile": matched,
+            "device": device,
+        }
+        self._skipped_steps_set.update({"profile", "controller"})
+
+    def _merge_driver_config(self, probed: DeviceProfile) -> None:
+        """Overlays hardware facts a probe measured (RX buffer size,
+        firmware version) onto the working profile."""
+        config = probed.machine_config.driver_config
+        if not config:
+            return
+        merged = dict(self.profile.machine_config.driver_config or {})
+        merged.update(config)
+        self.profile.machine_config.driver_config = merged
+
+    def _merge_probe_specs(self, probed: DeviceProfile) -> None:
+        """Overlays every machine spec a probe collected onto the
+        working profile."""
+        dst = self.profile.machine_config
+        for field_name in self._PROBE_MERGE_FIELDS:
+            value = getattr(probed.machine_config, field_name, None)
+            if value is not None:
+                setattr(dst, field_name, value)
+
+        # A curated profile's own dialect_config wins over the
+        # probe's detection; only apply the probe result when the
+        # working profile has no dialect override.
+        if not self.profile.dialect_config and probed.dialect_config:
+            self.profile.dialect_config = dict(probed.dialect_config)
+
+    def _connection_args_complete(self) -> bool:
+        """True when driver_args cover every required setup variable."""
+        mc = self.profile.machine_config
+        if not mc.driver:
+            return False
+        driver_cls = get_driver_cls(mc.driver)
+        if driver_cls is None or driver_cls is NoDeviceDriver:
+            return True
+        saved = mc.driver_args or {}
+        for var in driver_cls.get_setup_vars():
+            if var.default in (None, "") and saved.get(var.key) in (
+                None,
+                "",
+            ):
+                return False
+        return True
+
+    def _overlay_driver_args(self, device: DiscoveredDevice) -> None:
+        """Merges a discovered device's connection parameters into the
+        working profile's driver_args."""
+        args = dict(self.profile.machine_config.driver_args or {})
+        args.update(device.params)
+        self.profile.machine_config.driver_args = args or None
+
     def _on_profile_source_selected(
         self, sender, *, kind: str, profile: DeviceProfile | None
     ) -> None:
-        """Step 1: the user picked a starting point."""
+        """Step 2: the user picked a starting point."""
+        discovered = self.aux_state.get("discovered")
         if kind == "other":
-            # Start fresh; the controller page takes over.
+            # Start fresh; the controller page takes over. Connection
+            # parameters and probe data from a discovered device (if
+            # any) survive.
             self.profile = empty_profile()
+            if isinstance(discovered, DiscoveredDevice):
+                self.profile.machine_config.driver = discovered.driver_name
+                self._overlay_driver_args(discovered)
+                if discovered.probe_profile is not None:
+                    self._merge_probe_specs(discovered.probe_profile)
             self.aux_state = {}
             self._source = None
         elif kind in ("profile", "import") and profile is not None:
-            # Adopt the picked profile's data as our working state; we
-            # still require Step 3 (Connection) per design decision #5.
+            # Adopt the picked profile's data as our working state;
+            # live connection facts from the discovery survive.
             self.profile = self._clone_profile(profile)
+            if isinstance(discovered, DiscoveredDevice):
+                self._overlay_driver_args(discovered)
+                if discovered.probe_profile is not None:
+                    self._merge_driver_config(discovered.probe_profile)
             self.aux_state = {}
             # Stash chosen source for later sanity feedback
             self._source = {"kind": kind, "profile": profile}
@@ -517,46 +769,69 @@ class UnifiedWizard(PatchedDialogWindow):
             self.aux_state = {}
             self._source = None
 
-        # Step 1 → Step 3 for known/import, Step 1 → Step 2 for "Other".
-        # Navigate with history recording so "profile" stays on the
-        # stack: the user can press Back to change their source choice.
-        target: str
-        if kind == "other":
-            target = "controller"
-        else:
-            # Jump straight to connection (the picked profile fixes the
-            # controller); Back returns to the profile picker.
+        if kind == "other" and discovered is None:
+            self._navigate_to("controller")
+            return
+        if not isinstance(discovered, DiscoveredDevice):
+            # Manual flow: profiles never carry host-specific values,
+            # so the connection step is always required.
             self._skipped_steps_set.add("controller")
-            target = "connect"
-        self._navigate_to(target)
+            self._navigate_to("connect")
+            return
+        # Discovery flow: driver and connection data are set; the
+        # probe already ran (or cannot run).
+        self._skipped_steps_set.update({"controller", "probe"})
+        if self._connection_args_complete():
+            self._skipped_steps_set.add("connect")
+            self._navigate_to(self._ai_entry_step())
+        else:
+            self._navigate_to("connect")
+
+    # Machine-config fields a probe can collect; overlaid onto the
+    # working profile when no curated profile is adopted.
+    _PROBE_MERGE_FIELDS = (
+        "driver_args",
+        "driver_config",
+        "axis_extents",
+        "origin",
+        "max_travel_speed",
+        "max_cut_speed",
+        "acceleration",
+        "single_axis_homing_enabled",
+        "home_on_start",
+        "heads",
+        "unit_system",
+    )
 
     def _on_probe_succeeded(
         self, sender, *, profile: DeviceProfile, warnings: list[str]
     ) -> None:
         """Step 4: the probe merged values into a working profile."""
-        # Merge probed machine_config fields into our working profile.
-        # Probe returns a full DeviceProfile; we overlay every
-        # non-None field of its machine_config onto our profile.
-        src = profile.machine_config
-        dst = self.profile.machine_config
-        for field_name in (
-            "driver_args",
-            "driver_config",
-            "axis_extents",
-            "origin",
-            "max_travel_speed",
-            "max_cut_speed",
-            "acceleration",
-            "single_axis_homing_enabled",
-            "home_on_start",
-            "heads",
-            "unit_system",
-        ):
-            value = getattr(src, field_name, None)
-            if value is not None:
-                setattr(dst, field_name, value)
+        self._merge_probe_specs(profile)
         for text in warnings:
             logger.info("Probing warning: %s", text)
+        self._adopt_profile_from_probe(profile)
+
+    def _adopt_profile_from_probe(self, probed: DeviceProfile) -> None:
+        """Adopts a curated profile when the probe's answers identify
+        the machine (discovery-originated probes only)."""
+        if self._source is not None:
+            return
+        device = self.aux_state.get("discovered")
+        if not isinstance(device, DiscoveredDevice):
+            return
+        device = dc_replace(device, probe_profile=probed)
+        try:
+            matches = get_context().device_profile_mgr.match_device(
+                self._probe_identity(device)
+            )
+        except Exception:
+            logger.exception("Profile matching failed")
+            return
+        certain = certain_match(matches)
+        if certain is None:
+            return
+        self._adopt_matched_profile(certain.profile, device)
 
     # ----- camera workflow ----------------------------------------------
 
@@ -601,7 +876,7 @@ class UnifiedWizard(PatchedDialogWindow):
     def _clone_profile(self, src: DeviceProfile) -> DeviceProfile:
         """Adopt an existing profile's data into our working copy."""
         return DeviceProfile(
-            meta=_clone_meta(src),
+            meta=_clone_meta(src.meta),
             machine_config=_clone_machine_config(src.machine_config),
             dialect_config=dict(src.dialect_config),
             source_dir=src.source_dir,
@@ -615,79 +890,12 @@ class UnifiedWizard(PatchedDialogWindow):
 
 
 def _clone_meta(src) -> Any:
-    return DeviceMeta(
-        name=src.name,
-        vendor=src.meta.vendor,
-        model=src.meta.model,
-        description=src.meta.description,
-        api_version=src.meta.api_version,
-    )
+    return dc_replace(src)
 
 
 def _clone_machine_config(src) -> Any:
     """Deep-copy a MachineConfig into a new mutable instance."""
-    out = MachineConfig()
-    for attr in (
-        "driver",
-        "driver_args",
-        "driver_config",
-        "gcode_precision",
-        "supports_arcs",
-        "supports_curves",
-        "axis_extents",
-        "work_margins",
-        "soft_limits",
-        "origin",
-        "panel_orientation",
-        "max_travel_speed",
-        "max_cut_speed",
-        "home_on_start",
-        "acceleration",
-        "single_axis_homing_enabled",
-        "rotary_enabled_default",
-        "unit_system",
-        "heads",
-        "capabilities",
-        "hookmacros",
-        "rotary_modules",
-        "nogo_zones",
-        "cameras",
-    ):
-        value = getattr(src, attr, None)
-        if isinstance(value, dict):
-            value = dict(value)
-        elif isinstance(value, list) and (
-            attr
-            in (
-                "heads",
-                "hookmacros",
-                "rotary_modules",
-                "nogo_zones",
-                "cameras",
-                "capabilities",
-                "driver_args",
-            )
-        ):
-            # Lists of dicts and tuples need to be copied with the
-            # inner structures preserved too.
-            value = _copy_list_of_containers(value)
-        setattr(out, attr, value)
-    return out
-
-
-def _copy_list_of_containers(value: list) -> list:
-    """Shallow-but-not-too-shallow copy of a list of containers."""
-    out = []
-    for item in value:
-        if isinstance(item, dict):
-            out.append(dict(item))
-        elif isinstance(item, list):
-            out.append(_copy_list_of_containers(item))
-        elif isinstance(item, tuple):
-            out.append(tuple(item))
-        else:
-            out.append(item)
-    return out
+    return copy.deepcopy(src)
 
 
 __all__ = ["_STEP_ORDER", "UnifiedWizard"]

@@ -48,6 +48,7 @@ from raygeo.pipeline.request import NodeRequest
 from .intent_builder import (
     IntentBuilder,
     UnsupportedRotaryPanelOrientationError,
+    parse_stock_key,
     parse_workpiece_key,
 )
 from .status_messages import status_message_for_key
@@ -55,11 +56,14 @@ from .status_messages import status_message_for_key
 if TYPE_CHECKING:
     from ..core.doc import Doc
     from ..core.item import DocItem
+    from ..core.layer import Layer
     from ..core.step import Step
+    from ..core.stock import StockItem
     from ..core.workpiece import WorkPiece
     from ..machine.models.machine import Machine
 
 from raygeo.pipeline.completed import ErrorKind
+from raygeo.pipeline.execute import PipelineCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +154,7 @@ class IntentController:
         self._key_to_item: dict[str, DocItem] = {}
         self._workpieces_by_uid: dict[str, WorkPiece] = {}
         self._steps_by_uid: dict[str, Step] = {}
+        self._stock_items_by_uid: dict[str, StockItem] = {}
 
         # Signals for notifying the UI of generation progress.
         self.workpiece_artifact_ready = Signal()
@@ -157,6 +162,7 @@ class IntentController:
         self.job_aggregate_ready = Signal()
         self.job_generation_finished = Signal()
         self.job_time_updated = Signal()
+        self.material_state_ready = Signal()
         self.progress_changed = Signal()
         self.rebuild_started = Signal()
         self.rebuild_finished = Signal()
@@ -354,22 +360,38 @@ class IntentController:
                     self._emit_configuration_error, str(exc)
                 )
                 return
-            self._refresh_key_to_item_map(nodes)
-            new_intent = create_intent_from_nodes(nodes)
-            if self._intent is None:
-                self._intent = new_intent
-            else:
-                self._intent.update(new_intent, pipeline=self._raygeo_pipeline)
-            if nodes:
-                try:
+            except Exception:
+                # An unexpected build error must still complete anyone
+                # waiting for job generation, or job sending wedges.
+                logger.exception("Intent build failed")
+                self._task_manager.schedule_on_main_thread(
+                    self._emit_job_generation_failed
+                )
+                return
+            try:
+                self._refresh_key_to_item_map(nodes)
+                new_intent = create_intent_from_nodes(nodes)
+                if self._intent is None:
+                    self._intent = new_intent
+                else:
+                    self._intent.update(
+                        new_intent, pipeline=self._raygeo_pipeline
+                    )
+                if nodes:
                     run_intent(
                         self._intent,
                         on_completed=self._on_completed,
                         on_batch_progress=self._on_batch_progress,
                         pipeline=self._raygeo_pipeline,
                     )
-                except RuntimeError as exc:
-                    logger.debug("run_intent failed: %s", exc)
+            except PipelineCancelled:
+                # Cancellation is expected during rapid rebuilds.
+                logger.info("Intent execution cancelled")
+            except Exception:
+                logger.exception("Intent execution failed")
+                self._task_manager.schedule_on_main_thread(
+                    self._emit_job_generation_failed
+                )
 
         def _on_done(_task: Any) -> None:
             self._rebuild_task = None
@@ -384,6 +406,18 @@ class IntentController:
 
         self._rebuild_task = self._task_manager.run_thread(
             _worker, when_done=_on_done, key="intent-rebuild"
+        )
+
+    def _emit_job_generation_failed(self) -> None:
+        """
+        Completes job-generation waiters after an unexpected failure.
+
+        Without this, anyone awaiting ``job_generation_finished``
+        (e.g. ``generate_job_artifact_async``) would block forever,
+        wedging all future send attempts behind the stuck job guard.
+        """
+        self.job_generation_finished.send(
+            self, handle=None, task_status="failed"
         )
 
     def _emit_rebuild_finished(self) -> None:
@@ -582,6 +616,19 @@ class IntentController:
             self.job_generation_finished.send(
                 self, handle=output, task_status="completed"
             )
+        elif key.startswith("stock:"):
+            stock_uid = parse_stock_key(key)
+            if stock_uid is not None:
+                host: DocItem | None = self._find_stock_item(stock_uid)
+                if host is None:
+                    host = self._find_layer(stock_uid)
+                if host is not None:
+                    self.material_state_ready.send(
+                        self,
+                        item=host,
+                        output=output,
+                        generation_id=gen,
+                    )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -612,6 +659,16 @@ class IntentController:
         self._workpieces_by_uid = workpieces
         self._steps_by_uid = steps
 
+        stock_items: dict[str, StockItem] = {}
+        layers_by_uid: dict[str, Layer] = {}
+        if self._doc is not None:
+            for item in self._doc.stock_items:
+                stock_items[item.uid] = item
+            for layer in self._doc.layers:
+                layers_by_uid[layer.uid] = layer
+        self._stock_items_by_uid = stock_items
+        self._layers_by_uid = layers_by_uid
+
         for n in nodes:
             key = n.key
             # ``workpiece:{wp_uid}:{step_uid}``
@@ -631,6 +688,16 @@ class IntentController:
                 step = steps.get(s_uid)
                 if step is not None:
                     self._key_to_item[key] = step
+            # ``stock:{stock_uid}`` — a flat stock item or, when no
+            # stock item carries the uid, a rotary layer.
+            elif key.startswith("stock:"):
+                stock_uid = parse_stock_key(key)
+                if stock_uid is not None:
+                    item = stock_items.get(stock_uid)
+                    if item is None:
+                        item = layers_by_uid.get(stock_uid)
+                    if item is not None:
+                        self._key_to_item[key] = item
             # ``job`` or ``job:encode``
             elif key == "job" or key == "job:encode":
                 self._key_to_item[key] = self._doc
@@ -640,6 +707,12 @@ class IntentController:
 
     def _find_step(self, uid: str) -> Step | None:
         return self._steps_by_uid.get(uid)
+
+    def _find_stock_item(self, uid: str) -> StockItem | None:
+        return self._stock_items_by_uid.get(uid)
+
+    def _find_layer(self, uid: str) -> Layer | None:
+        return self._layers_by_uid.get(uid)
 
     def shutdown(self) -> None:
         """Cancel any pending rebuild timer and disconnect signals."""

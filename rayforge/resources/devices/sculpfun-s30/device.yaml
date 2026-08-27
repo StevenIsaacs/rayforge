@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: Sculpfun S30
+  vendor: Sculpfun
+  model: S30
   description: Budget diode laser engraver with 400x400mm work area
 machine:
   driver: GrblSerialDriver
@@ -11,8 +13,11 @@ machine:
   origin: bottom_left
   max_travel_speed: 3000
   max_cut_speed: 1000
+  has_z: false
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 10
     frame_power_percent: 1.0
     focus_power_percent: 1.0
     spot_size_mm:

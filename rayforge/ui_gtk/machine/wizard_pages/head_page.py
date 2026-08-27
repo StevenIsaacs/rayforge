@@ -37,7 +37,7 @@ def _is_spindle_head_dict(head: dict[str, Any] | None) -> bool:
 
 
 class HeadPage(WizardPage):
-    step_number = 8
+    step_number = 9
     title = _("Head")
     subtitle = _("What's attached to the gantry: a laser, a spindle, or both?")
 
@@ -108,6 +108,30 @@ class HeadPage(WizardPage):
             value=500,
         )
         self.laser_group.add(self.pwm_freq_row)
+
+        self.wavelength_row = SpinRow(
+            _("Wavelength (nm)"),
+            _("Emission wavelength; 0 uses the laser type default"),
+            lower=0,
+            upper=20000,
+            step_increment=1,
+            value=0,
+        )
+        self.laser_group.add(self.wavelength_row)
+
+        self.optical_power_row = SpinRow(
+            _("Optical Power (W)"),
+            _(
+                "Real optical output power at full S-value; "
+                "0 uses a 40 W default"
+            ),
+            lower=0,
+            upper=1000,
+            step_increment=1,
+            digits=1,
+            value=0,
+        )
+        self.laser_group.add(self.optical_power_row)
 
         self.focal_distance_row = LengthSpinRow(
             _("Focal Distance"),
@@ -182,6 +206,8 @@ class HeadPage(WizardPage):
             self.spot_x_row.set_value_in_base_units(spot[0])
             self.spot_y_row.set_value_in_base_units(spot[1])
             self.pwm_freq_row.set_value(head.get("pwm_frequency", 500))
+            self.wavelength_row.set_value(head.get("wavelength_nm", 0))
+            self.optical_power_row.set_value(head.get("max_power_watts", 0))
             self.focal_distance_row.set_value_in_base_units(
                 head.get("focal_distance", 0)
             )
@@ -203,6 +229,8 @@ class HeadPage(WizardPage):
             ]
             if self.pwm_freq_row.get_visible():
                 head["pwm_frequency"] = int(self.pwm_freq_row.get_value())
+            head["wavelength_nm"] = float(self.wavelength_row.get_value())
+            head["max_power_watts"] = float(self.optical_power_row.get_value())
             head["focal_distance"] = (
                 self.focal_distance_row.get_value_in_base_units()
             )

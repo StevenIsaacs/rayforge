@@ -1,9 +1,11 @@
 from .angle_constraint_tool import AngleConstraintTool
 from .arc_tool import ArcTool
+from .array_base import ArrayToolBase
 from .aspect_ratio_constraint_tool import AspectRatioConstraintTool
 from .base import SketcherKey, SketchTool
 from .chamfer_tool import ChamferTool
 from .circle_tool import CircleTool
+from .circular_array_tool import CircularArrayTool
 from .coincident_constraint_tool import CoincidentConstraintTool
 from .construction_tool import ConstructionTool
 from .delete_tool import DeleteTool
@@ -14,6 +16,7 @@ from .fill_tool import FillTool
 from .fillet_tool import FilletTool
 from .grid_tool import GridTool
 from .horizontal_constraint_tool import HorizontalConstraintTool
+from .mirror_tool import MirrorHorizontalTool, MirrorVerticalTool
 from .path_tool import PathTool
 from .perpendicular_constraint_tool import PerpendicularConstraintTool
 from .radius_constraint_tool import RadiusConstraintTool
@@ -36,6 +39,7 @@ TOOL_REGISTRY = {
     "aspect_ratio": AspectRatioConstraintTool,
     "chamfer": ChamferTool,
     "circle": CircleTool,
+    "circular_array": CircularArrayTool,
     "coincident": CoincidentConstraintTool,
     "construction": ConstructionTool,
     "delete": DeleteTool,
@@ -46,6 +50,8 @@ TOOL_REGISTRY = {
     "fillet": FilletTool,
     "grid": GridTool,
     "horizontal": HorizontalConstraintTool,
+    "mirror_vertical": MirrorVerticalTool,
+    "mirror_horizontal": MirrorHorizontalTool,
     "path": PathTool,
     "perpendicular": PerpendicularConstraintTool,
     "radius": RadiusConstraintTool,
@@ -90,9 +96,11 @@ __all__ = [
     "TOOL_REGISTRY",
     "AngleConstraintTool",
     "ArcTool",
+    "ArrayToolBase",
     "AspectRatioConstraintTool",
     "ChamferTool",
     "CircleTool",
+    "CircularArrayTool",
     "CoincidentConstraintTool",
     "ConstructionTool",
     "DeleteTool",
@@ -103,6 +111,8 @@ __all__ = [
     "FilletTool",
     "GridTool",
     "HorizontalConstraintTool",
+    "MirrorHorizontalTool",
+    "MirrorVerticalTool",
     "PathTool",
     "PerpendicularConstraintTool",
     "RadiusConstraintTool",

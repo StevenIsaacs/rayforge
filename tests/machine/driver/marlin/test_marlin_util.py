@@ -2,10 +2,12 @@ import pytest
 
 from rayforge.machine.driver.grbl.grbl_util import strip_gcode_comments
 from rayforge.machine.driver.marlin.marlin_util import (
+    extract_marlin_banner_from_output,
     extract_marlin_device_name,
     gcode_to_p_number,
     is_boot_message,
     is_error_response,
+    is_marlin_output,
     is_ok_response,
     parse_error_message,
     parse_m114_position,
@@ -361,3 +363,45 @@ class TestExtractMarlinDeviceName:
 
     def test_no_info_returns_unknown(self):
         assert extract_marlin_device_name([]) == ("Unknown Marlin Device")
+
+
+class TestIsMarlinOutput:
+    """The driver-owned matcher used for serial device discovery."""
+
+    def test_matches_start_banner(self):
+        assert is_marlin_output(b"start\r\n")
+
+    def test_matches_echo_lines(self):
+        assert is_marlin_output(b"start\r\necho:Marlin initialized\r\n")
+
+    def test_matches_marlin_name(self):
+        assert is_marlin_output(b"Marlin 2.1.2\r\n")
+
+    def test_matches_accumulated_noise(self):
+        assert is_marlin_output(b"\r\n\x00garbage\r\nstart\r\n")
+
+    def test_rejects_other_firmware(self):
+        assert not is_marlin_output(b"Grbl 1.1f ['$' for help]\r\n")
+        assert not is_marlin_output(b"hello world\r\n")
+        assert not is_marlin_output(b"")
+
+
+class TestExtractMarlinBannerFromOutput:
+    """The driver-owned banner extractor used for serial discovery."""
+
+    def test_returns_first_boot_message(self):
+        data = b"start\r\necho:Marlin initialized\r\n"
+        assert extract_marlin_banner_from_output(data) == "start"
+
+    def test_skips_ok_acks(self):
+        # A bare "ok" is a nudge ack, not a banner.
+        data = b"ok\r\nstart\r\necho:Marlin initialized\r\n"
+        assert extract_marlin_banner_from_output(data) == "start"
+
+    def test_skips_error_acks(self):
+        data = b"Error:Unknown command\r\nMarlin 2.1.2\r\n"
+        assert extract_marlin_banner_from_output(data) == "Marlin 2.1.2"
+
+    def test_returns_none_without_boot_message(self):
+        assert extract_marlin_banner_from_output(b"ok\r\n") is None
+        assert extract_marlin_banner_from_output(b"") is None

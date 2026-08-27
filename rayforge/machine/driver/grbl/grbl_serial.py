@@ -26,6 +26,7 @@ from ....pipeline.encoder.base import (
 )
 from ....pipeline.encoder.gcode import GcodeEncoder
 from ....shared.units.system import UnitSystem, inches_to_mm
+from ...discovery.spec import DiscoverySpec, SerialRecognizer
 from ...transport import SerialTransport, TransportStatus
 from ...transport.grbl import (
     DEFAULT_GRBL_RX_BUFFER_SIZE,
@@ -50,15 +51,18 @@ from .grbl_util import (
     alarm_code_to_device_error,
     detect_unit_system_from_settings,
     error_code_to_device_error,
+    extract_device_name_from_output,
     gcode_to_p_number,
     get_grbl_setting_varsets,
     grbl_setting_re,
+    is_grbl_output,
     is_report_in_inches,
     parse_grbl_parser_state,
     parse_opt_info,
     parse_state,
     parse_version,
     prb_re,
+    split_realtime_commands,
     strip_gcode_comments,
     wcs_re,
 )
@@ -86,6 +90,45 @@ class GrblSerialDriver(Driver):
     reports_granular_progress = True
     supports_probing = True
     supports_unit_detection = True
+    DISCOVERY = DiscoverySpec(
+        serial=SerialRecognizer(
+            label=lambda: _("GRBL device"),
+            firmware="grbl",
+            matches=is_grbl_output,
+            name=extract_device_name_from_output,
+        )
+    )
+
+    # Buffer-stall timeout bounds for a single gcode line. The actual
+    # timeout scales with the estimated duration of the command
+    # (estimate * safety factor), so slow moves do not trip stalls.
+    STALL_TIMEOUT_MIN: float = 5.0
+    STALL_TIMEOUT_MAX: float = 120.0
+    STALL_TIMEOUT_SAFETY_FACTOR: float = 3.0
+    STALL_TIMEOUT_DEFAULT: float = 30.0
+
+    SAFETY_SHUTDOWN_DELAY: float = 0.2
+
+    # A device that stays silent for this many consecutive stall
+    # polls (no status report, no ack) is considered dead. GRBL
+    # answers '?' in every state (Run, Hold, Door, Alarm), so an
+    # alive-but-busy or paused machine never reaches this limit.
+    UNANSWERED_POLL_LIMIT: int = 3
+    POLL_RESPONSE_ATTEMPTS: int = 10
+    POLL_RESPONSE_INTERVAL: float = 0.1
+
+    # Handshake verification bounds. The '?' realtime poll is repeated
+    # every POLL_INTERVAL until a response arrives, because devices
+    # that are still booting silently drop queries sent before their
+    # serial stream is ready.
+    # Opening a USB-serial port toggles DTR, which resets many GRBL
+    # boards (Arduino/CH340 based). Their bootloader can take ~2-3 s
+    # before GRBL starts answering, so the window must outlast it; a
+    # too-short timeout made the connection loop close and reopen the
+    # port on every retry, resetting the board again and never
+    # converging.
+    HANDSHAKE_TIMEOUT: float = 6.0
+    HANDSHAKE_POLL_INTERVAL: float = 0.5
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
@@ -100,6 +143,20 @@ class GrblSerialDriver(Driver):
         self._is_cancelled = False
         self._raw_grbl_status: DeviceStatus = DeviceStatus.UNKNOWN
         self._job_running = False
+        # Monotonic count of device responses (status reports and
+        # ok/error acks) received, regardless of whether they could
+        # be interpreted. Snapshot/compare this to prove liveness:
+        # a device that transmits anything at all is alive.
+        self._device_response_count = 0
+        # Number of consecutive stall polls that went unanswered
+        # (no response of any kind arrived). Used to detect a device
+        # that died mid-job; see UNANSWERED_POLL_LIMIT.
+        self._consecutive_unanswered_polls = 0
+        # Tracks whether we have requested the machine to hold (pause). The
+        # driver owns this state: status polling is disabled while a job runs,
+        # so the firmware's HOLD status is not observed. Without this, the UI
+        # never learns that the job is paused and cannot offer a resume.
+        self._is_holding = False
         self._on_command_done: (
             Callable[[int], None | Awaitable[None]] | None
         ) = None
@@ -364,6 +421,27 @@ class GrblSerialDriver(Driver):
             else:
                 request.finished.set()
 
+    async def _await_handshake(self) -> bool:
+        """
+        Polls the device with realtime '?' commands until it responds
+        with a status report (or its welcome message arrives), bounded
+        by HANDSHAKE_TIMEOUT. Returns True once the handshake event is
+        set, False if the device stayed silent.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + self.HANDSHAKE_TIMEOUT
+        while True:
+            await self._send_realtime("?", add_newline=False)
+            try:
+                await asyncio.wait_for(
+                    self._handshake_received.wait(),
+                    timeout=self.HANDSHAKE_POLL_INTERVAL,
+                )
+                return True
+            except asyncio.TimeoutError:
+                if loop.time() >= deadline:
+                    return False
+
     async def _connection_loop(self) -> None:
         logger.debug("Entering _connection_loop.")
         while self.keep_running:
@@ -374,19 +452,13 @@ class GrblSerialDriver(Driver):
                 if not transport:
                     raise DriverSetupError("Transport not initialized")
 
+                self._handshake_received.clear()
                 await transport.connect()
                 logger.debug(
                     "Serial port opened. Verifying device response..."
                 )
 
-                self._handshake_received.clear()
-                await self._send_realtime("?", add_newline=False)
-
-                try:
-                    await asyncio.wait_for(
-                        self._handshake_received.wait(), timeout=2.0
-                    )
-                except asyncio.TimeoutError:
+                if not await self._await_handshake():
                     logger.warning(
                         "No response from device. Port may be a phantom "
                         "COM port without a connected device."
@@ -423,16 +495,24 @@ class GrblSerialDriver(Driver):
                         await asyncio.sleep(0.5)
                         continue
 
-                    async with self._cmd_lock:
-                        try:
-                            payload = b"?"
-                            await transport.send_poll(payload)
-                        except ConnectionError as e:
-                            logger.warning(
-                                "Connection lost while sending poll"
-                                f" command: {e}"
-                            )
-                            break
+                    # Deliberately not taking _cmd_lock here: a gcode
+                    # send holds the lock for the whole buffer-space
+                    # wait, including stall retries, which can last a
+                    # long time while a job is paused. Polls are
+                    # realtime bytes that bypass the GRBL RX buffer
+                    # and its accounting, so they are safe to send
+                    # without the lock (same as other realtime
+                    # commands sent via _send_realtime). Blocking on
+                    # the lock here would starve status polling, so
+                    # the driver state would go stale.
+                    try:
+                        payload = b"?"
+                        await transport.send_poll(payload)
+                    except ConnectionError as e:
+                        logger.warning(
+                            f"Connection lost while sending poll command: {e}"
+                        )
+                        break
                     await asyncio.sleep(0.5)
 
                     if not self.keep_running or not transport.is_connected:
@@ -534,11 +614,23 @@ class GrblSerialDriver(Driver):
         """Initializes state for a new streaming job."""
         self._is_cancelled = False
         self._job_running = True
+        self._is_holding = False
         self._on_command_done = on_command_done
         self._last_reported_op_index = -1
         self._job_exception = None
+        self._consecutive_unanswered_polls = 0
         if self.grbl_transport:
             self.grbl_transport.reset_flow_control()
+
+        # The driver owns the state while a job runs: status polling
+        # is disabled during jobs by default, so the firmware's Run
+        # status is never observed. Reflect the job start immediately
+        # so the UI does not keep showing Idle while the machine is
+        # working. An ALARM (which aborts the job right away) is not
+        # masked.
+        if self.state.status not in (DeviceStatus.RUN, DeviceStatus.ALARM):
+            self.state.status = DeviceStatus.RUN
+            self.state_changed.send(self, state=self.state)
 
     async def _recover_from_deadlock(
         self, transport, hold_lock: bool = True
@@ -624,10 +716,22 @@ class GrblSerialDriver(Driver):
         fresh status report.  Returns True only if the fresh
         response confirms GRBL is idle or buffer-desynchronized.
 
+        Also tracks liveness in ``_consecutive_unanswered_polls``.
+        GRBL answers '?' with a status report in every state (Run,
+        Hold, Door, Alarm), so a machine that is merely busy or
+        paused always answers. Liveness is proven by *any* received
+        response (status report or ok/error ack) -- not by whether
+        the report could be interpreted, so an uninterpretable
+        report from a live device never counts as silence. The
+        counter only grows when nothing at all arrives within the
+        response window, or when the poll cannot be written.
+        Callers use this to detect a dead device.
+
         When *hold_lock* is False the caller already holds
         ``_cmd_lock`` (e.g. the stall callback inside ``send_gcode``).
         """
         self._raw_grbl_status = DeviceStatus.UNKNOWN
+        responses_before = self._device_response_count
         try:
 
             async def _do_poll():
@@ -644,12 +748,42 @@ class GrblSerialDriver(Driver):
             else:
                 await _do_poll()
         except (ConnectionError, OSError):
+            self._consecutive_unanswered_polls += 1
+            logger.debug(
+                f"Failed to send status poll "
+                f"({self._consecutive_unanswered_polls}/"
+                f"{self.UNANSWERED_POLL_LIMIT} unanswered)."
+            )
             return False
-        for _attempt in range(10):
-            await asyncio.sleep(0.1)
+        for _attempt in range(self.POLL_RESPONSE_ATTEMPTS):
+            await asyncio.sleep(self.POLL_RESPONSE_INTERVAL)
             if self._raw_grbl_status != DeviceStatus.UNKNOWN:
                 break
+        if self._device_response_count > responses_before:
+            self._consecutive_unanswered_polls = 0
+        else:
+            self._consecutive_unanswered_polls += 1
+            logger.debug(
+                f"No response to status poll "
+                f"({self._consecutive_unanswered_polls}/"
+                f"{self.UNANSWERED_POLL_LIMIT} unanswered)."
+            )
         return self._is_grbl_idle_or_desynced(transport)
+
+    def _device_stopped_responding(self) -> bool:
+        """True if the last stall polls went completely unanswered."""
+        return self._consecutive_unanswered_polls >= self.UNANSWERED_POLL_LIMIT
+
+    def _mark_device_unresponsive(self) -> None:
+        """Records a fatal 'device is dead' job exception."""
+        logger.error(
+            f"No response to {self._consecutive_unanswered_polls} "
+            "consecutive status polls. Assuming the device stopped "
+            "responding."
+        )
+        self._job_exception = DeviceConnectionError(
+            "Device stopped responding during job (no reply to status polls)."
+        )
 
     async def _on_buffer_stall(
         self, transport: GrblSerialTransport, command_len: int
@@ -663,10 +797,35 @@ class GrblSerialDriver(Driver):
         lock.  pyserial serializes concurrent writes, making this
         safe.
 
+        Aborts the job (returns False) only with proof that it cannot
+        proceed: the job was cancelled, the machine is in ALARM, or
+        the device stopped responding to status polls entirely. A
+        device that answers polls is alive -- it may be busy with a
+        slow move or paused via feed hold -- so the wait is retried
+        (possibly forever), regardless of the deadlock_detection
+        setting. Deadlock detection additionally attempts G4 P0.01
+        recovery when the poll proves the machine is idle.
+
         Returns True to retry the wait, False to abort the job.
         """
         if self._is_cancelled:
             return False
+
+        idle_or_desynced = await self._poll_and_check_idle(
+            transport, hold_lock=False
+        )
+
+        if self._device_stopped_responding():
+            self._mark_device_unresponsive()
+            return False
+
+        if self.state.status == DeviceStatus.ALARM:
+            if not self._job_exception:
+                self._job_exception = DeviceConnectionError(
+                    "Machine entered ALARM state during job."
+                )
+            return False
+
         if not self._deadlock_detection:
             logger.debug(
                 "Buffer stall timed out (deadlock detection disabled). "
@@ -674,7 +833,7 @@ class GrblSerialDriver(Driver):
             )
             return True
 
-        if await self._poll_and_check_idle(transport, hold_lock=False):
+        if idle_or_desynced:
             if not transport.needs_space(command_len):
                 logger.info(
                     "Buffer freed during status poll. Continuing streaming."
@@ -734,7 +893,11 @@ class GrblSerialDriver(Driver):
                 logger.debug("All 'ok' responses received.")
                 break
             except asyncio.TimeoutError:
-                if await self._poll_and_check_idle(transport):
+                idle_or_desynced = await self._poll_and_check_idle(transport)
+                if self._device_stopped_responding():
+                    self._mark_device_unresponsive()
+                    break
+                if idle_or_desynced:
                     if transport.pending_queue.empty():
                         logger.info(
                             "Pending acks resolved during status poll."
@@ -767,10 +930,6 @@ class GrblSerialDriver(Driver):
         if not transport:
             raise ConnectionError("Transport not initialized")
         job_completed_successfully = False
-        min_timeout = 5.0
-        max_timeout = 120.0
-        safety_factor = 3.0
-        default_timeout = 30.0
         sent_count = 0
         try:
             for line_idx, line in enumerate(gcode_lines):
@@ -806,11 +965,14 @@ class GrblSerialDriver(Driver):
                 ):
                     estimated = command_times[op_index]
                     timeout = min(
-                        max_timeout,
-                        max(min_timeout, estimated * safety_factor),
+                        self.STALL_TIMEOUT_MAX,
+                        max(
+                            self.STALL_TIMEOUT_MIN,
+                            estimated * self.STALL_TIMEOUT_SAFETY_FACTOR,
+                        ),
                     )
                 else:
-                    timeout = default_timeout
+                    timeout = self.STALL_TIMEOUT_DEFAULT
 
                 try:
                     await self._send_gcode_line(
@@ -842,7 +1004,9 @@ class GrblSerialDriver(Driver):
                 logger.debug(
                     "All G-code sent. Waiting for all 'ok' responses."
                 )
-                await self._drain_pending_acks(transport, default_timeout)
+                await self._drain_pending_acks(
+                    transport, self.STALL_TIMEOUT_DEFAULT
+                )
 
             if self._job_exception:
                 raise self._job_exception
@@ -859,7 +1023,7 @@ class GrblSerialDriver(Driver):
             # If not cancelled explicitly, send a cancel command
             if not self._is_cancelled:
                 logger.info(f"Calling cancel() due to interruption: {e!r}")
-                await self.cancel()
+                await self.cancel(emergency=True)
             # Do not re-raise ConnectionError or
             # DeviceConnectionError, let the task finish "failed"
             # Only re-raise CancelledError to propagate cancellation
@@ -869,6 +1033,7 @@ class GrblSerialDriver(Driver):
         finally:
             self._raw_grbl_status = DeviceStatus.UNKNOWN
             self._job_running = False
+            self._is_holding = False
             self._on_command_done = None
             if job_completed_successfully:
                 self.job_finished.send(self)
@@ -929,15 +1094,27 @@ class GrblSerialDriver(Driver):
         """
         Executes a raw G-code string using the character-counting
         streaming protocol.
+
+        GRBL realtime commands (?, ~, !) are sent directly via the
+        control path instead: the firmware executes them on receipt,
+        never acknowledges them, and streaming them as gcode would
+        both queue them behind buffered commands and wedge the
+        protocol waiting for an 'ok' that does not come.
         """
         lines = [
             line.strip() for line in machine_code.splitlines() if line.strip()
         ]
-        if not lines:
+        gcode_lines, realtime_lines = split_realtime_commands(lines)
+
+        for line in realtime_lines:
+            logger.info(line, extra=self._log_extra("USER_COMMAND"))
+            await self._send_realtime(line, add_newline=False)
+
+        if not gcode_lines:
             return
         self._start_job()
         try:
-            await self._stream_gcode(lines)
+            await self._stream_gcode(gcode_lines)
         except DeviceConnectionError as e:
             logger.warning(
                 f"Raw G-code terminated due to device error: {e}. "
@@ -946,7 +1123,7 @@ class GrblSerialDriver(Driver):
         except Exception:
             logger.exception("Raw G-code terminated with unexpected error")
 
-    async def cancel(self) -> None:
+    async def cancel(self, emergency: bool = False) -> None:
         logger.debug("Cancel command initiated.")
         job_was_running = self._job_running
         self._is_cancelled = True
@@ -973,10 +1150,42 @@ class GrblSerialDriver(Driver):
             self.grbl_transport.reset()
             logger.debug("Streaming queue cleared after cancel.")
 
+            await self._send_safety_shutdown(emergency)
+
             if job_was_running:
                 self.job_finished.send(self)
         else:
             raise ConnectionError("Serial transport not initialized")
+
+    async def _send_safety_shutdown(self, emergency: bool = False) -> None:
+        """
+        Best-effort transmission of the dialect's tool-off commands so
+        a cancelled or aborted job cannot leave persistent PWM outputs
+        energized. After a soft reset the firmware needs a moment to
+        become ready again, hence the short delay before sending.
+        """
+        dialect = self.dialect
+        commands = dialect.get_safety_off_commands()
+        if emergency and dialect.emergency_stop:
+            commands.append(dialect.emergency_stop)
+        if not commands:
+            return
+        transport = self.grbl_transport
+        if not transport or not transport.is_connected:
+            return
+        await asyncio.sleep(self.SAFETY_SHUTDOWN_DELAY)
+        for command in commands:
+            if not transport.is_connected:
+                break
+            try:
+                logger.info(command, extra=self._log_extra("USER_COMMAND"))
+                await transport.send_gcode((command + "\n").encode("utf-8"))
+            except (
+                ConnectionError,
+                asyncio.TimeoutError,
+                BufferStallError,
+            ) as e:
+                logger.warning(f"Safety command '{command}' failed: {e}")
 
     async def _execute_command(self, command: str) -> list[str]:
         self._is_cancelled = False
@@ -1052,8 +1261,19 @@ class GrblSerialDriver(Driver):
         return request.response_lines
 
     async def set_hold(self, hold: bool = True) -> None:
+        self._is_holding = hold
         self._is_cancelled = False
         await self._send_realtime("!" if hold else "~", add_newline=False)
+        desired = (
+            DeviceStatus.HOLD
+            if hold
+            else DeviceStatus.RUN
+            if self._job_running
+            else DeviceStatus.IDLE
+        )
+        if self.state.status != desired:
+            self.state.status = desired
+            self.state_changed.send(self, state=self.state)
 
     def can_home(self, axis: Axis | None = None) -> bool:
         """GRBL supports homing for all axes."""
@@ -1400,6 +1620,7 @@ class GrblSerialDriver(Driver):
         Parses a GRBL status report (e.g., '<Idle|WPos:0,0,0|...>')
         and updates the device state.
         """
+        self._note_device_response()
         if self.grbl_transport:
             count = self.grbl_transport.ack_status_report()
         else:
@@ -1443,6 +1664,12 @@ class GrblSerialDriver(Driver):
         # reported as 'Run' to the UI.
         if self._job_running and state.status == DeviceStatus.IDLE:
             state.status = DeviceStatus.RUN
+
+        # The driver owns the pause state. While we have requested a hold,
+        # force HOLD so a firmware status report (which we may not receive
+        # while status polling is disabled during a job) cannot mask it.
+        if self._is_holding and state.status != DeviceStatus.ALARM:
+            state.status = DeviceStatus.HOLD
 
         old_status = self.state.status
         if state != self.state:
@@ -1489,8 +1716,15 @@ class GrblSerialDriver(Driver):
             extra=self._log_extra("ERROR"),
         )
 
+    def _note_device_response(self) -> None:
+        """Record that the device transmitted something, proving it
+        is alive. Called for every received response (status report,
+        ok, error), even when it cannot be interpreted."""
+        self._device_response_count += 1
+
     def _handle_ok(self, resp):
         """Handle a parsed 'ok' response."""
+        self._note_device_response()
         pending = resp.pending
         logger.info("ok", extra=self._log_extra("MACHINE_RESPONSE"))
 
@@ -1537,6 +1771,7 @@ class GrblSerialDriver(Driver):
 
     def _handle_error(self, text: str):
         """Handle a parsed 'error:...' response."""
+        self._note_device_response()
         logger.info(text, extra=self._log_extra("MACHINE_EVENT"))
         error_code = text.split(":")[1].strip() if ":" in text else ""
         self.state.error = error_code_to_device_error(error_code)
@@ -1611,7 +1846,7 @@ class GrblSerialDriver(Driver):
                 self._cache_rx_buffer_size(rx_buffer_size)
                 if self._rx_buffer_size_override <= 0 and self.grbl_transport:
                     self.grbl_transport.set_rx_buffer_size(rx_buffer_size)
-        elif line.startswith("Grbl "):
+        elif line.startswith(("Grbl ", "GrblHAL ")):
             self._handshake_received.set()
             logger.debug(f"Received Grbl welcome message: {line}")
         else:

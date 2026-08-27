@@ -1,4 +1,5 @@
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
@@ -30,6 +31,26 @@ def mock_serial_transport(mocker):
     mock.status_changed = MagicMock()
     mock.port = "/dev/ttyUSB0"
     return mock
+
+
+async def wait_for_send_call(mock_send, payload, timeout=5.0):
+    """Waits until mock_send has been called with payload, tolerating
+    slow CI runners."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if (payload,) in [c.args for c in mock_send.call_args_list]:
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail(f"send({payload!r}) not observed within {timeout:.1f}s")
+
+
+def _assert_only_safety_commands_pending(driver):
+    """After an abort, only the fire-and-forget safety commands may
+    remain unacknowledged in the streaming queue."""
+    transport = driver.grbl_transport
+    pending = list(transport.pending_queue._queue)
+    assert all(p.command in ("M5\n", "M9\n") for p in pending)
+    assert transport.buffer_count == sum(p.length for p in pending)
 
 
 @pytest.fixture
@@ -136,7 +157,9 @@ class TestGrblSerialDriver:
 
         await driver.connect()
         sent_statuses = []
-        for _ in range(50):
+        # The handshake window scales with HANDSHAKE_TIMEOUT; poll
+        # well past it so a phantom-port failure is observed.
+        for _ in range(100):
             await asyncio.sleep(0.1)
             sent_statuses = [
                 call[1].get("status") for call in status_mock.call_args_list
@@ -146,6 +169,49 @@ class TestGrblSerialDriver:
         assert TransportStatus.ERROR in sent_statuses
 
         await driver.cleanup()
+
+    @pytest.mark.parametrize(
+        "banner",
+        [
+            b"Grbl 1.1h ['$' for help]",
+            b"GrblHAL 1.1f ['$' or '$HELP' for help]",
+        ],
+    )
+    def test_welcome_message_satisfies_handshake(
+        self, driver: GrblSerialDriver, banner: bytes
+    ):
+        """Classic Grbl and grblHAL banners both complete the
+        handshake."""
+        driver._handshake_received.clear()
+        assert not driver._handshake_received.is_set()
+
+        driver.on_serial_data_received(None, banner + b"\r\n")
+
+        assert driver._handshake_received.is_set()
+
+    @pytest.mark.asyncio
+    async def test_handshake_repeats_poll_while_booting(
+        self, driver: GrblSerialDriver, mock_serial_transport, mocker
+    ):
+        """Devices still booting drop the first '?', so the poll is
+        repeated until a response arrives."""
+        mocker.patch.object(
+            mock_serial_transport,
+            "is_connected",
+            new_callable=PropertyMock,
+            return_value=True,
+        )
+
+        handshake_task = asyncio.create_task(driver._await_handshake())
+
+        await wait_for_send_call(mock_serial_transport.send, b"?")
+        mock_serial_transport.send.reset_mock()
+        await wait_for_send_call(mock_serial_transport.send, b"?", timeout=2.0)
+
+        report = b"<Idle|MPos:0.000,0.000,0.000>\r\n"
+        driver.on_serial_data_received(mock_serial_transport, report)
+
+        assert await asyncio.wait_for(handshake_task, timeout=2.0) is True
 
     @pytest.mark.asyncio
     async def test_status_report_parsing(
@@ -199,6 +265,128 @@ class TestGrblSerialDriver:
         driver.on_serial_data_received(mock_serial_transport, b"error:20\r\n")
         response = await cmd_task
         assert response == ["error:20"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.asyncio
+    async def test_set_hold_updates_device_state(
+        self, connected_driver: GrblSerialDriver
+    ):
+        """Pausing must flag the device state as HOLD so the UI can offer a
+        resume, even though status polling is disabled while a job runs and
+        the firmware's HOLD status is never observed."""
+        driver = connected_driver
+        driver._job_running = True
+
+        await driver.set_hold(True)
+        assert driver._is_holding is True
+        assert driver.state.status == DeviceStatus.HOLD
+
+        await driver.set_hold(False)
+        assert driver._is_holding is False
+        assert driver.state.status == DeviceStatus.RUN
+
+    @pytest.mark.asyncio
+    async def test_job_start_updates_device_state_without_polls(
+        self, connected_driver: GrblSerialDriver, mock_serial_transport
+    ):
+        """With status polling disabled during jobs (the default), no
+        firmware reports arrive while a job runs, so the driver must
+        reflect RUN at job start itself -- otherwise the UI keeps
+        showing Idle during the whole job."""
+        driver = connected_driver
+        assert driver._poll_status_while_running is False
+
+        driver.on_serial_data_received(
+            mock_serial_transport, b"<Idle|MPos:0,0,0|FS:0,0>\r\n"
+        )
+        await asyncio.sleep(0)
+        assert driver.state.status == DeviceStatus.IDLE
+
+        state_changed_mock = MagicMock()
+        driver.state_changed.send = state_changed_mock
+
+        run_task = asyncio.create_task(driver.run_raw("G0 X10"))
+        await asyncio.sleep(0.01)
+
+        assert driver._job_running is True
+        assert driver.state.status == DeviceStatus.RUN
+        state_changed_mock.assert_called_once()
+
+        # After the job ends, the first status report (polling has
+        # resumed) must correct the state back to Idle.
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await run_task
+        assert driver._job_running is False
+        driver.on_serial_data_received(
+            mock_serial_transport, b"<Idle|MPos:0,0,0|FS:0,0>\r\n"
+        )
+        await asyncio.sleep(0)
+        assert driver.state.status == DeviceStatus.IDLE
+
+    @pytest.mark.asyncio
+    async def test_job_start_does_not_mask_alarm(
+        self, connected_driver: GrblSerialDriver, mock_serial_transport
+    ):
+        """Starting a job while the machine is in ALARM must not
+        replace the ALARM state; the job aborts immediately."""
+        driver = connected_driver
+        driver.on_serial_data_received(
+            mock_serial_transport, b"<Alarm|MPos:0,0,0|FS:0,0>\r\n"
+        )
+        await asyncio.sleep(0)
+        assert driver.state.status == DeviceStatus.ALARM
+
+        run_task = asyncio.create_task(driver.run_raw("G0 X10"))
+        await asyncio.sleep(0.01)
+
+        assert driver.state.status == DeviceStatus.ALARM
+        assert driver._job_running is False
+        await run_task
+
+    @pytest.mark.asyncio
+    async def test_run_raw_sends_realtime_commands_directly(
+        self, connected_driver: GrblSerialDriver, mock_serial_transport
+    ):
+        """GRBL realtime characters (~, !, ?) are executed by the
+        firmware on receipt and never acknowledged, so they must
+        bypass the streaming protocol and must not start a job (a
+        console '~' that clobbered job state once wedged a paused
+        machine for good)."""
+        driver = connected_driver
+        driver.on_serial_data_received(
+            mock_serial_transport, b"<Idle|MPos:0,0,0|FS:0,0>\r\n"
+        )
+        await asyncio.sleep(0)
+        mock_serial_transport.send.reset_mock()
+
+        await driver.run_raw("~")
+
+        sent = [c.args[0] for c in mock_serial_transport.send.await_args_list]
+        assert b"~" in sent
+        assert driver._job_running is False
+        assert driver.state.status == DeviceStatus.IDLE
+
+    @pytest.mark.asyncio
+    async def test_run_raw_streams_mixed_realtime_and_gcode(
+        self, connected_driver: GrblSerialDriver, mock_serial_transport
+    ):
+        """Realtime lines are sent directly while remaining lines are
+        streamed as a regular job."""
+        driver = connected_driver
+        mock_serial_transport.send.reset_mock()
+
+        run_task = asyncio.create_task(driver.run_raw("G0 X10\n~\n"))
+        await asyncio.sleep(0.01)
+
+        sent = [c.args[0] for c in mock_serial_transport.send.await_args_list]
+        assert b"~" in sent
+        assert b"G0 X10\n" in sent
+        assert driver._job_running is True
+        assert driver.state.status == DeviceStatus.RUN
+
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await run_task
+        assert driver._job_running is False
 
     @pytest.mark.asyncio
     async def test_run_streams_gcode_and_completes(
@@ -267,6 +455,193 @@ class TestGrblSerialDriver:
         await run_task
 
     @pytest.mark.asyncio
+    async def test_status_polling_continues_during_buffer_stall(
+        self,
+        connected_driver: GrblSerialDriver,
+        mock_serial_transport,
+    ):
+        """Status polls must not starve while the streamer waits for
+        buffer space: the gcode send holds _cmd_lock for the entire
+        wait, so polling for the lock would leave the driver state
+        stale (e.g. HOLD unobserved while a job is paused)."""
+        driver = connected_driver
+        driver._poll_status_while_running = True
+
+        line1 = b"G1 X10 Y10 " + b"A" * 110 + b"\n"
+        line2 = b"G1 X20 Y20\n"
+        assert len(line1) + len(line2) > 127
+
+        run_task = asyncio.create_task(
+            driver.run_raw(line1.decode() + line2.decode())
+        )
+
+        # Wait for line1 to be sent; the streamer must now be blocked
+        # inside send_gcode(), holding _cmd_lock while waiting for
+        # buffer space for line2.
+        await asyncio.sleep(0.05)
+        mock_serial_transport.send.assert_called_once_with(line1)
+        assert driver._job_running is True
+
+        mock_serial_transport.send.reset_mock()
+        await asyncio.sleep(1.2)
+        mock_serial_transport.send.assert_any_call(b"?")
+
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await asyncio.sleep(0.01)
+        mock_serial_transport.send.assert_called_with(line2)
+
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await run_task
+
+    @pytest.mark.asyncio
+    async def test_buffer_stall_retries_while_machine_responds(
+        self,
+        connected_driver: GrblSerialDriver,
+        mock_serial_transport,
+    ):
+        """A busy machine that answers status polls must never be
+        aborted as dead, no matter how long the buffer stays full
+        (regression: false ALARM:3 aborts during slow moves)."""
+        driver = connected_driver
+
+        line1 = b"G1 X10 Y10 " + b"A" * 110 + b"\n"
+        line2 = b"G1 X20 Y20\n"
+        assert len(line1) + len(line2) > 127
+
+        async def respond_with_run(data):
+            driver.on_serial_data_received(
+                mock_serial_transport, b"<Run|MPos:1,2,3|FS:100,0>\r\n"
+            )
+            return 0
+
+        assert driver.grbl_transport is not None
+        driver.grbl_transport.send_poll = respond_with_run
+        driver.STALL_TIMEOUT_DEFAULT = 0.05
+        driver.POLL_RESPONSE_ATTEMPTS = 3
+        driver.POLL_RESPONSE_INTERVAL = 0.01
+
+        run_task = asyncio.create_task(
+            driver.run_raw(line1.decode() + line2.decode())
+        )
+
+        # Many stall cycles far exceed UNANSWERED_POLL_LIMIT; the
+        # machine answering each poll must keep the job alive.
+        await asyncio.sleep(1.0)
+        assert driver._job_running is True
+        assert driver._job_exception is None
+        assert driver._consecutive_unanswered_polls == 0
+
+        # Unblock: ack both lines and let the job finish normally.
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await wait_for_send_call(mock_serial_transport.send, line2)
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await run_task
+
+    @pytest.mark.asyncio
+    async def test_buffer_stall_counts_uninterpretable_report_as_alive(
+        self,
+        connected_driver: GrblSerialDriver,
+        mock_serial_transport,
+    ):
+        """A status report that cannot be interpreted (unknown state
+        word) still proves the device is alive: it must not count as
+        an unanswered poll and trigger a dead-device abort."""
+        driver = connected_driver
+
+        line1 = b"G1 X10 Y10 " + b"A" * 110 + b"\n"
+        line2 = b"G1 X20 Y20\n"
+
+        async def respond_with_unknown_state(data):
+            driver.on_serial_data_received(
+                mock_serial_transport, b"<Foo|MPos:1,2,3|FS:0,0>\r\n"
+            )
+            return 0
+
+        assert driver.grbl_transport is not None
+        driver.grbl_transport.send_poll = respond_with_unknown_state
+        driver.STALL_TIMEOUT_DEFAULT = 0.05
+        driver.POLL_RESPONSE_ATTEMPTS = 3
+        driver.POLL_RESPONSE_INTERVAL = 0.01
+
+        run_task = asyncio.create_task(
+            driver.run_raw(line1.decode() + line2.decode())
+        )
+
+        await asyncio.sleep(0.5)
+        assert driver._raw_grbl_status == DeviceStatus.UNKNOWN
+        assert driver._consecutive_unanswered_polls == 0
+        assert driver._job_running is True
+        assert driver._job_exception is None
+
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await wait_for_send_call(mock_serial_transport.send, line2)
+        driver.on_serial_data_received(mock_serial_transport, b"ok\r\n")
+        await run_task
+
+    @pytest.mark.asyncio
+    async def test_buffer_stall_aborts_when_device_stops_responding(
+        self,
+        connected_driver: GrblSerialDriver,
+        mock_serial_transport,
+    ):
+        """A device that stops responding to status polls entirely
+        must abort the job instead of stalling forever, even with
+        deadlock detection disabled."""
+        driver = connected_driver
+
+        line1 = b"G1 X10 Y10 " + b"A" * 110 + b"\n"
+        line2 = b"G1 X20 Y20\n"
+
+        driver.STALL_TIMEOUT_DEFAULT = 0.05
+        driver.POLL_RESPONSE_ATTEMPTS = 2
+        driver.POLL_RESPONSE_INTERVAL = 0.01
+
+        run_task = asyncio.create_task(
+            driver.run_raw(line1.decode() + line2.decode())
+        )
+
+        try:
+            await asyncio.wait_for(run_task, timeout=10.0)
+        except (asyncio.CancelledError, DeviceConnectionError):
+            pass
+
+        assert driver._job_running is False
+        assert driver._job_exception is not None
+        assert isinstance(driver._job_exception, DeviceConnectionError)
+        assert "stopped responding" in str(driver._job_exception)
+        assert driver.grbl_transport is not None
+        _assert_only_safety_commands_pending(driver)
+
+    @pytest.mark.asyncio
+    async def test_drain_phase_aborts_when_device_stops_responding(
+        self,
+        connected_driver: GrblSerialDriver,
+        mock_serial_transport,
+    ):
+        """Total silence after all gcode was sent (ack drain phase)
+        must also abort instead of retrying forever."""
+        driver = connected_driver
+
+        driver.STALL_TIMEOUT_DEFAULT = 0.05
+        driver.POLL_RESPONSE_ATTEMPTS = 2
+        driver.POLL_RESPONSE_INTERVAL = 0.01
+
+        # Send a single short line, never ack it. All gcode is sent,
+        # then _drain_pending_acks polls; silence must abort.
+        run_task = asyncio.create_task(driver.run_raw("G0 X10"))
+
+        try:
+            await asyncio.wait_for(run_task, timeout=10.0)
+        except (asyncio.CancelledError, DeviceConnectionError):
+            pass
+
+        assert driver._job_running is False
+        assert driver._job_exception is not None
+        assert "stopped responding" in str(driver._job_exception)
+        assert driver.grbl_transport is not None
+        _assert_only_safety_commands_pending(driver)
+
+    @pytest.mark.asyncio
     async def test_run_handles_mid_job_error(
         self,
         connected_driver: GrblSerialDriver,
@@ -302,8 +677,7 @@ class TestGrblSerialDriver:
         assert isinstance(driver._job_exception, DeviceConnectionError)
         assert "error:20" in str(driver._job_exception)
         assert driver.grbl_transport is not None
-        assert driver.grbl_transport.pending_queue.empty()
-        assert driver.grbl_transport.buffer_count == 0
+        _assert_only_safety_commands_pending(driver)
 
         job_finished_mock.assert_called_once_with(driver)
         mock_serial_transport.send.assert_any_call(b"\x18")
@@ -581,6 +955,25 @@ class TestGrblSerialDriver:
         execute_command_mock.assert_called_once_with("$G")
 
     @pytest.mark.asyncio
+    async def test_cancel_sends_safety_shutdown(
+        self,
+        connected_driver: GrblSerialDriver,
+        mock_serial_transport,
+    ):
+        """Cancel must turn persistent PWM outputs off, not just reset."""
+        driver = connected_driver
+        job_finished_mock = MagicMock()
+        driver.job_finished.send = job_finished_mock
+        driver._start_job()
+
+        await asyncio.wait_for(driver.cancel(), timeout=1.0)
+
+        assert driver._job_running is False
+        mock_serial_transport.send.assert_any_call(b"\x18")
+        mock_serial_transport.send.assert_any_call(b"M5\n")
+        job_finished_mock.assert_called_once_with(driver)
+
+    @pytest.mark.asyncio
     async def test_alarm_stops_sending_and_driver_state_consistent(
         self,
         connected_driver: GrblSerialDriver,
@@ -630,8 +1023,7 @@ class TestGrblSerialDriver:
         assert "ALARM" in str(driver._job_exception)
 
         assert driver.grbl_transport is not None
-        assert driver.grbl_transport.pending_queue.empty()
-        assert driver.grbl_transport.buffer_count == 0
+        _assert_only_safety_commands_pending(driver)
 
         job_finished_mock.assert_called_once_with(driver)
 
@@ -672,8 +1064,7 @@ class TestGrblSerialDriver:
         assert driver._job_running is False
         assert driver._job_exception is not None
         assert driver.grbl_transport is not None
-        assert driver.grbl_transport.pending_queue.empty()
-        assert driver.grbl_transport.buffer_count == 0
+        _assert_only_safety_commands_pending(driver)
 
         job_finished_mock.assert_called_once_with(driver)
         mock_serial_transport.send.assert_any_call(b"\x18")
@@ -720,8 +1111,7 @@ class TestGrblSerialDriver:
 
         assert driver._job_running is False
         assert driver.grbl_transport is not None
-        assert driver.grbl_transport.pending_queue.empty()
-        assert driver.grbl_transport.buffer_count == 0
+        _assert_only_safety_commands_pending(driver)
 
         job_finished_mock.assert_called_once_with(driver)
         mock_serial_transport.send.assert_any_call(b"\x18")
@@ -758,8 +1148,7 @@ class TestGrblSerialDriver:
             pass
 
         assert driver.grbl_transport is not None
-        assert driver.grbl_transport.pending_queue.empty()
-        assert driver.grbl_transport.buffer_count == 0
+        _assert_only_safety_commands_pending(driver)
         assert driver._job_running is False
 
         job_finished_mock.assert_called_once_with(driver)
@@ -811,8 +1200,7 @@ class TestGrblSerialDriver:
         assert driver._job_running is False
         assert driver._job_exception is not None
         assert driver.grbl_transport is not None
-        assert driver.grbl_transport.pending_queue.empty()
-        assert driver.grbl_transport.buffer_count == 0
+        _assert_only_safety_commands_pending(driver)
 
         job_finished_mock.assert_called_once_with(driver)
         mock_serial_transport.send.assert_any_call(b"\x18")

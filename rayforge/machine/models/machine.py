@@ -86,6 +86,27 @@ def _raise_error(*args, **kwargs):
     raise RuntimeError("Cannot schedule from worker process")
 
 
+def _format_usb_field(value: int | None) -> str | None:
+    """Serializes a USB vid/pid as the conventional hex string."""
+    if value is None:
+        return None
+    return f"{value:04x}"
+
+
+def _parse_usb_field(value) -> int | None:
+    """Parses a USB vid/pid from its serialized form (hex string or
+    int, for older files)."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value), 16)
+    except ValueError:
+        logger.warning(f"Ignoring malformed USB id in machine data: {value}")
+        return None
+
+
 class Machine:
     def __init__(self, context: RayforgeContext):
         logger.debug("Machine.__init__")
@@ -122,6 +143,9 @@ class Machine:
         self.auto_connect: bool = True
         self.home_on_start: bool = False
         self.clear_alarm_on_connect: bool = False
+        # True while this machine is the auto-created placeholder that
+        # keeps the app usable before the user sets up a real machine.
+        self.placeholder: bool = False
         self.single_axis_homing_enabled: bool = True
         self.dialect_uid: str | None = "grbl"
         self.dialect_migrated: bool = False
@@ -174,6 +198,12 @@ class Machine:
         self.default_rotary_module_uid: str | None = None
         self.soft_limits_enabled: bool = True
         self.wcs_origin_is_workarea_origin: bool = False
+        self.source_profile_id: str | None = None
+        self.reviewed_profile_hash: str | None = None
+        self.schema_version: int = 0
+        self.usb_vid: int | None = None
+        self.usb_pid: int | None = None
+        self.extra: dict[str, Any] = {}
         self._settings_lock = asyncio.Lock()
 
         # Work Coordinate System (WCS) State
@@ -479,6 +509,11 @@ class Machine:
 
     async def disconnect(self):
         """Public method to disconnect the driver."""
+        # Avoid lazy-creating a controller (which raises if the machine
+        # has been removed from the manager). If none exists, there is
+        # nothing to disconnect.
+        if not self.has_controller:
+            return
         await self.controller.disconnect()
 
     async def shutdown(self):
@@ -1511,6 +1546,7 @@ class Machine:
                 "driver_config": self.driver_config,
                 "auto_connect": self.auto_connect,
                 "clear_alarm_on_connect": self.clear_alarm_on_connect,
+                "placeholder": self.placeholder,
                 "home_on_start": self.home_on_start,
                 "single_axis_homing_enabled": self.single_axis_homing_enabled,
                 "dialect_uid": self.dialect_uid,
@@ -1537,6 +1573,11 @@ class Machine:
                 "wcs_origin_is_workarea_origin": (
                     self.wcs_origin_is_workarea_origin
                 ),
+                "source_profile_id": self.source_profile_id,
+                "reviewed_profile_hash": self.reviewed_profile_hash,
+                "schema_version": self.schema_version,
+                "usb_vid": _format_usb_field(self.usb_vid),
+                "usb_pid": _format_usb_field(self.usb_pid),
                 "heads": [head.to_dict() for head in self.heads],
                 "cameras": [camera.to_dict() for camera in self.cameras],
                 "rotary_modules": [
@@ -1578,6 +1619,9 @@ class Machine:
             data["machine"]["frozen_dialect"] = (
                 self._hydrated_dialect.to_dict()
             )
+        # Re-emit keys written by newer app versions so a save never
+        # drops settings this version does not understand.
+        data["machine"].update(self.extra)
         return data
 
     @staticmethod
@@ -1669,24 +1713,28 @@ class Machine:
         if context is None:
             context = get_context()
         ma = cls(context)
-        ma_data = data.get("machine", {})
-        ma.id = ma_data.get("id", ma.id)
-        ma.name = ma_data.get("name", ma.name)
-        ma.driver_name = ma_data.get("driver")
-        ma.driver_args = ma_data.get("driver_args", {})
-        ma.driver_config = ma_data.get("driver_config", {})
-        ma.auto_connect = ma_data.get("auto_connect", ma.auto_connect)
-        ma.clear_alarm_on_connect = ma_data.get(
+        # Work on a copy: keys are popped as they are consumed so the
+        # leftovers can be preserved as forward-compatibility extras.
+        ma_data = dict(data.get("machine", {}))
+        ma.id = ma_data.pop("id", ma.id)
+        ma.name = ma_data.pop("name", ma.name)
+        ma.driver_name = ma_data.pop("driver", None)
+        ma.driver_args = ma_data.pop("driver_args", {})
+        ma.driver_config = ma_data.pop("driver_config", {})
+        ma.auto_connect = ma_data.pop("auto_connect", ma.auto_connect)
+        ma.clear_alarm_on_connect = ma_data.pop(
             "clear_alarm_on_connect",
             ma.clear_alarm_on_connect,
         )
-        ma.home_on_start = ma_data.get("home_on_start", ma.home_on_start)
-        ma.single_axis_homing_enabled = ma_data.get(
+        ma.placeholder = ma_data.pop("placeholder", ma.placeholder)
+        ma.home_on_start = ma_data.pop("home_on_start", ma.home_on_start)
+        ma.single_axis_homing_enabled = ma_data.pop(
             "single_axis_homing_enabled",
             ma.single_axis_homing_enabled,
         )
 
-        dialect_uid = ma_data.get("dialect_uid")
+        dialect_uid = ma_data.pop("dialect_uid", None)
+        legacy_dialect = ma_data.pop("dialect", None)
         if dialect_uid is None:
             driver_cls = get_driver_cls(
                 ma.driver_name if ma.driver_name else ""
@@ -1694,9 +1742,9 @@ class Machine:
             if not driver_cls.uses_gcode:
                 dialect_uid = None
             else:
-                dialect_uid = ma_data.get("dialect", "grbl").lower()
+                dialect_uid = (legacy_dialect or "grbl").lower()
 
-        hook_data = ma_data.get("hookmacros", {})
+        hook_data = ma_data.pop("hookmacros", {})
 
         # Run the migration logic, which may update the dialect_uid and
         # hook_data
@@ -1711,33 +1759,42 @@ class Machine:
         )
         ma.dialect_migrated = migrated
         ma.dialect_uid = dialect_uid
-        ma.active_wcs = ma_data.get("active_wcs", ma.active_wcs)
-        if "coordinate_systems" in ma_data:
+        ma.active_wcs = ma_data.pop("active_wcs", ma.active_wcs)
+
+        coordinate_systems = ma_data.pop("coordinate_systems", None)
+        wcs_offsets = ma_data.pop("wcs_offsets", None)
+        if coordinate_systems is not None:
             ma.coordinate_systems = {}
-            for cs_data in ma_data["coordinate_systems"]:
+            for cs_data in coordinate_systems:
                 cs = CoordinateSystem.from_dict(cs_data)
                 ma.coordinate_systems[cs.name] = cs
-        elif "wcs_offsets" in ma_data:
-            for name, offset in ma_data["wcs_offsets"].items():
+        elif wcs_offsets is not None:
+            for name, offset in wcs_offsets.items():
                 cs = ma.coordinate_systems.get(name)
                 if cs:
                     cs.offset = tuple(offset)
 
-        if "axes" in ma_data:
-            ma.axes = AxisSet.from_dict(ma_data["axes"])
+        # Legacy keys are always popped, even when unused, so they
+        # never leak into the forward-compatibility extras below.
+        axes_data = ma_data.pop("axes", None)
+        legacy_extents = tuple(ma_data.pop("dimensions", ma.axis_extents))
+        axis_extents = ma_data.pop("axis_extents", None)
+        if axis_extents is not None:
+            legacy_extents = tuple(axis_extents)
+        legacy_reverse_x = ma_data.pop("reverse_x_axis", False)
+        legacy_reverse_y = ma_data.pop("reverse_y_axis", False)
+        legacy_reverse_z = ma_data.pop("reverse_z_axis", False)
+        x_axis_negative = ma_data.pop("x_axis_negative", None)
+        if x_axis_negative is not None:
+            logger.info("Migrating legacy 'x_axis_negative' setting.")
+            legacy_reverse_x = x_axis_negative
+        y_axis_negative = ma_data.pop("y_axis_negative", None)
+        if y_axis_negative is not None:
+            logger.info("Migrating legacy 'y_axis_negative' setting.")
+            legacy_reverse_y = y_axis_negative
+        if axes_data is not None:
+            ma.axes = AxisSet.from_dict(axes_data)
         else:
-            legacy_extents = tuple(ma_data.get("dimensions", ma.axis_extents))
-            if "axis_extents" in ma_data:
-                legacy_extents = tuple(ma_data["axis_extents"])
-            legacy_reverse_x = ma_data.get("reverse_x_axis", False)
-            legacy_reverse_y = ma_data.get("reverse_y_axis", False)
-            legacy_reverse_z = ma_data.get("reverse_z_axis", False)
-            if "x_axis_negative" in ma_data:
-                logger.info("Migrating legacy 'x_axis_negative' setting.")
-                legacy_reverse_x = ma_data["x_axis_negative"]
-            if "y_axis_negative" in ma_data:
-                logger.info("Migrating legacy 'y_axis_negative' setting.")
-                legacy_reverse_y = ma_data["y_axis_negative"]
             ma.axes = AxisSet.from_legacy(
                 axis_extents=legacy_extents,
                 reverse_x=legacy_reverse_x,
@@ -1746,31 +1803,36 @@ class Machine:
                 rotary_modules=ma.rotary_modules,
             )
 
-        if "work_margins" in ma_data:
-            ma._work_margins = tuple(ma_data["work_margins"])
-        elif "offsets" in ma_data:
-            ox, oy = ma_data["offsets"]
+        work_margins = ma_data.pop("work_margins", None)
+        offsets = ma_data.pop("offsets", None)
+        if work_margins is not None:
+            ma._work_margins = tuple(work_margins)
+        elif offsets is not None:
+            ox, oy = offsets
             ma._work_margins = (ox, 0, 0, oy)
 
-        if "soft_limits" in ma_data and ma_data["soft_limits"] is not None:
-            ma._soft_limits = tuple(ma_data["soft_limits"])
+        soft_limits = ma_data.pop("soft_limits", None)
+        if soft_limits is not None:
+            ma._soft_limits = tuple(soft_limits)
 
-        origin_value = ma_data.get("origin", None)
+        origin_value = ma_data.pop("origin", None)
         if origin_value is not None:
             ma.origin = Origin(origin_value)
         else:  # Legacy support for y_axis_down
             ma.origin = (
                 Origin.BOTTOM_LEFT
-                if ma_data.get("y_axis_down", False) is False
+                if ma_data.pop("y_axis_down", False) is False
                 else Origin.TOP_LEFT
             )
 
-        ma.rotary_enabled_default = ma_data.get(
+        ma.rotary_enabled_default = ma_data.pop(
             "rotary_enabled_default", False
         )
-        ma.default_rotary_module_uid = ma_data.get("default_rotary_module_uid")
+        ma.default_rotary_module_uid = ma_data.pop(
+            "default_rotary_module_uid", None
+        )
 
-        orientation_value = ma_data.get(
+        orientation_value = ma_data.pop(
             "panel_orientation", PanelOrientation.NATIVE.value
         )
         try:
@@ -1782,13 +1844,19 @@ class Machine:
             )
             ma.panel._orientation = PanelOrientation.NATIVE
 
-        ma.soft_limits_enabled = ma_data.get(
+        ma.soft_limits_enabled = ma_data.pop(
             "soft_limits_enabled", ma.soft_limits_enabled
         )
 
-        ma.wcs_origin_is_workarea_origin = ma_data.get(
+        ma.wcs_origin_is_workarea_origin = ma_data.pop(
             "wcs_origin_is_workarea_origin", False
         )
+        ma.source_profile_id = ma_data.pop("source_profile_id", None)
+        ma.reviewed_profile_hash = ma_data.pop("reviewed_profile_hash", None)
+        ma.schema_version = ma_data.pop("schema_version", 0)
+        ma.usb_vid = _parse_usb_field(ma_data.pop("usb_vid", None))
+        ma.usb_pid = _parse_usb_field(ma_data.pop("usb_pid", None))
+        ma_data.pop("frozen_dialect", None)
 
         # Deserialize remaining hookmacros from the (potentially cleaned) data
         for trigger_name, macro_data in hook_data.items():
@@ -1800,37 +1868,41 @@ class Machine:
                     f"Skipping unknown hook trigger '{trigger_name}'"
                 )
 
-        macros_data = ma_data.get("macros", {})
+        macros_data = ma_data.pop("macros", {})
         for uid, macro_data in macros_data.items():
             macro_data["uid"] = uid  # Ensure UID is consistent with key
             ma.macros[uid] = Macro.from_dict(macro_data)
 
+        heads_data = ma_data.pop("heads", [])
         ma.heads = []
-        for obj in ma_data.get("heads", {}):
+        for obj in heads_data:
             ma.add_head(head_from_dict(obj))
         ma._explicit_capabilities = cls._parse_capabilities(
-            ma_data.get("capabilities")
+            ma_data.pop("capabilities", None)
         )
+        cameras_data = ma_data.pop("cameras", [])
         ma.cameras = []
-        for obj in ma_data.get("cameras", {}):
+        for obj in cameras_data:
             ma.add_camera(Camera.from_dict(migrate_camera_data(obj)))
-        for obj in ma_data.get("rotary_modules", []):
+        rotary_modules_data = ma_data.pop("rotary_modules", [])
+        for obj in rotary_modules_data:
             ma.add_rotary_module(RotaryModule.from_dict(obj))
-        for obj in ma_data.get("nogo_zones", []):
+        nogo_zones_data = ma_data.pop("nogo_zones", [])
+        for obj in nogo_zones_data:
             ma.add_nogo_zone(Zone.from_dict(obj))
-        speeds = ma_data.get("speeds", {})
+        speeds = ma_data.pop("speeds", {})
         ma.max_cut_speed = speeds.get("max_cut_speed", ma.max_cut_speed)
         ma.max_travel_speed = speeds.get(
             "max_travel_speed", ma.max_travel_speed
         )
         ma.acceleration = speeds.get("acceleration", ma.acceleration)
-        gcode = ma_data.get("gcode", {})
+        gcode = ma_data.pop("gcode", {})
         ma.gcode_precision = gcode.get("gcode_precision", ma.gcode_precision)
-        ma.supports_arcs = ma_data.get("supports_arcs", ma.supports_arcs)
-        ma.supports_curves = ma_data.get("supports_curves", ma.supports_curves)
-        ma.arc_tolerance = ma_data.get("arc_tolerance", ma.arc_tolerance)
+        ma.supports_arcs = ma_data.pop("supports_arcs", ma.supports_arcs)
+        ma.supports_curves = ma_data.pop("supports_curves", ma.supports_curves)
+        ma.arc_tolerance = ma_data.pop("arc_tolerance", ma.arc_tolerance)
 
-        units = ma_data.get("units", {})
+        units = ma_data.pop("units", {})
         unit_system_value = units.get("unit_system", "metric")
         try:
             ma.unit_system = UnitSystem(unit_system_value)
@@ -1841,8 +1913,12 @@ class Machine:
             )
             ma.unit_system = UnitSystem.METRIC
 
-        hours_data = ma_data.get("machine_hours", {})
+        hours_data = ma_data.pop("machine_hours", {})
         ma.machine_hours = MachineHours.from_dict(hours_data)
         ma.machine_hours.changed.connect(ma._on_machine_hours_changed)
+
+        # Whatever remains was written by a newer app version; keep it
+        # verbatim so a save by this version never drops those settings.
+        ma.extra = ma_data
 
         return ma

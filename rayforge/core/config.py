@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from enum import Enum
+from gettext import gettext as _
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,25 @@ class StartupBehavior(Enum):
     SPECIFIC_PROJECT = "specific_project"
 
 
+class RightPanelMode(Enum):
+    """Enum for right panel display modes."""
+
+    HIDDEN = "hidden"
+    ACTIVE_LAYER = "active_layer"
+    NON_EMPTY_LAYERS = "non_empty_layers"
+    ALL_LAYERS = "all_layers"
+
+    def label(self) -> str:
+        """Return a translatable label for this panel mode."""
+        labels = {
+            self.HIDDEN: _("Hidden"),
+            self.ACTIVE_LAYER: _("Active Layer Workflow"),
+            self.NON_EMPTY_LAYERS: _("All Non-Empty Layers"),
+            self.ALL_LAYERS: _("All Layers"),
+        }
+        return labels[self]
+
+
 @dataclass
 class CanvasViewState:
     """Persistent view toggle states for the 2D/3D canvases."""
@@ -40,7 +60,6 @@ class CanvasViewState:
     show_grid: bool = True
     show_models: bool = True
     show_tabs: bool = True
-    show_ops_underlay: bool = True
     show_stock: bool = True
     perspective_mode: bool = False
 
@@ -75,6 +94,7 @@ class Config:
         # UI visibility states
         self.bottom_panel: dict[str, Any] | None = None
         self.right_panel_visible: bool = True
+        self.right_panel_mode: RightPanelMode = RightPanelMode.NON_EMPTY_LAYERS
         self.canvas_view: CanvasViewState = CanvasViewState()
         self.auto_pipeline: bool = True
         self.ops_color_mode: OpsColorMode = OpsColorMode.LASER
@@ -88,6 +108,16 @@ class Config:
         self.cache_budget_bytes: int = 2 * 1024 * 1024 * 1024
         # Language preference: None = system default, or a code like "de"
         self.language: str | None = None
+        # Default stock material UID: None = use the bundled fallback
+        # material (oak). When the user picks a material in the
+        # settings, its UID is stored here.
+        self.default_stock_material_uid: str | None = None
+        # Default stock thickness in mm, applied to new stock assets.
+        self.default_stock_thickness_mm: float = 18.0
+        # Whether the first-run machine setup wizard has been completed
+        # (or dismissed). Absent in older configs; the wizard itself
+        # only triggers while placeholder machines are the only ones.
+        self.setup_completed: bool = False
         self.changed = Signal()
 
     def set_machine(self, machine: Machine | None):
@@ -149,6 +179,13 @@ class Config:
         self.right_panel_visible = visible
         self.changed.send(self)
 
+    def set_right_panel_mode(self, mode: RightPanelMode):
+        """Sets the right panel display mode."""
+        if self.right_panel_mode == mode:
+            return
+        self.right_panel_mode = mode
+        self.changed.send(self)
+
     def set_import_dpi(self, dpi: float):
         """Sets the default DPI for unitless SVG imports."""
         if self.import_dpi == dpi:
@@ -193,6 +230,31 @@ class Config:
         if self.language == language:
             return
         self.language = language
+        self.changed.send(self)
+
+    def set_default_stock_material(self, uid: str | None):
+        """Sets the default stock material UID.
+
+        Args:
+            uid: Material UID, or None to use the bundled fallback.
+        """
+        if self.default_stock_material_uid == uid:
+            return
+        self.default_stock_material_uid = uid
+        self.changed.send(self)
+
+    def set_default_stock_thickness(self, thickness_mm: float):
+        """Sets the default stock thickness in mm."""
+        if self.default_stock_thickness_mm == thickness_mm:
+            return
+        self.default_stock_thickness_mm = thickness_mm
+        self.changed.send(self)
+
+    def set_setup_completed(self, completed: bool):
+        """Marks the first-run machine setup wizard as handled."""
+        if self.setup_completed == completed:
+            return
+        self.setup_completed = completed
         self.changed.send(self)
 
     def set_usage_consent(self, consent: bool):
@@ -241,6 +303,7 @@ class Config:
             ),
             "bottom_panel": self.bottom_panel,
             "right_panel_visible": self.right_panel_visible,
+            "right_panel_mode": self.right_panel_mode.value,
             "canvas_view": self.canvas_view.to_dict(),
             "auto_pipeline": self.auto_pipeline,
             "check_for_app_updates": self.check_for_app_updates,
@@ -249,6 +312,9 @@ class Config:
             "import_dpi": self.import_dpi,
             "cache_budget_bytes": self.cache_budget_bytes,
             "language": self.language,
+            "default_stock_material_uid": self.default_stock_material_uid,
+            "default_stock_thickness_mm": self.default_stock_thickness_mm,
+            "setup_completed": self.setup_completed,
         }
 
     @classmethod
@@ -293,6 +359,12 @@ class Config:
         # Load UI visibility states
         config.bottom_panel = data.get("bottom_panel", None)
         config.right_panel_visible = data.get("right_panel_visible", True)
+        default_panel_mode = RightPanelMode.NON_EMPTY_LAYERS.value
+        panel_mode_str = data.get("right_panel_mode", default_panel_mode)
+        try:
+            config.right_panel_mode = RightPanelMode(panel_mode_str)
+        except ValueError:
+            config.right_panel_mode = RightPanelMode.NON_EMPTY_LAYERS
         config.canvas_view = CanvasViewState.from_dict(
             data.get("canvas_view", {})
         )
@@ -320,6 +392,19 @@ class Config:
 
         # Load language preference (None = system default)
         config.language = data.get("language", None)
+
+        # Load default stock material (None = bundled fallback)
+        config.default_stock_material_uid = data.get(
+            "default_stock_material_uid", None
+        )
+
+        # Load default stock thickness
+        config.default_stock_thickness_mm = data.get(
+            "default_stock_thickness_mm", 18.0
+        )
+
+        # Load first-run setup flag
+        config.setup_completed = data.get("setup_completed", False)
 
         # Get the machine by ID. add fallbacks in case the machines
         # no longer exist.

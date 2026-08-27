@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: Creality Falcon A1
+  vendor: Creality
+  model: Falcon A1
   description: Diode laser engraver with 381x305mm work area and rotary support
 machine:
   driver: GrblSerialDriver
@@ -17,6 +19,7 @@ machine:
   max_travel_speed: 3000
   max_cut_speed: 1000
   home_on_start: false
+  has_z: false
   rotary_enabled_default: false
   rotary_modules:
   - name: Creality Roller Rotary
@@ -28,6 +31,8 @@ machine:
     model_path: creality-roller.glb
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 10
     frame_power_percent: 0.1
     spot_size_mm:
     - 0.1

@@ -12,6 +12,7 @@ from .. import __version__, const
 from ..addon_mgr.update_cmd import UpdateCommand
 from ..context import get_context
 from ..core.asset_registry import asset_type_registry
+from ..core.config import RightPanelMode
 from ..core.group import Group
 from ..core.item import DocItem
 from ..core.registration import call_registration_hooks
@@ -50,7 +51,12 @@ from .doceditor.missing_features_dialog import MissingFeaturesDialog
 from .doceditor.property_providers import register_builtin_providers
 from .doceditor.workflow_view import WorkflowView
 from .machine.machine_dropdown import MachineDropdown
+from .machine.profile_review_dialog import (
+    ProfileReviewDialog,
+    SchemaReviewDialog,
+)
 from .machine.settings_dialog import MachineSettingsDialog
+from .machine.unified_wizard import UnifiedWizard
 from .main_menu import MainMenu
 from .project_cmd import ProjectCmd
 from .settings.settings_dialog import SettingsWindow
@@ -69,6 +75,10 @@ from .toolbar import MainToolbar
 from .view_mode_cmd import ViewModeCmd
 
 logger = logging.getLogger(__name__)
+
+# Horizontal space reserved for the right panel when it is shown
+RIGHT_PANEL_OVERLAY_MARGIN = 454
+DEFAULT_OVERLAY_MARGIN = 6
 
 
 css = """
@@ -139,8 +149,12 @@ class MainWindow(Adw.ApplicationWindow):
         self._saved_bottom_panel_visible = False
         self._old_doc = None  # Track previous document for signal reconnection
         self.canvas3d: Canvas3D | None = None
+        self._canvas3d_vis_overlay: VisibilityOverlay | None = None
+        self._surface_vis_overlay: VisibilityOverlay | None = None
         self._canvas3d_time_overlay: TimeEstimateOverlay | None = None
         self._is_syncing_3d = False
+        self._setup_wizard: UnifiedWizard | None = None
+        self._setup_wizard_completed = True
 
         # The ToastOverlay will wrap the main content box
         self.toast_overlay = Adw.ToastOverlay()
@@ -195,6 +209,16 @@ class MainWindow(Adw.ApplicationWindow):
         self.menubar = Gtk.PopoverMenuBar.new_from_model(self.menu_model)
         self.menubar.add_css_class("in-header-menubar")
         self.header_bar.pack_start(self.menubar)
+
+        # Persistent banner shown while the active machine is still the
+        # untouched placeholder created on first launch.
+        self.setup_banner = Adw.Banner()
+        self.setup_banner.set_title(_("Set up your machine to get started"))
+        self.setup_banner.set_button_label(_("Set Up Machine"))
+        self.setup_banner.connect(
+            "button-clicked", self._on_setup_banner_clicked
+        )
+        vbox.append(self.setup_banner)
 
         # Set up Recent Files manager
         self.recent_manager = Gtk.RecentManager.get_default()
@@ -348,7 +372,9 @@ class MainWindow(Adw.ApplicationWindow):
             show_nogo_zones=bool(config.machine and config.machine.nogo_zones),
             shortcuts=SHORTCUTS,
         )
-        self._surface_vis_overlay.set_margin_end(454)
+        self._surface_vis_overlay.set_margin_end(
+            self._get_vis_overlay_margin_end()
+        )
         self.surface_overlay.add_overlay(self._surface_vis_overlay)
         self._time_estimate_overlay = TimeEstimateOverlay()
         self.surface_overlay.add_overlay(self._time_estimate_overlay)
@@ -396,16 +422,14 @@ class MainWindow(Adw.ApplicationWindow):
         right_pane_box.set_size_request(430, -1)
         self._right_pane.set_child(right_pane_box)
 
-        # The WorkflowView will be updated when a layer is activated.
-        initial_workflow = self.doc_editor.doc.active_layer.workflow
-        assert initial_workflow, "Initial active layer must have a workflow"
-        self.workflowview = WorkflowView(
-            self.doc_editor,
-            initial_workflow,
-        )
-        self.workflowview.set_margin_top(6)
-        self.workflowview.set_margin_end(12)
-        right_pane_box.append(self.workflowview)
+        # The workflow views are updated when the document or the
+        # active layer changes, according to the right panel mode.
+        self._workflow_views: list[WorkflowView] = []
+        self._workflow_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self._workflow_box.set_margin_top(6)
+        self._workflow_box.set_margin_end(12)
+        right_pane_box.append(self._workflow_box)
+        self._update_workflow_views()
 
         # Register built-in property providers before creating the widget
         register_builtin_providers()
@@ -546,6 +570,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Initialize usage tracking based on saved consent
         config = get_context().config
+        consent_pending = not (
+            config.has_consented_tracking or config.has_declined_tracking
+        )
         if config.has_consented_tracking:
             get_usage_tracker().set_enabled(True)
             get_usage_tracker().track_page_view("/view/2d", "2D View")
@@ -554,12 +581,176 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             dialog = UsageConsentDialog(self)
             dialog.present()
+            # Avoid piling windows: open the first-run wizard only
+            # after the consent dialog has been answered.
+            dialog.connect("response", self._on_consent_responded)
 
         # Trigger the non-blocking check for addon updates
         self.update_cmd.check_for_updates_on_startup()
 
         # Trigger the non-blocking check for app version updates
         self.app_update_checker.check_on_startup()
+
+        # Check configured machines against their source device profiles
+        GLib.idle_add(self._check_profile_updates)
+
+        # On first launch, offer the machine setup wizard instead of
+        # silently keeping the auto-created placeholder machine. While
+        # the consent dialog is up, it chains the presentation so the
+        # two don't stack up.
+        if consent_pending:
+            return
+        GLib.idle_add(self._maybe_present_first_run_wizard)
+
+    def _on_consent_responded(self, dialog, response_id):
+        GLib.idle_add(self._maybe_present_first_run_wizard)
+
+    def _maybe_present_first_run_wizard(self) -> bool:
+        """
+        Presents the setup wizard once if no real machine has ever been
+        set up (only untouched placeholder machines exist).
+        """
+        context = get_context()
+        config = context.config
+        machines = list(context.machine_mgr.machines.values())
+        if config.setup_completed:
+            return GLib.SOURCE_REMOVE
+        if not all(machine.placeholder for machine in machines):
+            return GLib.SOURCE_REMOVE
+        logger.info("First launch detected; presenting setup wizard.")
+        self.present_setup_wizard()
+        return GLib.SOURCE_REMOVE
+
+    def present_setup_wizard(self):
+        """Opens the unified machine setup wizard."""
+        if self._setup_wizard is not None:
+            self._setup_wizard.present()
+            return
+        dialog = UnifiedWizard(transient_for=self)
+        self._setup_wizard = dialog
+        self._setup_wizard_completed = False
+        dialog.profile_created.connect(self._on_setup_wizard_profile_created)
+        dialog.connect("close-request", self._on_setup_wizard_closed)
+        dialog.present()
+
+    def _on_setup_wizard_closed(self, *args) -> bool:
+        """Handles the user cancelling the setup wizard.
+
+        Falls back to the placeholder machine and marks setup as
+        handled so the wizard is never forced on the user again.
+        """
+        self._setup_wizard = None
+        if self._setup_wizard_completed:
+            return False
+        self._setup_wizard_completed = True
+        get_context().config.set_setup_completed(True)
+        logger.info("Setup wizard cancelled; keeping placeholder machine.")
+        return False
+
+    def _on_setup_wizard_profile_created(
+        self,
+        sender,
+        *,
+        profile,
+        machine=None,
+    ):
+        """Activates the machine created by the wizard.
+
+        The placeholder machine is removed so it does not linger in
+        the machine list.
+        """
+        context = get_context()
+        if machine is None:
+            machine = profile.create_machine(context)
+        self._setup_wizard_completed = True
+        self._setup_wizard = None
+        context.config.set_setup_completed(True)
+
+        manager = context.machine_mgr
+        manager.set_active_machine(machine)
+        for placeholder in manager.get_placeholder_machines():
+            if placeholder.id != machine.id:
+                manager.remove_machine(placeholder.id)
+
+    def _on_setup_banner_clicked(self, banner):
+        self.present_setup_wizard()
+
+    def _update_setup_banner(self):
+        """Shows the banner only while a placeholder machine is active."""
+        config = get_context().config
+        show_banner = bool(config.machine and config.machine.placeholder)
+        self.setup_banner.set_revealed(show_banner)
+
+    def _check_profile_updates(self) -> bool:
+        """
+        Presents the profile-review dialog for machines whose source
+        device profile changed since their last review, then the
+        schema-review dialog for machines saved by an older app
+        version that are missing new settings.
+
+        The schema check runs *after* the profile reviews so that
+        profile-provided values are written first — the schema
+        migration then only surfaces settings the profile did not
+        cover.
+        """
+        context = get_context()
+        reviewable = context.machine_mgr.get_pending_profile_reviews()
+        if reviewable:
+            self._present_profile_reviews(
+                reviewable,
+                on_done=self._check_schema_migrations,
+            )
+            return GLib.SOURCE_REMOVE
+
+        # No profile reviews pending — go straight to schema migrations.
+        GLib.idle_add(self._check_schema_migrations)
+        return GLib.SOURCE_REMOVE
+
+    def _check_schema_migrations(self) -> bool:
+        """Presents the schema-review dialog for machines saved by an
+        older app version that are missing new head/machine settings.
+        """
+        context = get_context()
+        pending = context.machine_mgr.get_pending_schema_migrations()
+        if pending:
+            self._present_schema_reviews(pending)
+        return GLib.SOURCE_REMOVE
+
+    def _present_schema_reviews(self, queue):
+        """Shows schema-review dialogs sequentially for outdated
+        machines."""
+        if not queue:
+            return
+        machine, diffs = queue[0]
+        dialog = SchemaReviewDialog(
+            machine,
+            diffs,
+            transient_for=self,
+            on_closed=lambda: self._present_schema_reviews(queue[1:]),
+        )
+        dialog.present()
+
+    def _present_profile_reviews(self, queue, on_done=None):
+        """Shows review dialogs sequentially for outdated machines.
+
+        ``on_done`` is called after the last dialog closes so the
+        caller can chain a follow-up (e.g. the schema-migration
+        check).
+        """
+        if not queue:
+            if on_done is not None:
+                GLib.idle_add(on_done)
+            return
+        machine, profile = queue[0]
+        dialog = ProfileReviewDialog(
+            machine,
+            profile,
+            transient_for=self,
+            on_closed=lambda: self._present_profile_reviews(
+                queue[1:], on_done=on_done
+            ),
+        )
+        dialog.present()
 
     def _on_click_to_zero_mode_changed(self, sender, *, active: bool):
         """Handle click-to-zero mode toggle from control panel."""
@@ -598,6 +789,8 @@ class MainWindow(Adw.ApplicationWindow):
             and config.bottom_panel.get("visible")
         ):
             bottom_panel_action.change_state(GLib.Variant.new_boolean(True))
+
+        self._apply_right_panel_visibility()
 
     def add_stack_page(self, name: str, widget: Gtk.Widget):
         """Add a page to the main stack.
@@ -905,17 +1098,6 @@ class MainWindow(Adw.ApplicationWindow):
         config.canvas_view.show_grid = is_visible
         config.changed.send(config)
 
-    def on_show_ops_underlay_state_change(
-        self, action: Gio.SimpleAction, value: GLib.Variant
-    ):
-        is_visible = value.get_boolean()
-        if self.canvas3d is not None:
-            self.canvas3d.set_show_ops_underlay(is_visible)
-        action.set_state(value)
-        config = get_context().config
-        config.canvas_view.show_ops_underlay = is_visible
-        config.changed.send(config)
-
     def on_show_stock_state_change(
         self, action: Gio.SimpleAction, value: GLib.Variant
     ):
@@ -1031,14 +1213,6 @@ class MainWindow(Adw.ApplicationWindow):
         self.on_show_grid_state_change(
             am.get_action("show_grid"),
             GLib.Variant.new_boolean(cv.show_grid),
-        )
-
-        am.get_action("show_ops_underlay").set_state(
-            GLib.Variant.new_boolean(not cv.show_ops_underlay)
-        )
-        self.on_show_ops_underlay_state_change(
-            am.get_action("show_ops_underlay"),
-            GLib.Variant.new_boolean(cv.show_ops_underlay),
         )
 
         am.get_action("show_stock").set_state(
@@ -1196,15 +1370,26 @@ class MainWindow(Adw.ApplicationWindow):
     def on_doc_changed(self, sender, **kwargs):
         # Synchronize UI elements that depend on the document model
         self.surface.update_from_doc()
-        doc = self.doc_editor.doc
-        if doc.active_layer and doc.active_layer.workflow:
-            self.workflowview.set_workflow(doc.active_layer.workflow)
+        self._update_workflow_views()
 
         # Sync the selectability of stock items based on active layer
         self._sync_element_selectability()
 
         # Update button sensitivity and other state
         self._update_actions_and_ui()
+
+        # The stock and ops-underlay toggles are mutually exclusive:
+        # show the stock toggle only when the document has stock —
+        # flat stock items or rotary layers with a diameter.
+        doc = self.doc_editor.doc
+        has_stock = bool(doc.stock_items) or any(
+            layer.rotary_enabled and layer.rotary_diameter > 0
+            for layer in doc.layers
+        )
+        if self._surface_vis_overlay is not None:
+            self._surface_vis_overlay.set_stock_present(has_stock)
+        if self._canvas3d_vis_overlay is not None:
+            self._canvas3d_vis_overlay.set_stock_present(has_stock)
 
     def _sync_element_selectability(self):
         """
@@ -1225,17 +1410,85 @@ class MainWindow(Adw.ApplicationWindow):
         # Reset the paste counter to ensure the next paste is in-place.
         self.doc_editor.edit.reset_paste_counter()
 
-        # Get the newly activated layer from the document
-        activated_layer = self.doc_editor.doc.active_layer
-        has_workflow = activated_layer.workflow is not None
+        self._update_workflow_views()
 
-        # Show/hide the workflow view based on the layer type
-        self.workflowview.set_visible(has_workflow)
+    def _get_visible_workflows(self):
+        """
+        Returns the workflows that should be displayed in the right
+        panel, based on the configured right panel mode.
+        """
+        doc = self.doc_editor.doc
+        if not doc:
+            return []
+        mode = get_context().config.right_panel_mode
+        if mode == RightPanelMode.HIDDEN:
+            return []
+        if mode == RightPanelMode.NON_EMPTY_LAYERS:
+            return [
+                layer.workflow
+                for layer in doc.layers
+                if not layer.is_empty and layer.workflow
+            ]
+        if mode == RightPanelMode.ALL_LAYERS:
+            return [layer.workflow for layer in doc.layers if layer.workflow]
+        active = doc.active_layer
+        if active and active.workflow:
+            return [active.workflow]
+        return []
 
-        if has_workflow:
-            # For regular layers, update the workflow view with the
-            # new workflow
-            self.workflowview.set_workflow(activated_layer.workflow)
+    def _update_workflow_views(self):
+        """
+        Reconciles the workflow views in the right panel with the
+        workflows that should currently be displayed. Rebuilds the views
+        only if the set of workflows has changed.
+        """
+        desired = self._get_visible_workflows()
+        current = [view.workflow for view in self._workflow_views]
+        if current == desired:
+            return
+        for view in self._workflow_views:
+            self._workflow_box.remove(view)
+        self._workflow_views.clear()
+        for workflow in desired:
+            view = WorkflowView(self.doc_editor, workflow)
+            view.set_margin_bottom(6)
+            self._workflow_box.append(view)
+            self._workflow_views.append(view)
+
+    def _is_right_panel_effectively_visible(self) -> bool:
+        """
+        Returns True if the right panel should be on screen, combining
+        the user's visibility toggle with the configured panel mode.
+        """
+        config = get_context().config
+        return (
+            config.right_panel_visible
+            and config.right_panel_mode != RightPanelMode.HIDDEN
+        )
+
+    def _get_vis_overlay_margin_end(self) -> int:
+        """
+        Returns the end margin for the canvas visibility overlays. When
+        the right panel is shown, they shift left to avoid overlapping
+        it; otherwise they align with the canvas edge.
+        """
+        if self._is_right_panel_effectively_visible():
+            return RIGHT_PANEL_OVERLAY_MARGIN
+        return DEFAULT_OVERLAY_MARGIN
+
+    def _apply_right_panel_visibility(self):
+        """
+        Shows or hides the right panel and repositions the canvas
+        visibility overlays accordingly.
+        """
+        self._right_pane.set_visible(
+            self._is_right_panel_effectively_visible()
+        )
+        margin_end = self._get_vis_overlay_margin_end()
+        if self._surface_vis_overlay is not None:
+            self._surface_vis_overlay.set_margin_end(margin_end)
+        if self._canvas3d_vis_overlay is not None:
+            self._canvas3d_vis_overlay.set_margin_end(margin_end)
 
     def _on_document_changed(self, sender):
         """
@@ -1443,13 +1696,14 @@ class MainWindow(Adw.ApplicationWindow):
             show_workpiece=False,
             show_models=True,
             show_grid=True,
-            show_ops_underlay=True,
             show_stock=True,
             show_workpiece_image=True,
             show_nogo_zones=bool(machine and machine.nogo_zones),
             shortcuts=SHORTCUTS,
         )
-        self._canvas3d_vis_overlay.set_margin_end(454)
+        self._canvas3d_vis_overlay.set_margin_end(
+            self._get_vis_overlay_margin_end()
+        )
         self._canvas3d_overlay.add_overlay(self._canvas3d_vis_overlay)
         self._canvas3d_playback = PlaybackOverlay()
         self.canvas3d.set_playback_overlay(self._canvas3d_playback)
@@ -1524,16 +1778,22 @@ class MainWindow(Adw.ApplicationWindow):
         has_cameras = bool(
             config.machine and any(c.enabled for c in config.machine.cameras)
         )
-        self._surface_vis_overlay.set_camera_visible(has_cameras)
+        if self._surface_vis_overlay is not None:
+            self._surface_vis_overlay.set_camera_visible(has_cameras)
 
         # Show/hide no-go zone toggle based on whether the machine has any
         has_nogo_zones = bool(config.machine and config.machine.nogo_zones)
-        self._surface_vis_overlay.set_nogo_visible(has_nogo_zones)
-        if self.canvas3d is not None:
+        if self._surface_vis_overlay is not None:
+            self._surface_vis_overlay.set_nogo_visible(has_nogo_zones)
+        if self.canvas3d is not None and self._canvas3d_vis_overlay:
+            self._canvas3d_vis_overlay.set_nogo_visible(has_nogo_zones)
             self._canvas3d_vis_overlay.set_nogo_visible(has_nogo_zones)
 
         self.surface.update_from_doc()
+        self._update_workflow_views()
+        self._apply_right_panel_visibility()
         self._update_macros_menu()
+        self._update_setup_banner()
 
         # Check for any pending notifications from the new machine immediately
         if self._current_machine:
@@ -1924,8 +2184,8 @@ class MainWindow(Adw.ApplicationWindow):
     ):
         is_visible = value.get_boolean()
         action.set_state(value)
-        self._right_pane.set_visible(is_visible)
         get_context().config.set_right_panel_visible(is_visible)
+        self._apply_right_panel_visibility()
 
     def _on_dialog_notification(self, sender, message: str = ""):
         """Shows a toast when requested by a child dialog."""

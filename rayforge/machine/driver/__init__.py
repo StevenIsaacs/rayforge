@@ -1,6 +1,13 @@
 import inspect
 from typing import cast
 
+from ..discovery import (
+    DeviceIdentity,
+    DiscoveredDevice,
+    find_all_devices,
+    find_network_devices,
+    normalize_tokens,
+)
 from .driver import (
     DRIVER_MATURITY_LABELS,
     Driver,
@@ -17,7 +24,6 @@ from .grbl import (
 from .marlin import MarlinSerialDriver
 from .octoprint import OctoPrintDriver
 from .ruida import RuidaDriver
-from .ruidarpa import RuidaRPAAdapter
 from .smoothie import SmoothieDriver
 
 
@@ -45,6 +51,8 @@ def register_driver(driver: type[Driver]):
 
 __all__ = [
     "DRIVER_MATURITY_LABELS",
+    "DeviceIdentity",
+    "DiscoveredDevice",
     "Driver",
     "DriverMaturity",
     "GrblNetworkDriver",
@@ -56,6 +64,8 @@ __all__ = [
     "OctoPrintDriver",
     "PWMParams",
     "RuidaDriver",
-    "RuidaRPAAdapter",
     "SmoothieDriver",
+    "find_all_devices",
+    "find_network_devices",
+    "normalize_tokens",
 ]

@@ -432,6 +432,47 @@ class TestMachineModel:
         assert machine.work_margins == (50, 50, 50, 50)
         assert machine.soft_limits == (10, 10, 280, 380)
 
+    def test_usb_id_serialization_uses_hex(self, lite_context):
+        """USB ids serialize as hex strings and round-trip; legacy
+        integer values are still accepted on load."""
+        machine = Machine(lite_context)
+        machine.usb_vid = 0x1A86
+        machine.usb_pid = 0x7523
+
+        data = machine.to_dict()["machine"]
+        assert data["usb_vid"] == "1a86"
+        assert data["usb_pid"] == "7523"
+
+        restored = Machine.from_dict(
+            {"machine": dict(data)}, context=lite_context
+        )
+        assert restored.usb_vid == 0x1A86
+        assert restored.usb_pid == 0x7523
+
+        legacy = Machine.from_dict(
+            {"machine": {"usb_vid": 6790, "usb_pid": 29987}},
+            context=lite_context,
+        )
+        assert legacy.usb_vid == 0x1A86
+        assert legacy.usb_pid == 0x7523
+
+        malformed = Machine.from_dict(
+            {"machine": {"usb_vid": "zzz"}}, context=lite_context
+        )
+        assert malformed.usb_vid is None
+
+    def test_placeholder_round_trip(self, lite_context):
+        """The placeholder flag survives serialization and defaults off."""
+        machine = Machine(lite_context)
+        assert machine.placeholder is False
+
+        data = machine.to_dict()
+        assert data["machine"]["placeholder"] is False
+
+        machine.placeholder = True
+        restored = Machine.from_dict(machine.to_dict(), context=lite_context)
+        assert restored.placeholder is True
+
     def test_from_dict_migrates_offsets_to_margins(self, lite_context):
         """Test that from_dict migrates old offsets to margins."""
         data = {

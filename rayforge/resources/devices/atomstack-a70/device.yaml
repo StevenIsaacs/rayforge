@@ -1,6 +1,8 @@
 api_version: 1
 device:
   name: Atomstack A70
+  vendor: Atomstack
+  model: A70
   description: 70W diode laser cutter with 500x500mm work area and spot compression
 machine:
   driver: GrblSerialDriver
@@ -14,8 +16,11 @@ machine:
   max_travel_speed: 36000
   max_cut_speed: 6000
   home_on_start: true
+  has_z: false
   heads:
   - max_power: 1000
+    wavelength_nm: 455
+    max_power_watts: 70
     frame_power_percent: 1.0
     focus_power_percent: 1.0
     spot_size_mm:

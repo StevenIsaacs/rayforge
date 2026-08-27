@@ -18,6 +18,7 @@ from ....core.varset.hostnamevar import is_valid_hostname_or_ip
 from ....pipeline.encoder.base import EncodedOutput, OpsEncoder
 from ....pipeline.encoder.gcode import GcodeEncoder
 from ....shared.units.system import UnitSystem, inches_to_mm
+from ...discovery.spec import DiscoverySpec, MdnsRecognizer
 from ...transport import HttpTransport, TransportStatus, WebSocketTransport
 from ..driver import (
     Axis,
@@ -28,6 +29,7 @@ from ..driver import (
     DriverSetupError,
     Pos,
 )
+from .grbl_fingerprint import fingerprint_grbl_http
 from .grbl_probe import probe_grbl_device
 from .grbl_util import (
     CommandRequest,
@@ -73,6 +75,15 @@ class GrblNetworkDriver(Driver):
     supports_probing = True
     supports_unit_detection = True
     reports_granular_progress = False
+    # ESP3D v3 firmware advertises a dedicated _esp3d._tcp service;
+    # FluidNC only announces the generic _http._tcp and is confirmed
+    # by fingerprinting its [ESP800] firmware-info endpoint.
+    DISCOVERY = DiscoverySpec(
+        mdns=MdnsRecognizer(
+            services=("_esp3d._tcp.local.",),
+            fingerprint=fingerprint_grbl_http,
+        )
+    )
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
@@ -472,7 +483,7 @@ class GrblNetworkDriver(Driver):
     async def set_hold(self, hold: bool = True) -> None:
         await self._send_command("!" if hold else "~")
 
-    async def cancel(self) -> None:
+    async def cancel(self, emergency: bool = False) -> None:
         self._is_cancelled = True
         # Soft reset: send Ctrl-X (0x18) as a raw byte.  _send_command
         # URL-encodes the argument, so '\x18' becomes '%18' on the wire —
@@ -480,7 +491,25 @@ class GrblNetworkDriver(Driver):
         # GRBL soft-reset byte.  (Do NOT pass the literal string '%18',
         # because quote() would double-encode the '%' to '%2518'.)
         await self._send_command("\x18")
+        await self._send_safety_shutdown(emergency)
         self.job_finished.send(self)
+
+    async def _send_safety_shutdown(self, emergency: bool = False) -> None:
+        """
+        Best-effort transmission of the dialect's tool-off commands so
+        a cancelled or aborted job cannot leave persistent PWM outputs
+        energized.
+        """
+        dialect = self.dialect
+        commands = dialect.get_safety_off_commands()
+        if emergency and dialect.emergency_stop:
+            commands.append(dialect.emergency_stop)
+        for command in commands:
+            try:
+                logger.info(command, extra=self._log_extra("USER_COMMAND"))
+                await self._send_command(command)
+            except DeviceConnectionError as e:
+                logger.warning(f"Safety command '{command}' failed: {e}")
 
     def can_home(self, axis: Axis | None = None) -> bool:
         """GRBL supports homing for all axes."""

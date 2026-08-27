@@ -395,11 +395,39 @@ class SketchEditor:
                 self.history_manager.redo()
                 self._reset_key_sequence()
                 return True
+            if keyval == Gdk.KEY_d:
+                self.sketch_element.duplicate_selection()
+                self._reset_key_sequence()
+                return True
+            # Let other Ctrl-based shortcuts (e.g. Ctrl+S) propagate to
+            # the application-level shortcut controller.
+            self._reset_key_sequence()
+            return False
 
         if keyval == Gdk.KEY_Delete:
             self.sketch_element.delete_selection()
             self._reset_key_sequence()
             return True
+
+        # Priority 1.5: Nudge selected entities with arrow keys
+        if preview_state is None:
+            move_amount = 1.0
+            if is_shift:
+                move_amount *= 10.0
+            elif is_primary:
+                move_amount *= 0.1
+
+            nudge_deltas = {
+                Gdk.KEY_Up: (0.0, move_amount),
+                Gdk.KEY_Down: (0.0, -move_amount),
+                Gdk.KEY_Left: (-move_amount, 0.0),
+                Gdk.KEY_Right: (move_amount, 0.0),
+            }
+            if keyval in nudge_deltas:
+                self._reset_key_sequence()
+                dx, dy = nudge_deltas[keyval]
+                self.sketch_element.nudge_selection(dx, dy)
+                return True
 
         # Priority 2: Escape key logic
         if keyval == Gdk.KEY_Escape:

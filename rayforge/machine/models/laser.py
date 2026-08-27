@@ -3,7 +3,7 @@ from gettext import gettext as _
 from typing import Any, Optional
 
 from ...core.capability import MachineCapability
-from .head import _HEAD_SERIALIZED_KEYS, Head
+from .head import _HEAD_SERIALIZED_KEYS, Head, head_setting
 
 
 class LaserType(Enum):
@@ -14,6 +14,20 @@ class LaserType(Enum):
     @property
     def supports_pwm(self) -> bool:
         return self in (LaserType.CO2, LaserType.FIBER)
+
+    @property
+    def default_wavelength_nm(self) -> float:
+        """Typical emission wavelength for this laser type, in nm.
+
+        Diodes are ~455 nm (blue, the common desktop diode band; the
+        445 nm value sometimes quoted is the lower edge of the range),
+        CO₂ is 10600 nm, fiber is 1064 nm.
+        """
+        if self is LaserType.CO2:
+            return 10600.0
+        if self is LaserType.FIBER:
+            return 1064.0
+        return 455.0
 
 
 # Minimum sane laser spot size in mm. Guards against unconfigured
@@ -26,6 +40,15 @@ MIN_SPOT_SIZE_MM = 0.1
 # head-model placement must agree on this value so the beam spans
 # exactly from the workpiece to the head's nozzle.
 DEFAULT_FOCAL_DISTANCE_MM = 50.0
+
+# Nominal optical output power in watts used when a laser head has no
+# physical wattage configured. Chosen as a mid-range desktop value
+# (common diode/CO₂ machines span 3–80 W); the physical model falls back
+# to this so unconfigured heads still produce a plausible burn.
+DEFAULT_MAX_POWER_WATTS = 40.0
+
+# Fallback operation colour when a laser's cut/raster colour is unset.
+DEFAULT_LASER_COLOR = "#ff00ff"
 
 
 def effective_focal_distance(head: Head | None) -> float:
@@ -47,25 +70,58 @@ class LaserHead(Head):
 
     HEAD_TYPE: str = "LaserHead"
 
+    # Reviewable settings. The ``head_setting`` markers carry the
+    # review label and the conversion to the serialized (profile YAML)
+    # value domain; the instance values live in the 0-1 percent domain.
+    max_power = head_setting(_("Max Power"))
+    frame_power_percent = head_setting(
+        _("Frame Power"),
+        to_yaml=lambda v: v * 100,
+        from_yaml=lambda v: v / 100.0,
+    )
+    focus_power_percent = head_setting(
+        _("Focus Power"),
+        to_yaml=lambda v: v * 100,
+        from_yaml=lambda v: v / 100.0,
+    )
+    frame_speed = head_setting(_("Frame Speed"))
+    frame_repeat_count = head_setting(_("Frame Repeat Count"))
+    frame_corner_pause = head_setting(_("Frame Corner Pause"))
+    spot_size_mm = head_setting(_("Spot Size (mm)"))
+    focal_distance = head_setting(_("Focal Distance"))
+    laser_type = head_setting(
+        _("Laser Type"),
+        to_yaml=lambda v: v.value,
+        from_yaml=lambda v: LaserType(v),
+    )
+    wavelength_nm = head_setting(_("Wavelength (nm)"))
+    max_power_watts = head_setting(_("Max Optical Power (W)"))
+    pwm_frequency = head_setting(_("PWM Frequency"))
+    max_pwm_frequency = head_setting(_("Max PWM Frequency"))
+    pulse_width = head_setting(_("Pulse Width"))
+    min_pulse_width = head_setting(_("Min Pulse Width"))
+    max_pulse_width = head_setting(_("Max Pulse Width"))
+
     def __init__(self):
         super().__init__()
-        self.name: str = _("Laser Head")
-        self.max_power: int = 1000  # Max power (0-1000 for GRBL)
-        self.frame_power_percent: float = 0  # in percent (0-1.0)
-        self.focus_power_percent: float = 0  # in percent (0-1.0)
-        self.frame_speed: int = 0  # mm/min, 0 = use machine max travel speed
-        self.frame_repeat_count: int = 20
-        self.frame_corner_pause: float = 0  # seconds
-        self.spot_size_mm: tuple[float, float] = 0.1, 0.1  # millimeters
-        self.cut_color: str = "#ff00ff"  # Magenta for cut
-        self.raster_color: str = "#000000"  # Black for raster
-        self.focal_distance: float = 0.0
-        self.laser_type: LaserType = LaserType.DIODE
-        self.pwm_frequency: int = 500
-        self.max_pwm_frequency: int = 5000
-        self.pulse_width: int = 50
-        self.min_pulse_width: int = 5
-        self.max_pulse_width: int = 500
+        self.name = _("Laser Head")
+        self.max_power = 1000  # Max power (0-1000 for GRBL)
+        self.frame_power_percent = 0  # in percent (0-1.0)
+        self.focus_power_percent = 0  # in percent (0-1.0)
+        self.frame_speed = 0  # mm/min, 0 = use machine max travel speed
+        self.frame_repeat_count = 20
+        self.frame_corner_pause = 0  # seconds
+        self.spot_size_mm = 0.1, 0.1  # millimeters
+        self.cut_color: str = DEFAULT_LASER_COLOR
+        self.focal_distance = 0.0
+        self.laser_type = LaserType.DIODE
+        self.wavelength_nm = 0.0  # 0 ⇒ LaserType.default_wavelength_nm
+        self.max_power_watts = 0.0  # 0 ⇒ DEFAULT_MAX_POWER_WATTS
+        self.pwm_frequency = 500
+        self.max_pwm_frequency = 5000
+        self.pulse_width = 50
+        self.min_pulse_width = 5
+        self.max_pulse_width = 500
 
     @property
     def machine_capability(self) -> MachineCapability:
@@ -139,12 +195,8 @@ class LaserHead(Head):
         self.spot_size_mm = spot_size_x_mm, spot_size_y_mm
         self.changed.send(self)
 
-    def set_cut_color(self, color: str):
-        self.cut_color = color
-        self.changed.send(self)
-
-    def set_raster_color(self, color: str):
-        self.raster_color = color
+    def set_cut_color(self, color: str | None):
+        self.cut_color = color or DEFAULT_LASER_COLOR
         self.changed.send(self)
 
     def set_focal_distance(self, distance: float):
@@ -158,6 +210,30 @@ class LaserHead(Head):
             return
         self.laser_type = laser_type
         self.changed.send(self)
+
+    def effective_wavelength_nm(self) -> float:
+        """The emission wavelength in nm, falling back to the laser
+        type's default when no explicit value is configured."""
+        if self.wavelength_nm and self.wavelength_nm > 0:
+            return self.wavelength_nm
+        return self.laser_type.default_wavelength_nm
+
+    def effective_max_power_watts(self) -> float:
+        """The optical output power in watts at full power, falling
+        back to the nominal default when no physical wattage is set."""
+        if self.max_power_watts and self.max_power_watts > 0:
+            return self.max_power_watts
+        return DEFAULT_MAX_POWER_WATTS
+
+    def watts_at(self, power_fraction: float) -> float:
+        """Optical power in watts for a given 0–1 power fraction.
+
+        ``power_fraction`` is the duty cycle (S-value / max_power) the
+        controller commands; the returned value is the time-averaged
+        optical power the material sees, which for CW lasers with PWM
+        power control equals ``max_power_watts * power_fraction``.
+        """
+        return self.effective_max_power_watts() * power_fraction
 
     def set_pwm_frequency(self, frequency: int):
         frequency = max(1, min(frequency, self.max_pwm_frequency))
@@ -211,9 +287,10 @@ class LaserHead(Head):
                 "frame_corner_pause": self.frame_corner_pause,
                 "spot_size_mm": self.spot_size_mm,
                 "cut_color": self.cut_color,
-                "raster_color": self.raster_color,
                 "focal_distance": self.focal_distance,
                 "laser_type": self.laser_type.value,
+                "wavelength_nm": self.wavelength_nm,
+                "max_power_watts": self.max_power_watts,
                 "pwm_frequency": self.pwm_frequency,
                 "max_pwm_frequency": self.max_pwm_frequency,
                 "pulse_width": self.pulse_width,
@@ -240,6 +317,8 @@ class LaserHead(Head):
             "raster_color",
             "focal_distance",
             "laser_type",
+            "wavelength_nm",
+            "max_power_watts",
             "pwm_frequency",
             "max_pwm_frequency",
             "pulse_width",
@@ -268,8 +347,7 @@ class LaserHead(Head):
             lh.focus_power_percent = focus_power / lh.max_power
 
         lh.spot_size_mm = data.get("spot_size_mm", lh.spot_size_mm)
-        lh.cut_color = data.get("cut_color", lh.cut_color)
-        lh.raster_color = data.get("raster_color", lh.raster_color)
+        lh.cut_color = data.get("cut_color") or DEFAULT_LASER_COLOR
         lh.frame_speed = data.get("frame_speed", lh.frame_speed)
         lh.frame_repeat_count = data.get(
             "frame_repeat_count", lh.frame_repeat_count
@@ -281,6 +359,8 @@ class LaserHead(Head):
         lh.laser_type = LaserType(
             data.get("laser_type", LaserType.DIODE.value)
         )
+        lh.wavelength_nm = data.get("wavelength_nm", 0.0)
+        lh.max_power_watts = data.get("max_power_watts", 0.0)
         lh.pwm_frequency = data.get("pwm_frequency", lh.pwm_frequency)
         lh.max_pwm_frequency = data.get(
             "max_pwm_frequency", lh.max_pwm_frequency

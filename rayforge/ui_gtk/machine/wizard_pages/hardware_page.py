@@ -39,7 +39,7 @@ _DEFAULT_ACCELERATION = 1000.0
 
 
 class HardwarePage(WizardPage):
-    step_number = 7
+    step_number = 8
     title = _("Hardware")
     subtitle = _("Work area, origin, speeds and acceleration.")
 
@@ -396,7 +396,7 @@ class HardwarePage(WizardPage):
         reverse["y"] = self.reverse_y_row.get_active()
         reverse["z"] = self.reverse_z_row.get_active()
 
-        mc.has_z = self.has_z_row.get_active() or None
+        mc.has_z = self.has_z_row.get_active()
 
         margins = (
             self.margin_left_row.get_value_in_base_units(),

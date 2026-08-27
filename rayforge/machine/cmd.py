@@ -33,6 +33,16 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class JobAlreadyRunningError(RuntimeError):
+    """
+    Raised when a job is started while another one is still running.
+
+    The message is user-facing (it surfaces via notification_requested)
+    and tells the user how to resolve the situation instead of just
+    describing the programming error.
+    """
+
+
 class MachineCmd:
     """Handles commands sent to the machine driver."""
 
@@ -79,10 +89,13 @@ class MachineCmd:
         a JobMonitor for progress reporting.
         """
         if self._current_monitor:
-            msg = "Tried to start a job while another is running."
+            msg = _(
+                "A job is already running. Wait for it to finish or "
+                "press Stop to cancel it."
+            )
             logger.warning(msg)
             # A running job is a failure condition for starting a new one.
-            raise RuntimeError(msg)
+            raise JobAlreadyRunningError(msg)
 
         if ops.is_empty():
             logger.warning("Job has no operations. Skipping execution.")
@@ -214,14 +227,22 @@ class MachineCmd:
         frame_with_laser = frame_ops * head.frame_repeat_count
         frame_with_laser.job_end()
 
-        # Transform world-space frame ops to machine space.
+        # Transform world-space frame ops to machine space, then to
+        # command space: the emitted coordinates must be relative to
+        # the active WCS origin because the controller adds the WCS
+        # offset back (issue #362). The regular send path performs the
+        # same adjustment in the machine-transform stage.
         space = MachineSpace.from_machine(machine)
         combined = space.get_world_to_machine_matrix()
         if machine.reverse_z_axis:
             z_flip = np.eye(4)
             z_flip[2, 2] = -1.0
             combined = z_flip @ combined
-        frame_with_laser.transform(combined)
+        to_command = space.get_machine_to_command_matrix(
+            wcs_offset=machine.get_active_wcs_offset(),
+            wcs_is_workarea_origin=machine.wcs_origin_is_workarea_origin,
+        )
+        frame_with_laser.transform(to_command @ combined)
 
         # AXIS_REPLACEMENT modules encode the rotary degrees into the
         # replaced machine axis after the world→machine transform.
@@ -263,13 +284,12 @@ class MachineCmd:
     async def _start_job(
         self,
         machine: Machine,
-        job_name: str,
         final_job_action: Callable[..., Coroutine],
         on_progress: Callable[[dict], None] | None = None,
     ):
         """
-        Generic, awaitable job starter that orchestrates assembly and
-        execution.
+        Generic, awaitable job executor that orchestrates artifact
+        assembly and execution.
         """
         handle: BaseArtifactHandle | None = None
         artifact_store = self._editor.pipeline.artifact_store
@@ -279,9 +299,7 @@ class MachineCmd:
             handle = await self._editor.pipeline.generate_job_artifact_async()
 
             if not handle:
-                logger.warning(
-                    f"{job_name.capitalize()} job has no operations."
-                )
+                logger.warning("Job has no operations.")
                 return
 
             # 2. Use the safe context manager to acquire and release the
@@ -294,14 +312,11 @@ class MachineCmd:
 
                 await final_job_action(artifact, machine, on_progress)
 
-        except Exception as e:
-            logger.exception(f"Failed to assemble or execute {job_name} job")
-            self._editor.notification_requested.send(
-                self,
-                message=_("{job_name} failed: {error}").format(
-                    job_name=job_name.capitalize(), error=e
-                ),
-            )
+        except JobAlreadyRunningError:
+            # Already logged as a warning by the guard; not an error.
+            raise
+        except Exception:
+            logger.exception("Failed to assemble or execute job")
             # Manually release handle on error if checkout was not entered
             if handle and "artifact" not in locals():
                 artifact_store.release(handle)
@@ -316,12 +331,25 @@ class MachineCmd:
         Asynchronously generates ops and runs a framing job.
         This is an awaitable coroutine.
         """
-        await self._start_job(
-            machine,
-            job_name="framing",
-            final_job_action=self._run_frame_action,
-            on_progress=on_progress,
-        )
+        try:
+            await self._start_job(
+                machine,
+                final_job_action=self._run_frame_action,
+                on_progress=on_progress,
+            )
+        except JobAlreadyRunningError as e:
+            # An expected refusal, not a failure: the guard's message
+            # already tells the user what to do.
+            self._editor.notification_requested.send(
+                self,
+                message=str(e),
+            )
+        except Exception as e:
+            self._editor.notification_requested.send(
+                self,
+                message=_("Framing failed: {error}").format(error=e),
+            )
+            raise
 
     async def send_job(
         self,
@@ -332,24 +360,32 @@ class MachineCmd:
         Asynchronously generates ops and sends the job to the machine.
         This is an awaitable coroutine.
         """
-        await self._start_job(
-            machine,
-            job_name="sending",
-            final_job_action=self._run_send_action,
-            on_progress=on_progress,
-        )
+        try:
+            await self._start_job(
+                machine,
+                final_job_action=self._run_send_action,
+                on_progress=on_progress,
+            )
+        except JobAlreadyRunningError as e:
+            # An expected refusal, not a failure: the guard's message
+            # already tells the user what to do.
+            self._editor.notification_requested.send(
+                self,
+                message=str(e),
+            )
+        except Exception as e:
+            self._editor.notification_requested.send(
+                self,
+                message=_("Sending failed: {error}").format(error=e),
+            )
+            raise
 
     def run_send_job(self, machine: Machine):
         """
         Schedules the send_job coroutine to run via the task manager.
         """
         self._editor.task_manager.add_coroutine(
-            lambda ctx: self._start_job(
-                machine,
-                job_name="sending",
-                final_job_action=self._run_send_action,
-                on_progress=None,
-            ),
+            lambda ctx: self.send_job(machine),
             key="send-job",
         )
 

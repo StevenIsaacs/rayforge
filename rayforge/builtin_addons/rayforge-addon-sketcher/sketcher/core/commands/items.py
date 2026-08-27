@@ -4,6 +4,7 @@ import logging
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from ..constraints import EqualDistanceConstraint
 from ..entities import Arc, Ellipse, TextBoxEntity
 from .base import SketchChangeCommand
 
@@ -60,7 +61,12 @@ class AddItemsCommand(SketchChangeCommand):
         # Update point references within the entity
         for e in new_entities:
             for attr, value in vars(e).items():
-                if isinstance(value, int) and value in id_map:
+                # Note: bool is an int subclass; never remap flags.
+                if (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value in id_map
+                ):
                     setattr(e, attr, id_map[value])
                 # Handle lists of IDs, like in TextBoxEntity
                 elif isinstance(value, list) and attr.endswith("_ids"):
@@ -71,7 +77,12 @@ class AddItemsCommand(SketchChangeCommand):
         # Update point and entity references within constraints
         for c in self.constraints:
             for attr, value in vars(c).items():
-                if isinstance(value, int) and value in id_map:
+                # Note: bool is an int subclass; never remap flags.
+                if (
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value in id_map
+                ):
                     setattr(c, attr, id_map[value])
                 elif isinstance(value, list):
                     # Handle lists of IDs, like in EqualLengthConstraint
@@ -198,8 +209,6 @@ class RemoveItemsCommand(SketchChangeCommand):
             if isinstance(e, Arc):
                 c, s, end = e.center_idx, e.start_idx, e.end_idx
                 for constr in sketch.constraints:
-                    from ..constraints import EqualDistanceConstraint
-
                     if isinstance(constr, EqualDistanceConstraint):
                         set1 = {constr.p1, constr.p2}
                         set2 = {constr.p3, constr.p4}
@@ -219,6 +228,40 @@ class RemoveItemsCommand(SketchChangeCommand):
                 or constr.depends_on_entities(to_delete_entity_ids)
             ) and constr not in to_delete_constraints:
                 to_delete_constraints.append(constr)
+
+        # 4.5. Orphan Points Owned Only by Deleted Constraints
+        # A point may be referenced solely by constraints (e.g. a
+        # rectangle's auto-created center point) and belong to no
+        # entity. Step C above only orphans points that belonged to
+        # deleted entities, so handle constraint-only points here.
+        to_delete_constraint_set = {id(c) for c in to_delete_constraints}
+        constr_point_attrs = ["p1", "p2", "p3", "p4", "center", "point_id"]
+        points_of_deleted_constraints: set[int] = set()
+        used_points_by_surviving: set[int] = set()
+
+        for constr in sketch.constraints:
+            if id(constr) in to_delete_constraint_set:
+                for attr in constr_point_attrs:
+                    pid = getattr(constr, attr, None)
+                    if isinstance(pid, int):
+                        points_of_deleted_constraints.add(pid)
+            else:
+                for attr in constr_point_attrs:
+                    pid = getattr(constr, attr, None)
+                    if isinstance(pid, int):
+                        used_points_by_surviving.add(pid)
+
+        for e in sketch.registry.entities:
+            if e.id not in to_delete_entity_ids:
+                used_points_by_surviving.update(e.get_point_ids())
+
+        constraint_orphans = (
+            points_of_deleted_constraints
+            - used_points_by_surviving
+            - to_delete_point_ids
+        )
+        to_delete_point_ids.update(constraint_orphans)
+
         # 5. Get actual objects from IDs
         final_points = [
             p
@@ -244,6 +287,7 @@ class RemoveItemsCommand(SketchChangeCommand):
         for c in self.constraints:
             if c in self.sketch.constraints:
                 self.sketch.constraints.remove(c)
+        self.sketch.prune_patterns()
 
     def _do_undo(self) -> None:
         registry = self.sketch.registry

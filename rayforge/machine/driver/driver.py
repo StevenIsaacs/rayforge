@@ -7,6 +7,7 @@ from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
     Any,
+    ClassVar,
     Optional,
 )
 
@@ -16,6 +17,7 @@ from raygeo.ops.axis import Axis
 from ...context import RayforgeContext
 from ...core.varset import IntVar, VarSet
 from ...shared.units.system import UnitSystem
+from ..discovery.spec import DiscoverySpec
 
 if TYPE_CHECKING:
     from raygeo.ops import Ops
@@ -220,9 +222,13 @@ class Driver(ABC):
     # When True, the driver can query the device to detect its
     # native unit system (metric vs imperial).
     supports_unit_detection: bool = False
-    # When True, the driver can limit rapid/travel speed (used by
-    # the Machine Settings -> General Max Travel Speed field).
-    supports_travel_speed: bool = False
+    # Everything the driver declares about discoverability: what its
+    # devices look like on the wire and on the network, composed of
+    # per-channel recognizers. When set, the driver participates in
+    # automatic device discovery (see
+    # rayforge.machine.discovery). Serial-only drivers declare only
+    # the serial recognizer; network drivers only the mDNS one.
+    DISCOVERY: ClassVar[DiscoverySpec | None] = None
 
     @property
     @abstractmethod
@@ -506,9 +512,13 @@ class Driver(ABC):
         """
 
     @abstractmethod
-    async def cancel(self) -> None:
+    async def cancel(self, emergency: bool = False) -> None:
         """
         Sends a command to cancel the currently executing program.
+
+        When *emergency* is True, the cancellation is the result of an
+        unexpected error rather than a user-initiated stop, and drivers
+        should additionally send their dialect's failsafe command.
         """
 
     def can_home(self, axis: Optional["Axis"] = None) -> bool:

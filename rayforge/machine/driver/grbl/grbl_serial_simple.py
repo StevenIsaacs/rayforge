@@ -55,6 +55,7 @@ from .grbl_util import (
     parse_grbl_parser_state,
     parse_state,
     prb_re,
+    split_realtime_commands,
     strip_gcode_comments,
     wcs_re,
 )
@@ -112,10 +113,19 @@ class GrblSerialSimpleDriver(Driver):
     supports_unit_detection = True
     maturity = DriverMaturity.EXPERIMENTAL
 
+    SAFETY_SHUTDOWN_DELAY: float = 0.2
+
     _ok_re = re.compile(rb"ok\r*\n")
     _error_re = re.compile(rb"error:(\d+)\r*\n")
     _status_re = re.compile(rb"<([^>]+)>")
     _line_re = re.compile(rb"([^\r\n]+)\r*\n")
+
+    # Handshake verification bounds. The '?' realtime poll is repeated
+    # every POLL_INTERVAL until a response arrives, because devices
+    # that are still booting silently drop queries sent before their
+    # serial stream is ready.
+    HANDSHAKE_TIMEOUT: float = 3.0
+    HANDSHAKE_POLL_INTERVAL: float = 0.5
 
     def __init__(self, context: RayforgeContext, machine: "Machine"):
         super().__init__(context, machine)
@@ -126,6 +136,7 @@ class GrblSerialSimpleDriver(Driver):
         self._cmd_lock = asyncio.Lock()
         self._is_cancelled = False
         self._job_running = False
+        self._is_holding = False
         self._raw_grbl_status: DeviceStatus = DeviceStatus.UNKNOWN
         self._handshake_received = asyncio.Event()
         self._on_command_done: (
@@ -228,6 +239,27 @@ class GrblSerialSimpleDriver(Driver):
         self.keep_running = True
         self._connection_task = asyncio.ensure_future(self._connection_loop())
 
+    async def _await_handshake(self) -> bool:
+        """
+        Polls the device with realtime '?' commands until it responds
+        with a status report (or its welcome message arrives), bounded
+        by HANDSHAKE_TIMEOUT. Returns True once the handshake event is
+        set, False if the device stayed silent.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + self.HANDSHAKE_TIMEOUT
+        while True:
+            await self._send_raw(b"?\n")
+            try:
+                await asyncio.wait_for(
+                    self._handshake_received.wait(),
+                    timeout=self.HANDSHAKE_POLL_INTERVAL,
+                )
+                return True
+            except asyncio.TimeoutError:
+                if loop.time() >= deadline:
+                    return False
+
     async def _connection_loop(self) -> None:
         transport = self._transport
         if not transport:
@@ -235,18 +267,13 @@ class GrblSerialSimpleDriver(Driver):
 
         while self.keep_running:
             try:
+                self._handshake_received.clear()
                 await transport.connect()
                 self._update_connection_status(
                     TransportStatus.CONNECTED, "Connected"
                 )
-                self._handshake_received.clear()
 
-                await self._send_raw(b"?\n")
-                try:
-                    await asyncio.wait_for(
-                        self._handshake_received.wait(), timeout=3.0
-                    )
-                except asyncio.TimeoutError:
+                if not await self._await_handshake():
                     logger.warning("Handshake timeout. Retrying connection.")
                     await transport.disconnect()
                     self._update_connection_status(
@@ -392,7 +419,7 @@ class GrblSerialSimpleDriver(Driver):
                 self._pending.set_result(error=line)
             return
 
-        if line.startswith(("Grbl ", "grbl ")):
+        if line.startswith(("Grbl ", "GrblHAL ", "grbl ")):
             self._handshake_received.set()
             return
 
@@ -423,6 +450,12 @@ class GrblSerialSimpleDriver(Driver):
         if self._job_running and state.status == DeviceStatus.IDLE:
             state.status = DeviceStatus.RUN
 
+        # The driver owns the pause state. While we have requested a hold,
+        # force HOLD so a firmware status report cannot mask it (status
+        # polling is disabled while a job runs, so HOLD may never be observed).
+        if self._is_holding and state.status != DeviceStatus.ALARM:
+            state.status = DeviceStatus.HOLD
+
         self.state.status = state.status
         if state.error is not None:
             self.state.error = state.error
@@ -435,6 +468,7 @@ class GrblSerialSimpleDriver(Driver):
     ) -> None:
         self._is_cancelled = False
         self._job_running = True
+        self._is_holding = False
         self._job_exception: Exception | None = None
         self._on_command_done = on_command_done
         self._current_op_index = -1
@@ -486,10 +520,13 @@ class GrblSerialSimpleDriver(Driver):
                 job_completed_successfully = True
         except DeviceConnectionError as e:
             logger.warning(f"Job interrupted: {e}")
+            await self._send_safety_shutdown(emergency=True)
         except Exception:
             logger.exception("Unexpected streaming error")
+            await self._send_safety_shutdown(emergency=True)
         finally:
             self._job_running = False
+            self._is_holding = False
             self._on_command_done = None
             if job_completed_successfully:
                 self.job_finished.send(self)
@@ -519,22 +556,39 @@ class GrblSerialSimpleDriver(Driver):
             logger.warning(f"Job terminated: {e}")
 
     async def run_raw(self, machine_code: str) -> None:
+        """
+        Executes a raw G-code string using the ping-pong streaming
+        protocol.
+
+        GRBL realtime commands (?, ~, !) are sent directly instead:
+        the firmware executes them on receipt and never acknowledges
+        them, so streaming them as gcode would wedge the protocol.
+        """
         lines = [
             line.strip() for line in machine_code.splitlines() if line.strip()
         ]
-        if not lines:
+        gcode_lines, realtime_lines = split_realtime_commands(lines)
+
+        for line in realtime_lines:
+            if not self._transport or not self._transport.is_connected:
+                raise ConnectionError("Serial transport not initialized")
+            logger.info(line, extra=self._log_extra("USER_COMMAND"))
+            await self._transport.send(line.encode("utf-8"))
+
+        if not gcode_lines:
             return
         self._start_job()
         try:
-            await self._stream_gcode_ping_pong(lines)
+            await self._stream_gcode_ping_pong(gcode_lines)
         except DeviceConnectionError as e:
             logger.warning(f"Raw G-code terminated: {e}")
 
-    async def cancel(self) -> None:
+    async def cancel(self, emergency: bool = False) -> None:
         logger.debug("Cancel command initiated.")
         job_was_running = self._job_running
         self._is_cancelled = True
         self._job_running = False
+        self._is_holding = False
         self._on_command_done = None
 
         if self._transport and self._transport.is_connected:
@@ -544,10 +598,36 @@ class GrblSerialSimpleDriver(Driver):
             if self._pending:
                 self._pending.set_result()
                 self._pending = None
+            await self._send_safety_shutdown(emergency)
             if job_was_running:
                 self.job_finished.send(self)
         else:
             raise ConnectionError("Serial transport not initialized")
+
+    async def _send_safety_shutdown(self, emergency: bool = False) -> None:
+        """
+        Best-effort transmission of the dialect's tool-off commands so
+        a cancelled or aborted job cannot leave persistent PWM outputs
+        energized. After a soft reset the firmware needs a moment to
+        become ready again, hence the short delay before sending.
+        Responses are ignored: the commands are sent fire-and-forget.
+        """
+        dialect = self.dialect
+        commands = dialect.get_safety_off_commands()
+        if emergency and dialect.emergency_stop:
+            commands.append(dialect.emergency_stop)
+        transport = self._transport
+        if not commands or not transport or not transport.is_connected:
+            return
+        await asyncio.sleep(self.SAFETY_SHUTDOWN_DELAY)
+        for command in commands:
+            if not transport.is_connected:
+                break
+            try:
+                logger.info(command, extra=self._log_extra("USER_COMMAND"))
+                await transport.send((command + "\n").encode("utf-8"))
+            except ConnectionError as e:
+                logger.warning(f"Safety command '{command}' failed: {e}")
 
     async def _execute_command(self, command: str) -> list[str]:
         """Send a command using ping-pong and return response lines."""
@@ -562,10 +642,21 @@ class GrblSerialSimpleDriver(Driver):
         return await self._execute_command(command)
 
     async def set_hold(self, hold: bool = True) -> None:
+        self._is_holding = hold
         self._is_cancelled = False
         realtime = b"!" if hold else b"~"
         if self._transport and self._transport.is_connected:
             await self._transport.send(realtime)
+        desired = (
+            DeviceStatus.HOLD
+            if hold
+            else DeviceStatus.RUN
+            if self._job_running
+            else DeviceStatus.IDLE
+        )
+        if self.state.status != desired:
+            self.state.status = desired
+            self.state_changed.send(self, state=self.state)
 
     def can_home(self, axis: Axis | None = None) -> bool:
         return True
