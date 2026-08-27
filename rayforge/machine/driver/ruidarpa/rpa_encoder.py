@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # within this tolerance; diagonal lines are unsupported by the Ruida
 # controller and fall back to no overscan. The epsilon guards against
 # degenerate zero-length scan lines.
-_OVERSCAN_ANGLE_TOLERANCE_DEG = 1.0
+_OVERSCAN_ANGLE_TOLERANCE_DEG = 0.01
 _OVERSCAN_ANGLE_EPSILON = 1e-6
 _DEFAULT_LAYER_SPEED_MMS = 100.0
 _DEFAULT_LAYER_FREQUENCY_KHZ = 20.0
@@ -108,6 +108,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self._section_type: Optional[SectionType] = None
         self._section_raster_mode: Optional[RasterMode] = None
         self._layer_mode: str = "VECTOR"
+        self._overscan: str = "NONE"
         self._snapshot_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
@@ -256,6 +257,7 @@ class RuidaRPAEncoder(OpsEncoder):
             pass  # Structural marker; no rpascript output
         else:
             raise ValueError(f"Unknown command type: {ct}")
+        self._gluescript.comment([f"# Op {idx}: {ct.name}"])
 
     # -- Helpers ------------------------------------------------------------
 
@@ -270,36 +272,24 @@ class RuidaRPAEncoder(OpsEncoder):
     def _emit_power(self, power_fraction: float) -> None:
         """Emit laser power for the current layer action block.
 
-        Power-modulated greyscale and depth-map sections pass through
-        GlueScript.power() unclamped; every other section uses
-        power_range() so accel/decel over-burn on raster scans and
-        line cuts is compensated.
         """
+        self._require_active_layer()
         section_type = self._section_type
         raster_mode = self._section_raster_mode
+        if power_fraction == 0.0:
+            return
         if (
-            section_type is None
-            or raster_mode is None
-            or section_type != SectionType.RASTER_FILL
-            or raster_mode
-            not in (RasterMode.VARIABLE_POWER, RasterMode.DEPTH_MAP)
-        ):
-            self._require_active_layer()
-            self._gluescript.power_range(
-                power_fraction * 100.0, power_fraction * 100.0
-            )
+            section_type is not None
+            and self._layer_mode == "IMAGE"
+           ):
+            if power_fraction == 0.0:
+                return
+            self._gluescript.power(power_fraction * 100.0)
             return
 
-        # Correct only because _compute_layer_mode derives IMAGE/DEPTHMAP
-        # for image sections at WORKPIECE_START.
-        if self._layer_mode not in ("IMAGE", "DEPTHMAP"):
-            raise ValueError(
-                f"Image section {section_type.name} with raster mode "
-                f"{raster_mode.name} requires an IMAGE/DEPTHMAP layer, "
-                f"but the current layer mode is {self._layer_mode!r} — "
-                f"missing WORKPIECE_START before the section"
-            )
-        self._gluescript.power(power_fraction * 100.0)
+        self._gluescript.power_range(
+            power_fraction * 100.0, power_fraction * 100.0
+        )
 
     def _find_layer(self, layer_uid: str) -> Optional["Layer"]:
         """Look up a document layer by uid, or None when unknown."""
@@ -346,10 +336,50 @@ class RuidaRPAEncoder(OpsEncoder):
 
     # -- Movement handlers --------------------------------------------------
 
+    def _movement_form(self, dx: float, dy: float) -> str:
+        """Classify a movement delta into an overscan-aware axis form.
+
+        X_BI/Y_BI overscan layers emit single-axis moves/cuts for
+        horizontal/vertical motion; diagonal motion and NONE overscan
+        layers always use the XY form.
+        """
+        if self._overscan == "NONE":
+            return "XY"
+        if (
+            abs(dx) < _OVERSCAN_ANGLE_EPSILON
+            and abs(dy) < _OVERSCAN_ANGLE_EPSILON
+        ):
+            return "XY"
+        angle = math.degrees(math.atan2(abs(dy), abs(dx)))
+        if angle <= _OVERSCAN_ANGLE_TOLERANCE_DEG:
+            return "X"
+        if angle >= 90.0 - _OVERSCAN_ANGLE_TOLERANCE_DEG:
+            return "Y"
+        return "XY"
+
+    def _emit_movement(self, x: float, y: float, cut: bool) -> None:
+        """Emit a move or cut to (x, y) using the overscan-aware form."""
+        dx = x - self.current_pos[0]
+        dy = y - self.current_pos[1]
+        form = self._movement_form(dx, dy)
+        if cut:
+            if form == "X":
+                self._gluescript.cut_x_to(x)
+            elif form == "Y":
+                self._gluescript.cut_y_to(y)
+            else:
+                self._gluescript.cut_xy_to(x, y)
+        else:
+            if form == "X":
+                self._gluescript.move_x_to(x)
+            elif form == "Y":
+                self._gluescript.move_y_to(y)
+            else:
+                self._gluescript.move_xy_to(x, y)
+
     def _handle_move_to(self, ops: Ops, idx: int) -> None:
         """Rapid move (laser off) to an absolute position."""
         x, y, z = ops.endpoint(idx)
-        self.current_pos = (x, y, z)
         self._require_active_layer()
         if z != 0:
             logger.warning(
@@ -357,12 +387,12 @@ class RuidaRPAEncoder(OpsEncoder):
                 "and rpascript has no Z move for this driver",
                 z,
             )
-        self._gluescript.move_xy_to(x, y)
+        self._emit_movement(x, y, cut=False)
+        self.current_pos = (x, y, z)
 
     def _handle_line_to(self, ops: Ops, idx: int) -> None:
         """Cutting move (laser on) to an absolute position."""
         x, y, z = ops.endpoint(idx)
-        self.current_pos = (x, y, z)
         self._require_active_layer()
         if z != 0:
             logger.warning(
@@ -370,7 +400,8 @@ class RuidaRPAEncoder(OpsEncoder):
                 "and rpascript has no Z move for this driver",
                 z,
             )
-        self._gluescript.cut_xy_to(x, y)
+        self._emit_movement(x, y, cut=True)
+        self.current_pos = (x, y, z)
 
     def _linearize_curve(self, ops: Ops, idx: int) -> None:
         """Linearize a curve op into cut and power actions.
@@ -379,44 +410,22 @@ class RuidaRPAEncoder(OpsEncoder):
         decomposed via ops.linearize() into cut segments and per-segment
         power adjustments. A zero-power segment turns the laser off, so
         the head moves (rapid) instead of cutting at 0% power.
-
-        CONSTANT_POWER raster sections (full-swing and dithered
-        engraving) are an exception: their scan lines must always cut,
-        never become moves. Off-pixels legitimately carry 0.0 power, so
-        every LINE_TO is emitted as cut_xy_to() and every SET_POWER is
-        emitted through _emit_power() including 0.0, which surfaces as
-        power_range(0.0, 0.0) in the transcript as a verification marker
-        (GlueScript currently raises ValueError for min < 8%; an upstream
-        clamp request is pending in docs/prompts/ruida-pa-clamp-power.md).
         """
         self._require_active_layer()
         start_pos = self.current_pos
         end = ops.endpoint(idx)
 
         sub_ops = ops.linearize(idx, start_pos)
-        if self._section_raster_mode == RasterMode.CONSTANT_POWER:
-            for j in range(sub_ops.len()):
-                sub_ct = sub_ops.command_type(j)
-                if sub_ct == CommandType.LINE_TO:
-                    sx, sy, _ = sub_ops.endpoint(j)
-                    self._gluescript.cut_xy_to(sx, sy)
-                elif sub_ct == CommandType.SET_POWER:
-                    self._emit_power(sub_ops.power(j))
-        else:
-            laser_on = True
-            for j in range(sub_ops.len()):
-                sub_ct = sub_ops.command_type(j)
-                if sub_ct == CommandType.LINE_TO:
-                    sx, sy, _ = sub_ops.endpoint(j)
-                    if laser_on:
-                        self._gluescript.cut_xy_to(sx, sy)
-                    else:
-                        self._gluescript.move_xy_to(sx, sy)
-                elif sub_ct == CommandType.SET_POWER:
-                    power = sub_ops.power(j)
-                    laser_on = power > 0.0
-                    if laser_on:
-                        self._emit_power(power)
+        for j in range(sub_ops.len()):
+            sub_ct = sub_ops.command_type(j)
+            if sub_ct == CommandType.LINE_TO:
+                sx, sy, sz = sub_ops.endpoint(j)
+                self._emit_movement(sx, sy, cut=True)
+                self.current_pos = (sx, sy, sz)
+            elif sub_ct == CommandType.SET_POWER:
+                power = sub_ops.power(j)
+                if power > 0.0:
+                    self._emit_power(power)
 
         self.current_pos = end
 
@@ -589,12 +598,10 @@ class RuidaRPAEncoder(OpsEncoder):
 
         Scans forward from the WORKPIECE_START command to the next
         workpiece, layer, or job boundary. Priority is DEPTHMAP > IMAGE
-        > RASTER > VECTOR: the first DEPTH_MAP section yields "DEPTHMAP",
-        any VARIABLE_POWER section yields "IMAGE", any CONSTANT_POWER
-        section yields "RASTER", and anything else defaults to "VECTOR".
+        > VECTOR: the first DEPTH_MAP section yields "DEPTHMAP", any
+        VARIABLE_POWER or CONSTANT_POWER section yields "IMAGE", and
+        anything else defaults to "VECTOR".
         """
-        seen_variable_power = False
-        seen_constant_power = False
         for i in range(idx + 1, ops.len()):
             command = ops.command_type(i)
             if command in (
@@ -607,17 +614,15 @@ class RuidaRPAEncoder(OpsEncoder):
                 break
             if command != CommandType.OPS_SECTION_START:
                 continue
-            _, _, raster_mode = ops.section_params(i)
+            section_type, _, raster_mode = ops.section_params(i)
+            if section_type != SectionType.RASTER_FILL:
+                continue
             if raster_mode == RasterMode.DEPTH_MAP:
                 return "DEPTHMAP"
+            if raster_mode == RasterMode.CONSTANT_POWER:
+                return "RASTER"
             if raster_mode == RasterMode.VARIABLE_POWER:
-                seen_variable_power = True
-            elif raster_mode == RasterMode.CONSTANT_POWER:
-                seen_constant_power = True
-        if seen_variable_power:
-            return "IMAGE"
-        if seen_constant_power:
-            return "RASTER"
+                return "IMAGE"
         return "VECTOR"
 
     def _compute_overscan(self, ops: Ops, idx: int, layer_mode: str) -> str:
@@ -629,10 +634,9 @@ class RuidaRPAEncoder(OpsEncoder):
         non-degenerate scan line determines the overscan: horizontal
         lines yield "X_BI", vertical lines yield "Y_BI", and diagonal
         lines (unsupported by the Ruida controller) yield "NONE". Vector
-        and depth-map layers are forced to "NONE" by GlueScript's
-        layer-mode override.
+        layers are forced to "NONE" by GlueScript's layer-mode override.
         """
-        if layer_mode not in ("IMAGE", "RASTER"):
+        if layer_mode == "VECTOR":
             return "NONE"
         pos = (0.0, 0.0, 0.0)
         in_raster_fill = False
@@ -704,6 +708,7 @@ class RuidaRPAEncoder(OpsEncoder):
         layer_mode = self._compute_layer_mode(ops, idx)
         self._layer_mode = layer_mode
         overscan = self._compute_overscan(ops, idx, layer_mode)
+        self._overscan = overscan
         self._gluescript.declare_layer(
             label=label,
             color=color,
@@ -717,7 +722,12 @@ class RuidaRPAEncoder(OpsEncoder):
         self._layer_declared = True
 
     def _handle_workpiece_end(self) -> None:
-        """Emit a workpiece end marker comment."""
+        """Emit a workpiece end marker comment.
+
+        Each workpiece is its own ruida-pa layer with its own overscan,
+        so the overscan state is reset here (not at LAYER_END).
+        """
+        self._overscan = "NONE"
         self._gluescript.comment(["# Workpiece End"])
 
     def _handle_ops_section_start(self, ops: Ops, idx: int) -> None:
