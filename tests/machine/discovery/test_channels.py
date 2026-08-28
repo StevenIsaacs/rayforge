@@ -1,4 +1,5 @@
 import asyncio
+import time
 from typing import ClassVar
 
 import pytest
@@ -344,15 +345,31 @@ async def test_broken_recognizer_does_not_break_discovery(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_scan_timeout_returns_empty(monkeypatch):
-    async def slow_scan(**kwargs):
-        await asyncio.sleep(1.0)
-        return []
+async def test_silent_ports_do_not_hide_responsive_ones(monkeypatch):
+    """Silent adapters used to burn the whole scan budget, and hitting
+    that budget discarded every observation. Now ports that answered
+    before the deadline are still reported, so a responsive machine
+    later in sort order is found alongside dumb adapters."""
 
-    monkeypatch.setattr(serial_channel, "scan_serial_ports", slow_scan)
-    monkeypatch.setattr(serial_channel, "SERIAL_SCAN_TIMEOUT", 0.05)
-    devices = await find_all_devices([FakeGrblDriver], ports=["/dev/x"])
-    assert devices == []
+    class Serial(FakeSerial):
+        def read(self, size=1):
+            if "SLOW" in str(self.port) and not self._pending:
+                time.sleep(0.3)
+            return super().read(size)
+
+    monkeypatch.setattr(
+        "rayforge.machine.transport.serial_scan.serial.Serial",
+        lambda **kw: Serial(
+            responses={"/dev/ttyUSB0": b"Grbl 1.1f\r\n"}, **kw
+        ),
+    )
+    monkeypatch.setattr(serial_channel, "SERIAL_SCAN_TIMEOUT", 0.5)
+
+    devices = await find_all_devices(
+        [FakeGrblDriver],
+        ports=["/dev/ttySLOW1", "/dev/ttyUSB0", "/dev/ttySLOW2"],
+    )
+    assert [d.params["port"] for d in devices] == ["/dev/ttyUSB0"]
 
 
 @pytest.mark.asyncio
@@ -641,7 +658,7 @@ def test_builtin_mdns_declarations():
 # ----- fingerprint pass -------------------------------------------------
 
 
-def _fingerprint_driver(fingerprint):
+def _fingerprint_driver(fingerprint, name="FingerprintDriver"):
     """A fresh driver class claiming _esp3d._tcp by declaration and
     _http._tcp candidates only via its fingerprint probe."""
 
@@ -654,6 +671,7 @@ def _fingerprint_driver(fingerprint):
         )
         label = "GRBL (Network)"
 
+    FingerprintDriver.__name__ = name
     return FingerprintDriver
 
 
@@ -752,6 +770,30 @@ async def test_failing_fingerprint_is_isolated(monkeypatch):
     monkeypatch.setattr(mdns_channel, "scan_mdns_services", fake_scan)
     devices = await find_network_devices([driver])
     assert [d.params["host"] for d in devices] == ["192.168.1.71"]
+
+
+@pytest.mark.asyncio
+async def test_first_declared_driver_claims_host(monkeypatch):
+    """When several fingerprinting drivers match the same host, the
+    first one in declaration order claims it; every host yields at
+    most one device."""
+
+    async def always_match(host, port, timeout=1.5):
+        return _http_service(host=host)
+
+    first = _fingerprint_driver(always_match, name="FirstDriver")
+    second = _fingerprint_driver(always_match, name="SecondDriver")
+
+    async def fake_scan(service_types):
+        return [_http_service(), _http_service(host="192.168.1.71")]
+
+    monkeypatch.setattr(mdns_channel, "scan_mdns_services", fake_scan)
+    devices = await find_network_devices([first, second])
+    assert [d.params["host"] for d in devices] == [
+        "192.168.1.70",
+        "192.168.1.71",
+    ]
+    assert all(d.driver_name == "FirstDriver" for d in devices)
 
 
 @pytest.mark.asyncio

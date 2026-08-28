@@ -281,29 +281,9 @@ class TextBoxTool(SketchTool):
         if not isinstance(entity, TextBoxEntity):
             return False
 
-        p_origin = self.element.sketch.registry.get_point(entity.origin_id)
-        p_width = self.element.sketch.registry.get_point(entity.width_id)
-        p_height = self.element.sketch.registry.get_point(entity.height_id)
-
-        p4_id = entity.get_fourth_corner_id(self.element.sketch.registry)
-        if p4_id:
-            p4 = self.element.sketch.registry.get_point(p4_id)
-            p4_x, p4_y = p4.x, p4.y
-        else:
-            # Calculate fourth corner from origin, width, and height points
-            p4_x = p_width.x + p_height.x - p_origin.x
-            p4_y = p_width.y + p_height.y - p_origin.y
-
-        # Define the polygon for the text box
-        polygon = [
-            (p_origin.x, p_origin.y),
-            (p_width.x, p_width.y),
-            (p4_x, p4_y),
-            (p_height.x, p_height.y),
-        ]
-
-        # Use point-in-polygon check for accurate hit testing (handles
-        # rotation)
+        polygon = entity.get_frame_polygon(self.element.sketch.registry)
+        if polygon is None:
+            return False
         return is_point_inside_polygon((mx, my), polygon)
 
     def _is_point_inside_any_text_box(self, mx: float, my: float) -> bool:
@@ -325,25 +305,9 @@ class TextBoxTool(SketchTool):
     def _is_point_inside_entity_box(
         self, entity: TextBoxEntity, mx: float, my: float
     ) -> bool:
-        p_origin = self.element.sketch.registry.get_point(entity.origin_id)
-        p_width = self.element.sketch.registry.get_point(entity.width_id)
-        p_height = self.element.sketch.registry.get_point(entity.height_id)
-
-        p4_id = entity.get_fourth_corner_id(self.element.sketch.registry)
-        if p4_id:
-            p4 = self.element.sketch.registry.get_point(p4_id)
-            p4_x, p4_y = p4.x, p4.y
-        else:
-            p4_x = p_width.x + p_height.x - p_origin.x
-            p4_y = p_width.y + p_height.y - p_origin.y
-
-        polygon = [
-            (p_origin.x, p_origin.y),
-            (p_width.x, p_width.y),
-            (p4_x, p4_y),
-            (p_height.x, p_height.y),
-        ]
-
+        polygon = entity.get_frame_polygon(self.element.sketch.registry)
+        if polygon is None:
+            return False
         return is_point_inside_polygon((mx, my), polygon)
 
     def _select_word_at_cursor(self):
@@ -623,6 +587,8 @@ class TextBoxTool(SketchTool):
 
             def on_paste_ready(clipboard, result):
                 try:
+                    if self.state != TextBoxState.EDITING:
+                        return
                     text = clipboard.read_text_finish(result)
                     if text:
                         start, end = self._get_selection_range()
@@ -824,20 +790,34 @@ class TextBoxTool(SketchTool):
         # Map normalized alpha to geometry x-coordinate
         target_x_natural = alpha * advance_width
 
-        # 3. Find closest character break
-        best_i, min_dist = 0, float("inf")
-
-        # Iterate through all possible cursor positions
-        # (before first char ... after last char)
-        for i in range(len(self.text_buffer) + 1):
-            sub_max_x = entity.font_config.get_text_position(
-                self.text_buffer, i
+        # 3. Find closest character break via binary search.
+        #    get_text_position returns monotonically increasing values,
+        #    so we can binary search with O(log n) measurements instead
+        #    of scanning all n+1 positions.
+        n = len(self.text_buffer)
+        lo, hi = 0, n
+        while lo < hi:
+            mid = (lo + hi) // 2
+            pos_mid = entity.font_config.get_text_position(
+                self.text_buffer, mid
             )
+            if pos_mid < target_x_natural:
+                lo = mid + 1
+            else:
+                hi = mid
 
-            dist = abs(sub_max_x - target_x_natural)
-            if dist < min_dist:
-                min_dist = dist
-                best_i = i
+        # lo is the first index whose position >= target.
+        # Pick whichever of lo-1 or lo is closer.
+        best_i = lo
+        if lo > 0:
+            pos_lo = entity.font_config.get_text_position(self.text_buffer, lo)
+            pos_prev = entity.font_config.get_text_position(
+                self.text_buffer, lo - 1
+            )
+            if abs(target_x_natural - pos_prev) < abs(
+                target_x_natural - pos_lo
+            ):
+                best_i = lo - 1
 
         self.cursor_pos = best_i
         self.cursor_visible = True
@@ -933,7 +913,10 @@ class TextBoxTool(SketchTool):
             anchor_y=nat_min_y,
             stable_src_height=nat_max_y - nat_min_y,
         )
-        logger.debug(f"Transformed text geometry: {transformed_geo.rect()}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Transformed text geometry: %s", transformed_geo.rect()
+            )
 
         ctx.save()
         model_to_screen_matrix = (
