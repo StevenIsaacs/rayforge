@@ -51,6 +51,7 @@ _DEFAULT_LAYER_FREQUENCY_KHZ = 20.0
 _DEFAULT_LAYER_POWER = 0.2  # fraction, i.e. 20%
 _DEFAULT_JOB_LABEL = "Rayforge Job"
 _DEFAULT_LAYER_COLOR = "#00ccff"
+_POWER_FLOOR = 0.08  # fraction, i.e. 8%
 
 # Maps the framework WCS slot names to the Ruida reference point strings
 # accepted by GlueScript.declare_job. The framework default WCS ("G54")
@@ -109,6 +110,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self._section_raster_mode: Optional[RasterMode] = None
         self._layer_mode: str = "VECTOR"
         self._overscan: str = "NONE"
+        self._power_fraction: float = 0.0
         self._snapshot_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
@@ -236,6 +238,7 @@ class RuidaRPAEncoder(OpsEncoder):
             self._section_type = None
             self._section_raster_mode = None
             self._layer_mode = "VECTOR"
+            self._power_fraction = 0.0
             self._layer_uid = None
         elif ct == CommandType.WORKPIECE_START:
             self._handle_workpiece_start(ops, idx)
@@ -287,9 +290,11 @@ class RuidaRPAEncoder(OpsEncoder):
             self._gluescript.power(power_fraction * 100.0)
             return
 
-        self._gluescript.power_range(
-            power_fraction * 100.0, power_fraction * 100.0
-        )
+        if power_fraction != self._power_fraction:
+            self._power_fraction = power_fraction
+            self._gluescript.power_range(
+                power_fraction * 100.0, power_fraction * 100.0
+            )
 
     def _find_layer(self, layer_uid: str) -> Optional["Layer"]:
         """Look up a document layer by uid, or None when unknown."""
@@ -416,16 +421,23 @@ class RuidaRPAEncoder(OpsEncoder):
         end = ops.endpoint(idx)
 
         sub_ops = ops.linearize(idx, start_pos)
+        power = self._power_fraction
         for j in range(sub_ops.len()):
             sub_ct = sub_ops.command_type(j)
             if sub_ct == CommandType.LINE_TO:
                 sx, sy, sz = sub_ops.endpoint(j)
-                self._emit_movement(sx, sy, cut=True)
-                self.current_pos = (sx, sy, sz)
+                if power > 0.0:
+                    self._emit_movement(sx, sy, cut=True)
+                    self.current_pos = (sx, sy, sz)
+                else:
+                    if self._layer_mode == "DITHER":
+                        self._emit_movement(sx, sy, cut=False)
             elif sub_ct == CommandType.SET_POWER:
                 power = sub_ops.power(j)
                 if power > 0.0:
-                    self._emit_power(power)
+                    self._emit_power(power + _POWER_FLOOR)
+                else:
+                    self._emit_power(0.0)
 
         self.current_pos = end
 
@@ -617,6 +629,8 @@ class RuidaRPAEncoder(OpsEncoder):
             section_type, _, raster_mode = ops.section_params(i)
             if section_type != SectionType.RASTER_FILL:
                 continue
+            if raster_mode == RasterMode.DITHER:
+                return "DITHER"
             if raster_mode == RasterMode.DEPTH_MAP:
                 return "DEPTHMAP"
             if raster_mode == RasterMode.CONSTANT_POWER:
@@ -709,6 +723,12 @@ class RuidaRPAEncoder(OpsEncoder):
         self._layer_mode = layer_mode
         overscan = self._compute_overscan(ops, idx, layer_mode)
         self._overscan = overscan
+        if layer_mode == "IMAGE":
+            min_power_1=_POWER_FLOOR
+            max_power_1=power_pct
+        else:
+            min_power_1=power_pct
+            max_power_1=power_pct
         self._gluescript.declare_layer(
             label=label,
             color=color,
@@ -716,8 +736,8 @@ class RuidaRPAEncoder(OpsEncoder):
             overscan=overscan,
             speed=speed_mms,
             frequency=frequency_khz,
-            min_power_1=power_pct,
-            max_power_1=power_pct,
+            min_power_1=min_power_1,
+            max_power_1=max_power_1,
         )
         self._layer_declared = True
 
