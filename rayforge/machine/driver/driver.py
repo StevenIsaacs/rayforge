@@ -222,6 +222,10 @@ class Driver(ABC):
     # When True, the driver can query the device to detect its
     # native unit system (metric vs imperial).
     supports_unit_detection: bool = False
+    # When True, the driver can raster the multi-depth ("Multiple
+    # Depths") depth mode, which requires emitting per-level tool
+    # passes. Drivers without it exclude the mode from raster steps.
+    supports_multi_depth_raster: ClassVar[bool] = True
     # Everything the driver declares about discoverability: what its
     # devices look like on the wire and on the network, composed of
     # per-channel recognizers. When set, the driver participates in
@@ -229,6 +233,20 @@ class Driver(ABC):
     # rayforge.machine.discovery). Serial-only drivers declare only
     # the serial recognizer; network drivers only the mDNS one.
     DISCOVERY: ClassVar[DiscoverySpec | None] = None
+
+    @classmethod
+    def supports_travel_speed(cls, dialect: "GcodeDialect | None") -> bool:
+        """
+        Whether the driver can emit travel moves at a configurable speed.
+
+        Non-G-code drivers (e.g. binary protocols) always carry the
+        travel speed in their command stream. G-code drivers depend on
+        the dialect: the speed can only be emitted if the dialect's
+        rapid-move template accepts an F parameter.
+        """
+        if not cls.uses_gcode:
+            return True
+        return bool(dialect and dialect.can_g0_with_speed)
 
     @property
     @abstractmethod

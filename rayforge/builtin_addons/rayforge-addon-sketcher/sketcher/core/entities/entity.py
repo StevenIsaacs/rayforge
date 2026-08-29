@@ -12,6 +12,10 @@ if TYPE_CHECKING:
     from ..registry import EntityRegistry
 
 
+def _quantize(value: float) -> float:
+    return round(value, 6)
+
+
 class Entity:
     """Base class for geometric primitives."""
 
@@ -19,9 +23,9 @@ class Entity:
         self.id: EntityID = id
         self.construction = construction
         self.invisible = False
-        # True if this entity was created as a copy of a pattern/array
+        # True if this entity was created as a copy of an array
         # instance. Rendered with a distinct dashed style.
-        self.pattern_copy = False
+        self.array_copy = False
         self.type = "entity"
         # Constrained state is calculated by solver
         self.constrained = False
@@ -54,6 +58,26 @@ class Entity:
     def get_point_ids(self) -> list[EntityID]:
         """Returns IDs of all control points used by this entity."""
         return []
+
+    def geometry_signature(self, registry: "EntityRegistry") -> tuple:
+        """
+        Returns a hashable signature capturing all geometry that
+        affects this entity's shape: quantized defining-point
+        positions, extended by subclasses with entity-internal state
+        such as bezier control-point offsets or arc chirality.
+
+        Coordinates are quantized (6 decimals): the solver leaves
+        residual noise of roughly its own convergence tolerance
+        (~1e-9 and coarser) on unheld points after every solve, and a
+        finer comparison would misread that noise as an edit,
+        triggering a re-apply on every solve. Used by array sync
+        change detection.
+        """
+        return tuple(
+            (_quantize(p.x), _quantize(p.y))
+            for p in (registry.get_point(pid) for pid in self.get_point_ids())
+            if p is not None
+        )
 
     def get_endpoint_ids(self) -> list[EntityID]:
         """
@@ -98,6 +122,14 @@ class Entity:
         as a rigid body during dragging. Used for entities where certain
         points should maintain their relative positions (e.g., ellipse center
         should drag all points together).
+        """
+        return []
+
+    def get_drag_anchor_points(self, point_id: EntityID) -> list[EntityID]:
+        """
+        Returns point IDs that should be pinned at their current position
+        while the given point is dragged (e.g., an ellipse center should
+        stay put when one of its radius points is dragged).
         """
         return []
 
@@ -169,6 +201,18 @@ class Entity:
         """
         return []
 
+    def to_polyline(
+        self, registry: "EntityRegistry"
+    ) -> list[tuple[float, float]]:
+        """
+        Samples this entity into a polyline in model coordinates,
+        e.g. for preview rendering. The entity's geometry is flattened
+        by raygeo with a 0.1 unit deviation tolerance. Entities
+        without a stroked shape yield an empty polyline.
+        """
+        polygons = self.to_geometry(registry).to_polygons(0.1)
+        return polygons[0] if polygons else []
+
     def to_dict(self) -> dict[str, Any]:
         """Base serialization method for entities."""
         data = {
@@ -178,15 +222,15 @@ class Entity:
         }
         if self.invisible:
             data["invisible"] = True
-        if self.pattern_copy:
-            data["pattern_copy"] = True
+        if self.array_copy:
+            data["array_copy"] = True
         return data
 
     def restore_base_flags(self, data: dict[str, Any]) -> None:
         """Restores base flags serialized by to_dict() but not accepted
         as constructor arguments."""
         self.invisible = data.get("invisible", False)
-        self.pattern_copy = data.get("pattern_copy", False)
+        self.array_copy = data.get("array_copy", False)
 
     def __repr__(self) -> str:
         return f"Entity(id={self.id}, type={self.type})"

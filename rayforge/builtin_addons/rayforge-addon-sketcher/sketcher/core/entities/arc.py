@@ -53,6 +53,11 @@ class Arc(Entity):
         # vice versa. Point positions are mirrored by the command.
         self.clockwise = not self.clockwise
 
+    def geometry_signature(self, registry: "EntityRegistry") -> tuple:
+        """Extends the point signature with the arc's chirality, which
+        changes the shape without moving any defining point."""
+        return (*super().geometry_signature(registry), self.clockwise)
+
     def get_point_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx, self.center_idx]
 
@@ -61,6 +66,11 @@ class Arc(Entity):
 
     def get_junction_point_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx, self.center_idx]
+
+    def get_drag_anchor_points(self, point_id: EntityID) -> list[EntityID]:
+        if point_id in (self.start_idx, self.end_idx):
+            return [self.center_idx]
+        return []
 
     def hit_test(
         self,

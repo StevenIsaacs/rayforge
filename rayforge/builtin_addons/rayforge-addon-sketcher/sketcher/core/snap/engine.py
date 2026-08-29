@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from raygeo.geo.types import Point as GeoPoint
 
 from ..registry import EntityRegistry
+from ..types import EntityID
 from .spatial import SnapLineIndex
 from .types import (
     DragContext,
@@ -44,7 +45,8 @@ class SnapEngine:
         self._index: SnapLineIndex = SnapLineIndex()
         self._last_query_pos: GeoPoint | None = None
         self._enabled: bool = True
-        self._registry_version: int = -1
+        self._cached_fingerprint: tuple | None = None
+        self._cached_full_fingerprint: tuple | None = None
         self._cached_drag_context_key: tuple | None = None
 
     @property
@@ -73,19 +75,51 @@ class SnapEngine:
     def clear_producers(self) -> None:
         self._producers.clear()
 
+    @staticmethod
+    def _geometry_fingerprint(
+        registry: EntityRegistry,
+        skip_point_ids: set[EntityID] | None = None,
+    ) -> tuple:
+        """
+        Cheap identity of the geometry the snap index was built from.
+
+        Structural changes bump the registry version, but solving,
+        drags and array syncs also move points IN PLACE without any
+        version signal; only the positions themselves detect that.
+        The O(n) fingerprint is compared on every query so the
+        expensive producer run only happens when geometry changed.
+        Positions are quantized to 6 decimals: the solver leaves
+        residual noise of roughly 1e-9 on every solve, which must not
+        count as a geometry change.
+
+        Points listed in skip_point_ids are ignored. Producers exclude
+        dragged geometry from their output, so moving dragged points
+        cannot make the index stale and must not trigger a rebuild.
+        """
+        return (
+            registry._entity_version,
+            tuple(
+                (round(p.x, 6), round(p.y, 6))
+                for p in registry.points
+                if skip_point_ids is None or p.id not in skip_point_ids
+            ),
+        )
+
     def rebuild_index(
         self,
         registry: EntityRegistry,
         drag_position: GeoPoint,
         drag_context: DragContext,
     ) -> None:
-        reg_version = registry._entity_version
+        fingerprint = self._geometry_fingerprint(
+            registry, drag_context.dragged_point_ids
+        )
         drag_key = (
             frozenset(drag_context.dragged_point_ids),
             frozenset(drag_context.dragged_entity_ids),
         )
         if (
-            reg_version == self._registry_version
+            fingerprint == self._cached_fingerprint
             and drag_key == self._cached_drag_context_key
         ):
             return
@@ -106,7 +140,8 @@ class SnapEngine:
                 logger.warning(f"SnapLineProducer error: {e}")
 
         self._last_query_pos = drag_position
-        self._registry_version = reg_version
+        self._cached_fingerprint = fingerprint
+        self._cached_full_fingerprint = self._geometry_fingerprint(registry)
         self._cached_drag_context_key = drag_key
 
     def _get_snap_points(
@@ -144,6 +179,12 @@ class SnapEngine:
 
         self.rebuild_index(registry, position, drag_context)
 
+        # The result is computed against the current registry even when
+        # the index rebuild early-returned (producers read live point
+        # positions), so staleness for is_snap_result_current is
+        # anchored to the last query, not the last rebuild.
+        self._cached_full_fingerprint = self._geometry_fingerprint(registry)
+
         x, y = position
 
         snap_points = self._get_snap_points(registry, position, drag_context)
@@ -174,6 +215,24 @@ class SnapEngine:
             )
 
         return SnapResult.no_snap(position)
+
+    def is_snap_result_current(self, registry: EntityRegistry) -> bool:
+        """
+        True if the registry geometry is unchanged since the last
+        query. During a drag, the solve and the array sync move
+        geometry AFTER the snap query but BEFORE the frame is drawn:
+        a result computed against the older geometry draws snap lines
+        detached from any geometry, which flash up during fast drags.
+        Callers must not render such a stale result.
+
+        Unlike the index fingerprint, this deliberately includes
+        dragged points: the stored result contains a snapped position
+        computed against the pre-solve geometry, so dragged movement
+        counts as staleness here.
+        """
+        return self._cached_full_fingerprint == self._geometry_fingerprint(
+            registry
+        )
 
     def _find_best_lines_for_both_axes(
         self, x: float, y: float

@@ -25,6 +25,7 @@ from rayforge.machine.driver.driver import DeviceState
 from rayforge.machine.driver.dummy import NoDeviceDriver
 from rayforge.machine.driver.grbl.grbl_network import GrblNetworkDriver
 from rayforge.machine.driver.grbl.grbl_serial import GrblSerialDriver
+from rayforge.machine.driver.ruida import RuidaDriver
 from rayforge.machine.driver.smoothie import SmoothieDriver
 from rayforge.machine.models.dialect import (
     GRBL_DIALECT,
@@ -1228,6 +1229,42 @@ class TestMachine:
         assert machine.supports_travel_speed()
         machine.set_dialect_uid("grbl")
         assert not machine.supports_travel_speed()
+
+    @pytest.mark.asyncio
+    async def test_supports_travel_speed_non_gcode_driver(
+        self, machine: Machine, task_mgr: TaskManager
+    ):
+        """A Ruida machine has no dialect but can emit travel speed."""
+        await wait_for_tasks_to_finish(task_mgr)
+        machine.set_dialect_uid(None)
+        machine.auto_connect = False
+        machine.set_driver(RuidaDriver, {"host": "localhost"})
+        await wait_for_tasks_to_finish(task_mgr)
+
+        assert machine.driver_name == "RuidaDriver"
+        assert machine.dialect is None
+        assert machine.supports_travel_speed()
+
+    @pytest.mark.asyncio
+    async def test_supports_multi_depth_raster(
+        self, machine: Machine, task_mgr: TaskManager
+    ):
+        await wait_for_tasks_to_finish(task_mgr)
+        # G-code drivers support multi-depth rastering by default.
+        assert machine.supports_multi_depth_raster()
+
+    @pytest.mark.asyncio
+    async def test_supports_multi_depth_raster_ruida(
+        self, machine: Machine, task_mgr: TaskManager
+    ):
+        """Ruida cannot raster the multi-depth depth mode."""
+        await wait_for_tasks_to_finish(task_mgr)
+        machine.auto_connect = False
+        machine.set_driver(RuidaDriver, {"host": "localhost"})
+        await wait_for_tasks_to_finish(task_mgr)
+
+        assert machine.driver_name == "RuidaDriver"
+        assert not machine.supports_multi_depth_raster()
 
     @pytest.mark.asyncio
     async def test_new_driver_methods_smoothie(

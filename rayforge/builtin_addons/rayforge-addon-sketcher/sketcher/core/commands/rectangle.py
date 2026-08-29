@@ -7,9 +7,8 @@ from raygeo.geo.types import Point as GeoPoint
 
 from ..constraints import (
     DistanceConstraint,
-    HorizontalConstraint,
+    PerpendicularConstraint,
     SymmetryConstraint,
-    VerticalConstraint,
 )
 from ..entities import Line, Point
 from ..types import EntityID
@@ -40,6 +39,7 @@ class RectanglePreviewState(PreviewState):
         self.locked_width: float | None = None
         self.locked_height: float | None = None
         self.center_on_start = center_on_start
+        self.constrain_square = False
 
     def get_preview_point_ids(self) -> set[EntityID]:
         """
@@ -174,6 +174,7 @@ class RectangleCommand(SketchChangeCommand):
         fixed_width: float | None = None,
         fixed_height: float | None = None,
         center_on_start: bool = False,
+        constrain_square: bool = False,
     ):
         super().__init__(sketch, _("Add Rectangle"))
         self.start_pid = start_pid
@@ -183,6 +184,7 @@ class RectangleCommand(SketchChangeCommand):
         self.fixed_width = fixed_width
         self.fixed_height = fixed_height
         self.center_on_start = center_on_start
+        self.constrain_square = constrain_square
         self.add_cmd: AddItemsCommand | None = None
         self._committed_end_id: EntityID | None = None
 
@@ -194,12 +196,36 @@ class RectangleCommand(SketchChangeCommand):
         return self._committed_end_id
 
     @staticmethod
+    def _constrain_point_to_square(
+        registry: EntityRegistry,
+        start_id: EntityID,
+        x: float,
+        y: float,
+    ) -> tuple[float, float]:
+        """
+        Adjusts a corner position so the rectangle defined by start_id
+        and (x, y) is square, keeping the start point fixed.
+
+        The smaller extent wins; the direction of each axis is kept.
+        """
+        try:
+            start_p = registry.get_point(start_id)
+        except IndexError:
+            return x, y
+
+        size = min(abs(x - start_p.x), abs(y - start_p.y))
+        sign_x = 1.0 if x >= start_p.x else -1.0
+        sign_y = 1.0 if y >= start_p.y else -1.0
+        return start_p.x + sign_x * size, start_p.y + sign_y * size
+
+    @staticmethod
     def _calculate_rect_corners(
         x1: float,
         y1: float,
         x2: float,
         y2: float,
         center_on_start: bool,
+        constrain_square: bool = False,
     ) -> tuple[float, float, float, float]:
         """
         Returns the diagonal corner coordinates (ax1, ay1, ax2, ay2) of
@@ -211,7 +237,17 @@ class RectangleCommand(SketchChangeCommand):
         When center_on_start is True the start point is the rectangle's
         center and the mouse point defines the half-extent, so the
         rectangle is drawn symmetrically around the start point.
+
+        When constrain_square is True the mouse point is adjusted so
+        both extents are equal, keeping the start point fixed.
         """
+        if constrain_square:
+            size = min(abs(x2 - x1), abs(y2 - y1))
+            sign_x = 1.0 if x2 >= x1 else -1.0
+            sign_y = 1.0 if y2 >= y1 else -1.0
+            x2 = x1 + sign_x * size
+            y2 = y1 + sign_y * size
+
         if center_on_start:
             dx = abs(x2 - x1)
             dy = abs(y2 - y1)
@@ -229,11 +265,20 @@ class RectangleCommand(SketchChangeCommand):
         fixed_width: float | None = None,
         fixed_height: float | None = None,
         center_on_start: bool = False,
+        constrain_square: bool = False,
     ) -> dict[str, Any] | None:
         """Calculates the points, entities, and constraints for a
-        rectangle, including its auto-created center point."""
+        rectangle, including its auto-created center point.
+
+        Square constraining is skipped when the end corner is a snapped
+        point, since the coincidence then takes precedence."""
         ax1, ay1, ax2, ay2 = RectangleCommand._calculate_rect_corners(
-            x1, y1, x2, y2, center_on_start
+            x1,
+            y1,
+            x2,
+            y2,
+            center_on_start,
+            constrain_square=constrain_square and end_pid is None,
         )
 
         if abs(ax2 - ax1) < 1e-6 or abs(ay2 - ay1) < 1e-6:
@@ -248,14 +293,30 @@ class RectangleCommand(SketchChangeCommand):
 
         p3_id = end_pid if end_pid is not None else next_temp_id()
 
+        if center_on_start:
+            # The start point is the rectangle's center, so the first
+            # corner is a new point and the start point itself acts as
+            # the symmetry center.
+            p1 = Point(next_temp_id(), ax1, ay1)
+            p1_id = p1.id
+            center_id = start_pid
+            center_point = None
+        else:
+            p1 = None
+            p1_id = start_pid
+            center_point = Point(
+                next_temp_id(), (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
+            )
+            center_id = center_point.id
+
         points = {
-            "p1_id": start_pid,
+            "p1_id": p1_id,
+            "p1": p1,
             "p2": Point(next_temp_id(), ax2, ay1),
             "p3": Point(p3_id, ax2, ay2),
             "p4": Point(next_temp_id(), ax1, ay2),
-            "center": Point(
-                next_temp_id(), (ax1 + ax2) / 2.0, (ay1 + ay2) / 2.0
-            ),
+            "center": center_point,
+            "center_id": center_id,
         }
 
         entities = [
@@ -266,43 +327,30 @@ class RectangleCommand(SketchChangeCommand):
         ]
 
         constraints: list[Any] = [
-            HorizontalConstraint(points["p1_id"], points["p2"].id),
-            VerticalConstraint(points["p2"].id, points["p3"].id),
-            HorizontalConstraint(points["p4"].id, points["p3"].id),
-            VerticalConstraint(points["p1_id"], points["p4"].id),
+            PerpendicularConstraint(entities[0].id, entities[1].id),
+            PerpendicularConstraint(entities[1].id, entities[2].id),
+            PerpendicularConstraint(entities[2].id, entities[3].id),
+            PerpendicularConstraint(entities[3].id, entities[0].id),
             SymmetryConstraint(
                 points["p1_id"],
                 points["p3"].id,
-                center=points["center"].id,
+                center=center_id,
                 user_visible=False,
             ),
         ]
 
-        top_edge_y = min(ay1, ay2)
-        right_edge_x = max(ax1, ax2)
-
-        if top_edge_y == ay1:
-            top_edge_p1 = points["p1_id"]
-            top_edge_p2 = points["p2"].id
-        else:
-            top_edge_p1 = points["p4"].id
-            top_edge_p2 = points["p3"].id
-
-        if right_edge_x == ax2:
-            right_edge_p1 = points["p2"].id
-            right_edge_p2 = points["p3"].id
-        else:
-            right_edge_p1 = points["p1_id"]
-            right_edge_p2 = points["p4"].id
-
         if fixed_width is not None:
             constraints.append(
-                DistanceConstraint(top_edge_p1, top_edge_p2, fixed_width)
+                DistanceConstraint(
+                    points["p1_id"], points["p2"].id, fixed_width
+                )
             )
 
         if fixed_height is not None:
             constraints.append(
-                DistanceConstraint(right_edge_p1, right_edge_p2, fixed_height)
+                DistanceConstraint(
+                    points["p2"].id, points["p3"].id, fixed_height
+                )
             )
 
         return {
@@ -624,6 +672,7 @@ class RectangleCommand(SketchChangeCommand):
         x: float,
         y: float,
         center_on_start: bool = False,
+        constrain_square: bool = False,
     ) -> None:
         """
         Updates the end point position and refreshes preview geometry.
@@ -634,6 +683,8 @@ class RectangleCommand(SketchChangeCommand):
             x, y: The new end point coordinates.
             center_on_start: When True, the start point is the rectangle's
                 center and the end point defines the half-extent.
+            constrain_square: When True the end point is adjusted so
+                both extents are equal, keeping the start point fixed.
 
         Raises:
             TypeError: If preview_state is not a RectanglePreviewState.
@@ -641,13 +692,18 @@ class RectangleCommand(SketchChangeCommand):
         if not isinstance(preview_state, RectanglePreviewState):
             raise TypeError("Expected RectanglePreviewState")
 
+        if constrain_square:
+            x, y = RectangleCommand._constrain_point_to_square(
+                registry, preview_state.start_id, x, y
+            )
+        preview_state.constrain_square = constrain_square
+
         # If the mode changed, recreate the preview geometry so the
         # point/line topology matches the new interpretation.
         if preview_state.center_on_start != center_on_start:
             RectangleCommand._rebuild_preview_for_mode(
                 registry, preview_state, center_on_start
             )
-            return
 
         if center_on_start:
             RectangleCommand._update_centered_preview_state(
@@ -759,6 +815,7 @@ class RectangleCommand(SketchChangeCommand):
             fixed_width=self.fixed_width,
             fixed_height=self.fixed_height,
             center_on_start=self.center_on_start,
+            constrain_square=self.constrain_square,
         )
         if not result:
             if self.is_start_temp:
@@ -767,14 +824,21 @@ class RectangleCommand(SketchChangeCommand):
 
         points_dict = result["points"]
         points_to_add = []
+        # In center_on_start mode p1 is a new corner point; in corner
+        # mode p1 is the existing start point.
+        if points_dict["p1"] is not None:
+            points_to_add.append(points_dict["p1"])
         # These points are always new
-        points_to_add.extend(
-            [points_dict["p2"], points_dict["p4"], points_dict["center"]]
-        )
+        points_to_add.extend([points_dict["p2"], points_dict["p4"]])
 
         # Add p3 only if it wasn't an existing snapped point
         if self.end_pid is None:
             points_to_add.append(points_dict["p3"])
+
+        # In corner mode the center is a new point; in center_on_start
+        # mode the start point itself is the symmetry center.
+        if points_dict["center"] is not None:
+            points_to_add.append(points_dict["center"])
 
         # If the start point was temporary, remove it from the registry
         # and add its object to the command to be re-added properly.

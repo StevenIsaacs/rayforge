@@ -16,6 +16,7 @@ from ..core.commands import BezierPreviewState
 from ..core.commands.dimension import DimensionData
 from ..core.constraints import (
     CoincidentConstraint,
+    PointOnCurveConstraint,
     PointOnLineConstraint,
 )
 from ..core.entities import (
@@ -320,6 +321,9 @@ class SketchRenderer:
     ):
         is_sketch_fully_constrained = self.element.sketch.is_fully_constrained
         entities = self.element.sketch.registry.entities or []
+        # Draw array copies first (behind) so original geometry like
+        # the guide path stays on top and easy to select.
+        entities = sorted(entities, key=lambda e: not e.array_copy)
         text_tool = self.element.tools.get("text_box")
         select_tool = self.element.tools.get("select")
         hovered_entity_id = (
@@ -415,7 +419,7 @@ class SketchRenderer:
                 else:
                     ctx.set_source_rgb(0.3, 0.5, 0.8)
                 ctx.stroke()
-            elif entity.pattern_copy:
+            elif entity.array_copy:
                 # Solid like regular geometry, slightly thinner to read
                 # as derived rather than seed geometry.
                 ctx.set_line_width(base_line_width * 0.6)
@@ -633,7 +637,12 @@ class SketchRenderer:
 
             # Filter specific constraints on text box points to reduce clutter
             if isinstance(
-                constr, (CoincidentConstraint, PointOnLineConstraint)
+                constr,
+                (
+                    CoincidentConstraint,
+                    PointOnCurveConstraint,
+                    PointOnLineConstraint,
+                ),
             ) and constr.depends_on_points(text_box_point_ids):
                 continue
 

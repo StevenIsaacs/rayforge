@@ -208,6 +208,16 @@ class EntityRegistry:
         """Retrieves a geometric entity (Line/Arc/Circle) by ID in O(1)."""
         return self._entity_map.get(idx)
 
+    def geometry_signature(self, entity_id: EntityID) -> tuple | None:
+        """Returns the quantized shape signature of the entity with
+        the given ID, or None if no such entity exists. Delegates to
+        the entity's polymorphic implementation (see
+        ``Entity.geometry_signature``)."""
+        entity = self._entity_map.get(entity_id)
+        if entity is None:
+            return None
+        return entity.geometry_signature(self)
+
     def get_connected_entity_ids(
         self, start_entity_id: EntityID
     ) -> set[EntityID]:
@@ -260,4 +270,16 @@ class EntityRegistry:
         for entity in self.entities:
             rigid_points = entity.get_rigidly_connected_points(point_id)
             result.extend(rigid_points)
+        return list(set(result))
+
+    def get_drag_anchor_points(self, point_id: EntityID) -> list[EntityID]:
+        """
+        Returns point IDs that should be pinned at their current position
+        while the given point is dragged. Iterates over all entities to
+        find any that define anchor points for this point.
+        """
+        result = []
+        for entity in self.entities:
+            anchor_points = entity.get_drag_anchor_points(point_id)
+            result.extend(anchor_points)
         return list(set(result))
