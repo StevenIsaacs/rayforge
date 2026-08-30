@@ -138,10 +138,10 @@ async def adapter_pair(
 
 class TestClassAttributes:
     def test_supports_travel_speed(self):
-        assert RuidaRPAAdapter.supports_travel_speed is True
+        assert RuidaRPAAdapter.supports_travel_speed(None) is True
 
     def test_supports_travel_speed_default_false(self):
-        assert Driver.supports_travel_speed is False
+        assert Driver.supports_travel_speed(None) is False
 
 
 class TestStopBackendRegression:
