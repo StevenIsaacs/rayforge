@@ -273,18 +273,13 @@ class RuidaRPAEncoder(OpsEncoder):
             )
 
     def _emit_power(self, power_fraction: float) -> None:
-        """Emit laser power for the current layer action block.
-
-        """
+        """Emit laser power for the current layer action block."""
         self._require_active_layer()
         section_type = self._section_type
         raster_mode = self._section_raster_mode
         if power_fraction == 0.0:
             return
-        if (
-            section_type is not None
-            and self._layer_mode == "IMAGE"
-           ):
+        if section_type is not None and self._layer_mode == "IMAGE":
             if power_fraction == 0.0:
                 return
             self._gluescript.power(power_fraction * 100.0)
@@ -724,11 +719,11 @@ class RuidaRPAEncoder(OpsEncoder):
         overscan = self._compute_overscan(ops, idx, layer_mode)
         self._overscan = overscan
         if layer_mode == "IMAGE":
-            min_power_1=_POWER_FLOOR
-            max_power_1=power_pct
+            min_power_1 = _POWER_FLOOR
+            max_power_1 = power_pct
         else:
-            min_power_1=power_pct
-            max_power_1=power_pct
+            min_power_1 = power_pct
+            max_power_1 = power_pct
         self._gluescript.declare_layer(
             label=label,
             color=color,
