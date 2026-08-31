@@ -228,8 +228,9 @@ class RuidaRPAEncoder(OpsEncoder):
         elif ct == CommandType.LAYER_END:
             if not self._layer_declared:
                 raise ValueError(
-                    "LAYER_END encountered before any WORKPIECE_START — "
-                    "every Rayforge layer must contain at least one workpiece"
+                    "LAYER_END encountered before any OPS_SECTION_START — "
+                    "every Rayforge layer must contain at least one ops "
+                    "section"
                 )
             # GlueScript closes layers implicitly; an unclosed ops
             # section must not leak into the next layer. Reset the
@@ -590,65 +591,54 @@ class RuidaRPAEncoder(OpsEncoder):
         self._gluescript.declare_job(label, ref_point, None, 1, 1, 0.0, 0.0)
 
     def _handle_layer_start(self, ops: Ops, idx: int) -> None:
-        """Record the active layer uid for the next WORKPIECE_START.
+        """Record the active layer uid for the next OPS_SECTION_START.
 
         LAYER_START emits nothing; the layer is declared when the first
-        workpiece of the layer begins, so each Rayforge workpiece maps
-        to its own Ruida layer.
+        ops section of the layer begins, so each Rayforge ops section
+        maps to its own Ruida layer.
         """
         self._layer_uid = ops.layer_uid(idx)
         self._layer_key += 1
         self._layer_declared = False
 
-    def _compute_layer_mode(self, ops: Ops, idx: int) -> str:
-        """Derive the layer mode from its ops sections.
+    @staticmethod
+    def _section_layer_mode(
+        section_type: SectionType, raster_mode: RasterMode | None
+    ) -> str:
+        """Map a section's type and raster mode to a GlueScript layer mode.
 
-        Scans forward from the WORKPIECE_START command to the next
-        workpiece, layer, or job boundary. Priority is DEPTHMAP > IMAGE
-        > VECTOR: the first DEPTH_MAP section yields "DEPTHMAP", any
-        VARIABLE_POWER or CONSTANT_POWER section yields "IMAGE", and
-        anything else defaults to "VECTOR".
+        Non-raster sections are always "VECTOR". Raster fill sections
+        map their raster mode: DITHER -> "DITHER", DEPTH_MAP ->
+        "DEPTHMAP", CONSTANT_POWER -> "RASTER", VARIABLE_POWER ->
+        "IMAGE", and any other raster mode defaults to "VECTOR".
         """
-        for i in range(idx + 1, ops.len()):
-            command = ops.command_type(i)
-            if command in (
-                CommandType.LAYER_END,
-                CommandType.LAYER_START,
-                CommandType.WORKPIECE_END,
-                CommandType.WORKPIECE_START,
-                CommandType.JOB_END,
-            ):
-                break
-            if command != CommandType.OPS_SECTION_START:
-                continue
-            section_type, _, raster_mode = ops.section_params(i)
-            if section_type != SectionType.RASTER_FILL:
-                continue
-            if raster_mode == RasterMode.DITHER:
-                return "DITHER"
-            if raster_mode == RasterMode.DEPTH_MAP:
-                return "DEPTHMAP"
-            if raster_mode == RasterMode.CONSTANT_POWER:
-                return "RASTER"
-            if raster_mode == RasterMode.VARIABLE_POWER:
-                return "IMAGE"
+        if section_type != SectionType.RASTER_FILL:
+            return "VECTOR"
+        if raster_mode == RasterMode.DITHER:
+            return "DITHER"
+        if raster_mode == RasterMode.DEPTH_MAP:
+            return "DEPTHMAP"
+        if raster_mode == RasterMode.CONSTANT_POWER:
+            return "RASTER"
+        if raster_mode == RasterMode.VARIABLE_POWER:
+            return "IMAGE"
         return "VECTOR"
 
     def _compute_overscan(self, ops: Ops, idx: int, layer_mode: str) -> str:
         """Derive the layer overscan from its raster scan lines.
 
-        Scans forward from the WORKPIECE_START command to the next
-        workpiece, layer, or job boundary, tracking the current position
-        and whether a raster fill section is active. The first
-        non-degenerate scan line determines the overscan: horizontal
-        lines yield "X_BI", vertical lines yield "Y_BI", and diagonal
-        lines (unsupported by the Ruida controller) yield "NONE". Vector
-        layers are forced to "NONE" by GlueScript's layer-mode override.
+        Scans forward from the OPS_SECTION_START command to the section
+        boundary, tracking the current position. The first non-degenerate
+        scan line determines the overscan: horizontal lines yield "X_BI",
+        vertical lines yield "Y_BI", and diagonal lines (unsupported by
+        the Ruida controller) yield "NONE". Vector layers are forced to
+        "NONE" by GlueScript's layer-mode override. The remaining stop
+        commands (WORKPIECE_END, WORKPIECE_START, LAYER_END, LAYER_START,
+        JOB_END) are defensive stops for malformed sequences.
         """
         if layer_mode == "VECTOR":
             return "NONE"
         pos = (0.0, 0.0, 0.0)
-        in_raster_fill = False
         for i in range(idx + 1, ops.len()):
             command = ops.command_type(i)
             if command in (
@@ -657,19 +647,14 @@ class RuidaRPAEncoder(OpsEncoder):
                 CommandType.WORKPIECE_END,
                 CommandType.WORKPIECE_START,
                 CommandType.JOB_END,
+                CommandType.OPS_SECTION_END,
+                CommandType.OPS_SECTION_START,
             ):
                 break
-            if command == CommandType.OPS_SECTION_START:
-                section_type, _, _ = ops.section_params(i)
-                in_raster_fill = section_type == SectionType.RASTER_FILL
-                continue
-            if command == CommandType.OPS_SECTION_END:
-                in_raster_fill = False
-                continue
             if command in (CommandType.MOVE_TO, CommandType.LINE_TO):
                 pos = ops.endpoint(i)
                 continue
-            if command == CommandType.SCAN_LINE and in_raster_fill:
+            if command == CommandType.SCAN_LINE:
                 end = ops.endpoint(i)
                 dx = end[0] - pos[0]
                 dy = end[1] - pos[1]
@@ -692,34 +677,60 @@ class RuidaRPAEncoder(OpsEncoder):
         self._gluescript.end_job()
 
     def _handle_workpiece_start(self, ops: Ops, idx: int) -> None:
-        """Declare the Ruida layer for this workpiece.
+        """Emit a workpiece start marker comment.
 
-        Each Rayforge workpiece becomes its own Ruida layer, so the
-        layer attribute block is emitted here (not at LAYER_START) using
-        the active layer's settings and the mode/overscan derived from
-        this workpiece's sections.
+        The Ruida layer is declared when the first ops section of the
+        workpiece begins, so WORKPIECE_START only records the boundary.
         """
         if self._layer_uid is None:
             raise ValueError(
                 "WORKPIECE_START encountered before LAYER_START — "
                 "GlueScript routing requires an active layer"
             )
-        layer_uid = self._layer_uid
         wp_uid = ops.workpiece_uid(idx)
         self._gluescript.comment([f"# Workpiece Start uid={wp_uid}"])
 
-        layer = self._find_layer(layer_uid)
+    def _handle_workpiece_end(self) -> None:
+        """Emit a workpiece end marker comment."""
+        self._gluescript.comment(["# Workpiece End"])
+
+    def _handle_ops_section_start(self, ops: Ops, idx: int) -> None:
+        """Declare the Ruida layer for this ops section.
+
+        Each Rayforge ops section becomes its own Ruida layer, so the
+        layer attribute block is emitted here (not at LAYER_START) using
+        the active layer's settings and the mode/overscan derived from
+        this section.
+        """
+        if self._layer_uid is None:
+            raise ValueError(
+                "OPS_SECTION_START encountered before LAYER_START — "
+                "GlueScript routing requires an active layer"
+            )
+        self._section_type, _workpiece_uid, self._section_raster_mode = (
+            ops.section_params(idx)
+        )
+        self._gluescript.comment(
+            [
+                "# Ops Actions",
+                "# Ops Section Start",
+            ]
+        )
+
+        layer = self._find_layer(self._layer_uid)
         label = (
             layer.name if layer is not None else f"Layer {self._layer_key - 1}"
         )
         color = layer.color if layer is not None else _DEFAULT_LAYER_COLOR
         speed_mms, frequency_khz, power_pct = self._layer_settings(layer)
-        layer_mode = self._compute_layer_mode(ops, idx)
+        layer_mode = self._section_layer_mode(
+            self._section_type, self._section_raster_mode
+        )
         self._layer_mode = layer_mode
         overscan = self._compute_overscan(ops, idx, layer_mode)
         self._overscan = overscan
         if layer_mode == "IMAGE":
-            min_power_1 = _POWER_FLOOR
+            min_power_1 = _POWER_FLOOR * 100.0
             max_power_1 = power_pct
         else:
             min_power_1 = power_pct
@@ -736,31 +747,13 @@ class RuidaRPAEncoder(OpsEncoder):
         )
         self._layer_declared = True
 
-    def _handle_workpiece_end(self) -> None:
-        """Emit a workpiece end marker comment.
-
-        Each workpiece is its own ruida-pa layer with its own overscan,
-        so the overscan state is reset here (not at LAYER_END).
-        """
-        self._overscan = "NONE"
-        self._gluescript.comment(["# Workpiece End"])
-
-    def _handle_ops_section_start(self, ops: Ops, idx: int) -> None:
-        """Record the active section and emit a comment for its start."""
-        self._section_type, _workpiece_uid, self._section_raster_mode = (
-            ops.section_params(idx)
-        )
-        self._gluescript.comment(
-            [
-                "# Ops Actions",
-                "# Ops Section Start",
-            ]
-        )
-
     def _handle_ops_section_end(self) -> None:
         """Clear the active section and emit a comment for its end."""
         self._section_type = None
         self._section_raster_mode = None
+        self._overscan = "NONE"
+        self._layer_mode = "VECTOR"
+        self._power_fraction = 0.0
         self._gluescript.comment(["# Ops Section End"])
 
     # -- Op map bookkeeping --------------------------------------------------

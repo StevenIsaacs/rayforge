@@ -79,7 +79,7 @@ class TestGoldenStructure:
     def test_ends_with_end_job(self):
         """The transcript terminates with the end_job() line."""
         lines = _encode_representative_job().split("\n")
-        assert lines[-1] == "end_job()"
+        assert lines[-2] == "end_job()"
 
     def test_layer_attribute_blocks(self):
         """Layer attrs stage with workflow settings, raw power, defaults."""
@@ -90,7 +90,7 @@ class TestGoldenStructure:
         )
         assert (
             "declare_layer('Engrave', '#33cc33', 'IMAGE', 'X_BI', "
-            "2.5, 30.0, 50.0, 50.0)" in text
+            "2.5, 30.0, 8.0, 50.0)" in text
         )
         assert (
             "declare_layer('Default', '#00ccff', 'VECTOR', 'NONE', "
