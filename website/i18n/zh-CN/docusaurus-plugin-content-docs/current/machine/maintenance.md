@@ -2,7 +2,7 @@
 
 机器设置中的维护页面帮助您跟踪机器使用情况并安排维护任务。
 
-![维护设置](/screenshots/machine-settings-maintenance.png)
+![维护设置](/screenshots/machine-settings-maintenance.webp)
 
 ## 使用跟踪
 
@@ -49,8 +49,10 @@ Rayforge 跟踪您的机器已使用多长时间。此信息帮助您在适当�
 2. 在对话框中确认重置
 3. 计数器归零
 
-:::tip 维护计划
+<!-- prettier-ignore-start -->
+:::tip[维护计划]
 常见维护间隔：
+
 - **每天**：清洁透镜，检查镜片对齐
 - **每周**：清洁导轨，检查皮带张力
 - **每月**：润滑轴承，检查电气连接
@@ -58,6 +60,7 @@ Rayforge 跟踪您的机器已使用多长时间。此信息帮助您在适当�
 
 根据您的使用模式和制造商建议调整间隔。
 :::
+<!-- prettier-ignore-end -->
 
 ## 另请参阅
 

@@ -1,25 +1,32 @@
 ---
-description: "Run your first laser job with Rayforge. Learn to import a design, configure cutting and engraving operations, and send G-code to your machine."
+description:
+  "Run your first laser job with Rayforge. Learn to import a design, configure cutting and engraving
+  operations, and send G-code to your machine."
 ---
 
 # Quick Start Guide
 
-Now that Rayforge is installed and your machine is configured, let's run your first laser job! This guide will walk you through importing a design, configuring operations, and sending G-code to your machine.
+Now that Rayforge is installed and your machine is configured, let's run your first laser job! This
+guide will walk you through importing a design, configuring operations, and sending G-code to your
+machine.
 
 ## Step 1: Import a Design
 
-Rayforge supports various file formats including SVG, DXF, PDF, Ruida (.rd), and raster images (JPEG, PNG, BMP).
+Rayforge supports various file formats including SVG, DXF, PDF, Ruida (.rd), and raster images
+(JPEG, PNG, BMP).
 
 1. **Click** **File → Open** or press <kbd>ctrl+o</kbd>
 2. Navigate to your design file and select it
 3. The design will appear on the canvas
 
-![Canvas with imported design](/screenshots/main-standard.png)
+![Canvas with imported design](/screenshots/main-standard.webp)
 
-:::tip Don't have a design yet?
-You can create simple shapes using the sketcher or download free SVG files from sites like [Flaticon](https://www.flaticon.com/) or [SVG Repo](https://www.svgrepo.com/).
+<!-- prettier-ignore-start -->
+:::tip[Don't have a design yet?]
+You can create simple shapes using the sketcher or download free SVG
+files from sites like [Flaticon](https://www.flaticon.com/) or [SVG Repo](https://www.svgrepo.com/).
 :::
-
+<!-- prettier-ignore-end -->
 
 ## Step 2: Position Your Design
 
@@ -49,12 +56,16 @@ Operations define how Rayforge will process your design. Common operations inclu
    - **Speed**: Movement speed in mm/min
    - **Passes**: Number of times to repeat the operation (useful for cutting thick materials)
 
-![Operation Settings](/screenshots/step-settings-contour-general.png)
+![Operation Settings](/screenshots/step-settings-contour-general.webp)
 
-:::warning Start with Low Power
-When working with new materials, always start with lower power settings and run test cuts. Gradually increase power until you achieve the desired result. Use the [Material Test Grid](../features/operations/material-test-grid.md) feature to systematically find optimal settings.
+<!-- prettier-ignore-start -->
+:::warning[Start with Low Power]
+When working with new materials, always start with lower power
+settings and run test cuts. Gradually increase power until you achieve the desired result. Use the
+[Material Test Grid](../features/operations/material-test-grid.md) feature to systematically find
+optimal settings.
 :::
-
+<!-- prettier-ignore-end -->
 
 ## Step 4: Preview
 
@@ -65,9 +76,10 @@ Before sending to your machine, preview the toolpath in 3D:
 3. Use your mouse to rotate and zoom the preview
 4. Verify that the path looks correct
 
-![3D Preview](/screenshots/main-3d.png)
+![3D Preview](/screenshots/main-3d.webp)
 
-:::tip Catch Errors Early
+<!-- prettier-ignore-start -->
+:::tip[Catch Errors Early]
 The 3D preview helps you spot issues like:
 
 - Missing paths
@@ -75,17 +87,18 @@ The 3D preview helps you spot issues like:
 - Operations applied to the wrong objects
 - Paths that exceed your working area
 :::
-
+<!-- prettier-ignore-end -->
 
 ## Step 5: Send to Machine
 
-:::danger Safety First
+<!-- prettier-ignore-start -->
+:::danger[Safety First]
 - Ensure the work area is clear
 - Never leave the machine unattended during operation
 - Have fire safety equipment nearby
 - Wear appropriate eye protection
 :::
-
+<!-- prettier-ignore-end -->
 
 ### Preparing Your Material
 
@@ -96,16 +109,22 @@ The 3D preview helps you spot issues like:
 
 ### Starting the Job
 
-1. **Position the laser**: Use the jog controls to move the laser to the starting position. Click **View → Control Panel** or press <kbd>ctrl+l</kbd>, then use the arrow buttons or keyboard arrows to move the laser.
+1. **Position the laser**: Use the jog controls to move the laser to the starting position. Click
+   **View → Control Panel** or press <kbd>ctrl+l</kbd>, then use the arrow buttons or keyboard
+   arrows to move the laser.
 
-2. **Frame the design**: Run the framing function to verify placement. Click **Machine → Frame** and the laser will trace the bounding box of your design at low power. Verify it fits within your material.
+2. **Frame the design**: Run the framing function to verify placement. Click **Machine → Frame** and
+   the laser will trace the bounding box of your design at low power. Verify it fits within your
+   material.
 
 3. **Start the job**: Click **Machine → Start Job**
 4. Monitor the progress in the status bar
 
 ### During the Job
 
-The right section of the status bar shows the current progress and total execution time estimate. Use the Pause and Stop buttons in the control panel to control the job. Note that <kbd>esc</kbd> exits simulation mode but does not stop an active job.
+The right section of the status bar shows the current progress and total execution time estimate.
+Use the Pause and Stop buttons in the control panel to control the job. Note that <kbd>esc</kbd>
+exits simulation mode but does not stop an active job.
 
 ## Step 6: Finishing Up
 
@@ -115,23 +134,22 @@ Once the job completes:
 2. Carefully remove your finished piece
 3. Clean the laser bed if necessary
 
-:::success Congratulations!
-You've completed your first Rayforge job! Now you can explore more advanced features.
+<!-- prettier-ignore-start -->
+:::success[Congratulations!]
+You've completed your first Rayforge job! Now you can explore more
+advanced features.
 :::
-
+<!-- prettier-ignore-end -->
 
 ## Next Steps
 
 Now that you've completed your first job, explore these features:
 
-- **[Workpiece Positioning](../features/workpiece-positioning.md)**: Master
-  all positioning methods (focus mode, framing, WCS, camera)
-- **[Multi-Layer Operations](../features/multi-layer.md)**: Assign different
-  operations to layers
-- **[Holding Tabs](../features/holding-tabs.md)**: Keep cut pieces in place
-  during cutting
-- **[Camera Integration](../machine/camera.md)**: Use a camera for precise
-  alignment
+- **[Workpiece Positioning](../features/workpiece-positioning.md)**: Master all positioning methods
+  (focus mode, framing, WCS, camera)
+- **[Multi-Layer Operations](../features/multi-layer.md)**: Assign different operations to layers
+- **[Holding Tabs](../features/holding-tabs.md)**: Keep cut pieces in place during cutting
+- **[Camera Integration](../machine/camera.md)**: Use a camera for precise alignment
 - **[Hooks & Macros](../machine/hooks-macros.md)**: Automate repetitive tasks
 
 ## Tips for Success
@@ -140,8 +158,10 @@ Now that you've completed your first job, explore these features:
 2. **Test cuts**: Always run a test cut on scrap material first
 3. **Material database**: Keep notes on successful power/speed settings for different materials
 4. **Maintenance**: Keep your laser lens clean and check belt tension regularly
-5. **Air assist**: If your machine has air assist, use it to prevent charring and improve cut quality
+5. **Air assist**: If your machine has air assist, use it to prevent charring and improve cut
+   quality
 
 ---
 
-**Need Help?** Check the [Troubleshooting](../troubleshooting/connection.md) section or visit the [GitHub Issues](https://github.com/barebaric/rayforge/issues) page.
+**Need Help?** Check the [Troubleshooting](../troubleshooting/connection.md) section or visit the
+[GitHub Issues](https://github.com/barebaric/rayforge/issues) page.

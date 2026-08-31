@@ -132,7 +132,7 @@
 
 ### 第 4 步：配置设置
 
-![雕刻步骤设置](/screenshots/step-settings-engrave-general-variable.png)
+![雕刻步骤设置](/screenshots/step-settings-engrave-general-variable.webp)
 
 ## 雕刻设置
 
@@ -146,7 +146,7 @@
 
 #### 可变功率模式设置
 
-![可变功率模式设置](/screenshots/step-settings-engrave-general-variable.png)
+![可变功率模式设置](/screenshots/step-settings-engrave-general-variable.webp)
 
 **最小功率（%）：**
 
@@ -190,7 +190,7 @@
 
 #### 恒定功率模式设置
 
-![恒定功率模式设置](/screenshots/step-settings-engrave-general-constant_power.png)
+![恒定功率模式设置](/screenshots/step-settings-engrave-general-constant_power.webp)
 
 **阈值（0-255）：**
 
@@ -205,7 +205,7 @@
 
 #### 抖动模式设置
 
-![抖动模式设置](/screenshots/step-settings-engrave-general-dither.png)
+![抖动模式设置](/screenshots/step-settings-engrave-general-dither.webp)
 
 **抖动算法：**
 
@@ -218,13 +218,14 @@
 | Bayer 4x4       | 中等 | 快   | 平衡的半色调         |
 | Bayer 8x8       | 高   | 中等 | 精细细节、微妙的图案 |
 
-**Floyd-Steinberg** 是默认选择，推荐用于大多数照片雕刻。它使用误差扩散将量化误差分配到相邻像素，从而产生自然的效果。
+**Floyd-Steinberg**
+是默认选择，推荐用于大多数照片雕刻。它使用误差扩散将量化误差分配到相邻像素，从而产生自然的效果。
 
 **Bayer 抖动**会创建规则的图案，可产生类似传统半色调印刷的艺术效果。
 
 #### 多深度模式设置
 
-![多深度模式设置](/screenshots/step-settings-engrave-general-multi_pass.png)
+![多深度模式设置](/screenshots/step-settings-engrave-general-multi_pass.webp)
 
 **深度级别数：**
 
@@ -270,10 +271,12 @@
 
 **推荐：** 一般用途使用 0.1mm
 
-:::tip 分辨率匹配
+<!-- prettier-ignore-start -->
+:::tip[分辨率匹配]
+对于图像，线间距应与图像分辨率匹配或超过图像分辨率。如果您的图像为 10 像素/mm（254
+DPI），请使用 0.1mm 或更小的线间距。
 :::
-
-对于图像，线间距应与图像分辨率匹配或超过图像分辨率。如果您的图像为 10 像素/mm（254 DPI），请使用 0.1mm 或更小的线间距。
+<!-- prettier-ignore-end -->
 
 #### 扫描方向
 
@@ -312,7 +315,7 @@ Rayforge 始终进行双向扫描（从左到右，然后从右到左），因�
 
 ## 激光设置
 
-![激光设置](/screenshots/step-settings-engrave-laser.png)
+![激光设置](/screenshots/step-settings-engrave-laser.webp)
 
 功率、速度和激光头选择位于步骤设置对话框的**激光**页面。
 
@@ -331,7 +334,7 @@ Rayforge 始终进行双向扫描（从左到右，然后从右到左），因�
 
 ## 后处理
 
-![雕刻后处理设置](/screenshots/step-settings-engrave-post.png)
+![雕刻后处理设置](/screenshots/step-settings-engrave-post.webp)
 
 雕刻操作支持多种后处理选项：
 

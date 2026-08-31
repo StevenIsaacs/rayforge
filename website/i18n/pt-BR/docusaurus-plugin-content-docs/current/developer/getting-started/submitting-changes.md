@@ -44,6 +44,7 @@ git rebase upstream/main
 ## Envie um Pull Request
 
 1. Envie sua branch para seu fork:
+
    ```bash
    git push origin feature/seu-nome-de-feature
    ```
@@ -83,13 +84,20 @@ Use mensagens de commit claras e descritivas:
 
 ### Alterações Pequenas e Focadas
 
-Mantenha pull requests focados em uma única feature ou correção. Alterações grandes devem ser divididas em partes menores e lógicas.
+Mantenha pull requests focados em uma única feature ou correção. Alterações grandes devem ser
+divididas em partes menores e lógicas.
 
-:::tip Discuta Primeiro
-Para mudanças maiores, abra uma [issue](https://github.com/barebaric/rayforge/issues) primeiro para discutir sua abordagem antes de investir tempo significativo.
+<!-- prettier-ignore-start -->
+:::tip[Discuta Primeiro]
+Para mudanças maiores, abra uma
+[issue](https://github.com/barebaric/rayforge/issues) primeiro para discutir sua abordagem antes de
+investir tempo significativo.
 :::
+<!-- prettier-ignore-end -->
 
-
-:::note Precisa de Ajuda?
-Se você não tiver certeza sobre qualquer parte do processo de contribuição, não hesite em pedir ajuda em uma issue ou discussão.
+<!-- prettier-ignore-start -->
+:::note[Precisa de Ajuda?]
+Se você não tiver certeza sobre qualquer parte do processo de
+contribuição, não hesite em pedir ajuda em uma issue ou discussão.
 :::
+<!-- prettier-ignore-end -->

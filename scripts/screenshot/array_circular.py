@@ -9,14 +9,12 @@ import time
 
 from utils import (
     clear_window_subtitle,
-    get_target,
     load_project,
     open_array_dialog,
     restore_config,
     run_on_main_thread,
     set_window_size,
     take_window_screenshot,
-    target_to_filename,
     wait_for_settled,
 )
 
@@ -41,8 +39,6 @@ def _configure_circular_dialog(dialog):
     try:
         dialog._c_count_row.set_value(8)
         dialog._c_angle_row.set_value(360.0)
-        cur_y = dialog._c_center_y_row.get_value()
-        dialog._c_center_y_row.set_value(cur_y - 20.0)
         cur_r = dialog._c_radius_row.get_value()
         dialog._c_radius_row.set_value(max(cur_r - 10.0, 0.0))
     finally:
@@ -52,7 +48,6 @@ def _configure_circular_dialog(dialog):
 
 @restore_config
 def main():
-    target = get_target("main:array:circular")
     set_window_size(win, 2400, 1650)
 
     load_project(win, "pattern.ryp")
@@ -80,8 +75,8 @@ def main():
 
     clear_window_subtitle(win)
 
-    logger.info("Taking screenshot: main-array-circular.png")
-    take_window_screenshot(win, target_to_filename(target))
+    logger.info("Taking screenshot: main-array-circular.webp")
+    take_window_screenshot(win)
 
     time.sleep(0.25)
 

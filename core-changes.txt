@@ -1,0 +1,4 @@
+.gitignore
+.vscode -- For debugging rayforge
+pixi.toml -- Add ruidarpa environment
+AGENTS.md -- Add reference to ruidarpa addendum

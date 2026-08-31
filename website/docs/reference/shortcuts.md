@@ -1,17 +1,20 @@
 ---
-description: "Keyboard shortcuts and hotkeys in Rayforge. Speed up your laser cutting workflow with quick access to common tools and commands."
+description:
+  "Keyboard shortcuts and hotkeys in Rayforge. Speed up your laser cutting workflow with quick
+  access to common tools and commands."
 ---
 
 # Keyboard Shortcuts
 
 Complete reference of keyboard shortcuts in Rayforge.
 
-:::note Platform Conventions
-
+<!-- prettier-ignore-start -->
+:::note[Platform Conventions]
 - **Linux/Windows:** `Ctrl` key
 - **macOS:** `Command` key
 - Documentation uses `Ctrl` - macOS users substitute with `Command`
-  :::
+:::
+<!-- prettier-ignore-end -->
 
 ---
 
@@ -139,9 +142,12 @@ Complete reference of keyboard shortcuts in Rayforge.
 | `Ctrl+&lt;` | Machine Settings | Open machine settings dialog   |
 | `F1`        | About            | Show about dialog              |
 
-:::note Machine Operations
-Machine control operations (Home, Frame, Send, etc.) currently don't have default shortcuts but can be accessed via toolbar buttons or menus.
+<!-- prettier-ignore-start -->
+:::note[Machine Operations]
+Machine control operations (Home, Frame, Send, etc.) currently don't have
+default shortcuts but can be accessed via toolbar buttons or menus.
 :::
+<!-- prettier-ignore-end -->
 
 ---
 
@@ -229,9 +235,12 @@ When editing G-code or text fields:
 
 ## Customizing Shortcuts
 
-:::note Custom Shortcuts
-Keyboard shortcuts are currently hardcoded. Custom shortcut configuration may be added in future versions.
+<!-- prettier-ignore-start -->
+:::note[Custom Shortcuts]
+Keyboard shortcuts are currently hardcoded. Custom shortcut configuration
+may be added in future versions.
 :::
+<!-- prettier-ignore-end -->
 
 **Current limitations:**
 
@@ -366,7 +375,7 @@ Some lesser-known shortcuts:
 |               | T            | Tabs             |
 |               | Ctrl+Alt+C   | Camera           |
 |               | F12          | 3D View          |
-|               | 1/2/3/4/5/7 | View Presets     |
+|               | 1/2/3/4/5/7  | View Presets     |
 |               | P            | Perspective      |
 | **Align**     | Shift+Left   | Align Left       |
 |               | Shift+Right  | Align Right      |

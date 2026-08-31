@@ -1,15 +1,15 @@
 # Provedor de IA
 
-![Configurações do Provedor de IA](/screenshots/app-settings-ai.png)
+![Configurações do Provedor de IA](/screenshots/app-settings-ai.webp)
 
-Configure provedores de IA que os addons podem usar para adicionar
-recursos inteligentes ao Rayforge.
+Configure provedores de IA que os addons podem usar para adicionar recursos inteligentes ao
+Rayforge.
 
 ## Como Funciona
 
-Os addons podem usar os provedores de IA configurados sem precisar de
-suas próprias chaves de API. Isso centraliza sua configuração de IA e
-permite que você controle quais provedores estão disponíveis para os addons.
+Os addons podem usar os provedores de IA configurados sem precisar de suas próprias chaves de API.
+Isso centraliza sua configuração de IA e permite que você controle quais provedores estão
+disponíveis para os addons.
 
 ## Adicionar um Provedor
 
@@ -24,24 +24,24 @@ permite que você controle quais provedores estão disponíveis para os addons.
 
 ### Compatível com OpenAI
 
-Este tipo de provedor funciona com qualquer serviço que use o formato
-de API OpenAI. Isso inclui vários provedores em nuvem e soluções
-auto-hospedadas.
+Este tipo de provedor funciona com qualquer serviço que use o formato de API OpenAI. Isso inclui
+vários provedores em nuvem e soluções auto-hospedadas.
 
-A URL base padrão está definida para a API da OpenAI, mas você pode
-alterá-la para qualquer serviço compatível.
+A URL base padrão está definida para a API da OpenAI, mas você pode alterá-la para qualquer serviço
+compatível.
 
 ## Gerenciar Provedores
 
 - **Ativar/Desativar**: Ative ou desative um provedor sem excluí-lo
-- **Definir como Padrão**: Clique no ícone de marca de seleção para
-  tornar um provedor o padrão
+- **Definir como Padrão**: Clique no ícone de marca de seleção para tornar um provedor o padrão
 - **Excluir**: Remova um provedor que você não precisa mais
 
+<!-- prettier-ignore-start -->
 :::warning
-Suas chaves de API são armazenadas localmente em seu computador e nunca
-são compartilhadas com terceiros.
+Suas chaves de API são armazenadas localmente em seu computador e nunca são
+compartilhadas com terceiros.
 :::
+<!-- prettier-ignore-end -->
 
 ## Tópicos Relacionados
 

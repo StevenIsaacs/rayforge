@@ -2,13 +2,13 @@
 
 机器设置中的 G 代码页面配置 Rayforge 如何为您的机器生成 G 代码。
 
-![G 代码设置](/screenshots/machine-settings-gcode.png)
+![G 代码设置](/screenshots/machine-settings-gcode.webp)
 
+<!-- prettier-ignore-start -->
 :::info
-此页面仅在使用基于 G 代码的驱动程序的机器上显示（例如 GRBL、
-Smoothieware、Marlin）。如果您的机器使用非 G 代码驱动程序（例如
-Ruida），此设置页面将完全隐藏。
+此页面仅在使用基于 G 代码的驱动程序的机器上显示（例如 GRBL、Smoothieware、Marlin）。如果您的机器使用非 G 代码驱动程序（例如 Ruida），此设置页面将完全隐藏。
 :::
+<!-- prettier-ignore-end -->
 
 ## G 代码方言
 
@@ -24,9 +24,11 @@ Ruida），此设置页面将完全隐藏。
 - **Smoothieware**：用于 Smoothieboard 和类似控制器。
 - **Marlin**：用于基于 Marlin 的控制器。
 
+<!-- prettier-ignore-start -->
 :::info
 方言影响激光功率、移动和其他命令在输出 G 代码中的格式。
 :::
+<!-- prettier-ignore-end -->
 
 ## 方言前导和后缀
 
@@ -38,7 +40,8 @@ Ruida），此设置页面将完全隐藏。
 
 ### 后缀
 
-在每个作业结束时执行的 G 代码命令，在所有切割操作之后。常见用途包括关闭激光（M5）、返回原点（G0 X0 Y0）和停放头。
+在每个作业结束时执行的 G 代码命令，在所有切割操作之后。常见用途包括关闭激光（M5）、返回原点（G0 X0
+Y0）和停放头。
 
 ## 另请参阅
 

@@ -1,6 +1,7 @@
 # Perfilado de Marco
 
-El Perfilado de Marco crea una trayectoria de corte rectangular simple alrededor de todo tu diseño. Es la forma más rápida de añadir un borde limpio o liberar tu trabajo de la lámina de material.
+El Perfilado de Marco crea una trayectoria de corte rectangular simple alrededor de todo tu diseño.
+Es la forma más rápida de añadir un borde limpio o liberar tu trabajo de la lámina de material.
 
 ## Resumen
 
@@ -22,7 +23,8 @@ Usa el perfilado de marco para:
 
 **No uses perfilado de marco para:**
 
-- Formas irregulares alrededor de múltiples objetos (usa [Envoltura Ajustada](shrink-wrap) en su lugar)
+- Formas irregulares alrededor de múltiples objetos (usa [Envoltura Ajustada](shrink-wrap) en su
+  lugar)
 - Cortar piezas individuales (usa [Contorno](contour) en su lugar)
 - Seguir la forma exacta de tu diseño
 
@@ -49,11 +51,12 @@ Configura los parámetros del marco:
 
 ## Ajustes Principales
 
-El diálogo de ajustes de paso tiene tres pestañas: **Ajustes de Paso**, **Láser** y **Post-Procesamiento**. Los ajustes se describen en orden de pestañas a continuación.
+El diálogo de ajustes de paso tiene tres pestañas: **Ajustes de Paso**, **Láser** y
+**Post-Procesamiento**. Los ajustes se describen en orden de pestañas a continuación.
 
 ### Geometría
 
-![Ajustes de paso de Perfilado de Marco](/screenshots/step-settings-frame-outline-general.png)
+![Ajustes de paso de Perfilado de Marco](/screenshots/step-settings-frame-outline-general.webp)
 
 El grupo **Geometría** en la pestaña _Ajustes de Paso_ controla la forma del marco.
 
@@ -82,9 +85,10 @@ Controla dónde corta el láser en relación a la trayectoria del marco:
 
 ### Ajustes del Láser
 
-![Ajustes del láser](/screenshots/step-settings-frame-outline-laser.png)
+![Ajustes del láser](/screenshots/step-settings-frame-outline-laser.webp)
 
-La potencia, la velocidad y la selección del cabezal láser se encuentran en la página **Láser** del diálogo de ajustes de paso.
+La potencia, la velocidad y la selección del cabezal láser se encuentran en la página **Láser** del
+diálogo de ajustes de paso.
 
 #### Potencia y Velocidad
 
@@ -110,7 +114,7 @@ El perfilado de marco soporta compensación de kerf:
 
 ## Post-Procesamiento
 
-![Ajustes de post-procesamiento de Perfilado de Marco](/screenshots/step-settings-frame-outline-post.png)
+![Ajustes de post-procesamiento de Perfilado de Marco](/screenshots/step-settings-frame-outline-post.webp)
 
 Las operaciones de Perfilado de Marco soportan varias opciones de post-procesamiento:
 
@@ -118,7 +122,8 @@ Las operaciones de Perfilado de Marco soportan varias opciones de post-procesami
 - **[Recortar al Material](../crop-to-stock.md)** - Limita los cortes al límite del material
 - **[Optimización de Trayectoria](../path-optimization.md)** - Reduce la distancia de viaje
 - **[Multi-Pasada](../multi-pass.md)** - Repite cortes para materiales gruesos
-- **[Entrada/Salida](../lead-in-out.md)** - Añade movimientos de aproximación y salida sin potencia para extremos de corte más limpios
+- **[Entrada/Salida](../lead-in-out.md)** - Añade movimientos de aproximación y salida sin potencia
+  para extremos de corte más limpios
 
 ## Casos de Uso
 

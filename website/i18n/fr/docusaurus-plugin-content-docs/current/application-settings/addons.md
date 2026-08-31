@@ -1,6 +1,6 @@
 # Addons
 
-![Paramètres des Addons](/screenshots/app-settings-addons.png)
+![Paramètres des Addons](/screenshots/app-settings-addons.webp)
 
 La page Addons affiche les addons d'extension installés et vous permet de les gérer.
 
@@ -34,8 +34,8 @@ La liste des addons affiche tous les addons installés avec :
 
 ### Mettre à Jour les Addons
 
-Quand des mises à jour sont disponibles, un indicateur apparaît dans le dialogue du Registre des Addons.
-Cliquez sur **Mettre à Jour** pour installer les mises à jour disponibles.
+Quand des mises à jour sont disponibles, un indicateur apparaît dans le dialogue du Registre des
+Addons. Cliquez sur **Mettre à Jour** pour installer les mises à jour disponibles.
 
 ### Supprimer des Addons
 
@@ -43,9 +43,11 @@ Cliquez sur **Mettre à Jour** pour installer les mises à jour disponibles.
 2. Cliquez sur le bouton **Supprimer**
 3. Confirmez la suppression
 
+<!-- prettier-ignore-start -->
 :::warning
 Supprimer un addon peut affecter les documents qui utilisent ses fonctionnalités.
 :::
+<!-- prettier-ignore-end -->
 
 ## Sources d'Addons
 

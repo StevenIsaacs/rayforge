@@ -1,22 +1,29 @@
 # Wartung
 
-Die Wartungsseite in den Maschineneinstellungen hilft Ihnen, die Maschinennutzung zu verfolgen und Wartungsaufgaben zu planen.
+Die Wartungsseite in den Maschineneinstellungen hilft Ihnen, die Maschinennutzung zu verfolgen und
+Wartungsaufgaben zu planen.
 
-![Wartungseinstellungen](/screenshots/machine-settings-maintenance.png)
+![Wartungseinstellungen](/screenshots/machine-settings-maintenance.webp)
 
 ## Nutzungsverfolgung
 
-Rayforge verfolgt, wie lange deine Maschine in Gebrauch ist. Diese Informationen helfen Ihnen, vorbeugende Wartung in geeigneten Intervallen zu planen.
+Rayforge verfolgt, wie lange deine Maschine in Gebrauch ist. Diese Informationen helfen Ihnen,
+vorbeugende Wartung in geeigneten Intervallen zu planen.
 
 ### Gesamtstunden
 
-Der Gesamtstundenzähler verfolgt die gesamte Zeit, die mit dem Ausführen von Jobs auf der Maschine verbracht wurde. Dieser kumulative Zähler kann nicht zurückgesetzt werden und bietet eine vollständige Historie der Maschinennutzung.
+Der Gesamtstundenzähler verfolgt die gesamte Zeit, die mit dem Ausführen von Jobs auf der Maschine
+verbracht wurde. Dieser kumulative Zähler kann nicht zurückgesetzt werden und bietet eine
+vollständige Historie der Maschinennutzung.
 
-Verwende dies, um das Gesamtalter der Maschine zu verfolgen und größere Wartungsintervalle zu planen.
+Verwende dies, um das Gesamtalter der Maschine zu verfolgen und größere Wartungsintervalle zu
+planen.
 
 ## Benutzerdefinierte Wartungszähler
 
-Du kannst benutzerdefinierte Zähler erstellen, um spezifische Wartungsintervalle zu verfolgen. Jeder Zähler hat einen Namen, verfolgt Stunden und kann mit einem Benachrichtigungsschwellenwert konfiguriert werden.
+Du kannst benutzerdefinierte Zähler erstellen, um spezifische Wartungsintervalle zu verfolgen. Jeder
+Zähler hat einen Namen, verfolgt Stunden und kann mit einem Benachrichtigungsschwellenwert
+konfiguriert werden.
 
 ### Einen Zähler erstellen
 
@@ -33,11 +40,14 @@ Du kannst benutzerdefinierte Zähler erstellen, um spezifische Wartungsintervall
 
 ### Beispielzähler
 
-**Laserröhre**: Verfolge CO2-Röhrenstunden, um den Austausch zu planen (typischerweise 1000-3000 Stunden). Setze eine Benachrichtigung bei 2500 Stunden, um vorauszuplanen.
+**Laserröhre**: Verfolge CO2-Röhrenstunden, um den Austausch zu planen (typischerweise 1000-3000
+Stunden). Setze eine Benachrichtigung bei 2500 Stunden, um vorauszuplanen.
 
-**Riemenzug**: Verfolge Stunden seit dem letzten Riemenzug. Nach Durchführung der Wartung zurücksetzen.
+**Riemenzug**: Verfolge Stunden seit dem letzten Riemenzug. Nach Durchführung der Wartung
+zurücksetzen.
 
-**Spiegelreinigung**: Verfolge Nutzung seit der letzten Spiegelreinigung. Nach Reinigung zurücksetzen.
+**Spiegelreinigung**: Verfolge Nutzung seit der letzten Spiegelreinigung. Nach Reinigung
+zurücksetzen.
 
 **Lager-Schmierung**: Verfolge Stunden für Lager-Wartungsintervalle.
 
@@ -49,8 +59,10 @@ Nach Durchführung der Wartung kannst du den entsprechenden Zähler zurücksetze
 2. Bestätige das Zurücksetzen im Dialog
 3. Der Zähler kehrt zu Null zurück
 
-:::tip Wartungsplan
+<!-- prettier-ignore-start -->
+:::tip[Wartungsplan]
 Häufige Wartungsintervalle:
+
 - **Täglich**: Linse reinigen, Spiegelausrichtung überprüfen
 - **Wöchentlich**: Schienen reinigen, Riemenzug überprüfen
 - **Monatlich**: Lager schmieren, elektrische Verbindungen überprüfen
@@ -58,6 +70,7 @@ Häufige Wartungsintervalle:
 
 Passe Intervalle basierend auf deinen Nutzungsmustern und Herstellerempfehlungen an.
 :::
+<!-- prettier-ignore-end -->
 
 ## Siehe auch
 

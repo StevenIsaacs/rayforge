@@ -1,3 +1,5 @@
+from gettext import gettext as _
+
 from .angle_constraint_tool import AngleConstraintTool
 from .arc_tool import ArcTool
 from .array_base import ArrayToolBase
@@ -18,6 +20,7 @@ from .fillet_tool import FilletTool
 from .grid_tool import GridTool
 from .horizontal_constraint_tool import HorizontalConstraintTool
 from .mirror_tool import MirrorHorizontalTool, MirrorVerticalTool
+from .offset_tool import OffsetTool
 from .path_tool import PathTool
 from .perpendicular_constraint_tool import PerpendicularConstraintTool
 from .radius_constraint_tool import RadiusConstraintTool
@@ -54,6 +57,7 @@ TOOL_REGISTRY = {
     "horizontal": HorizontalConstraintTool,
     "mirror_vertical": MirrorVerticalTool,
     "mirror_horizontal": MirrorHorizontalTool,
+    "offset": OffsetTool,
     "path": PathTool,
     "perpendicular": PerpendicularConstraintTool,
     "radius": RadiusConstraintTool,
@@ -68,6 +72,16 @@ TOOL_REGISTRY = {
     "waypoint_sharp": WaypointSharpTool,
     "waypoint_smooth": WaypointSmoothTool,
     "waypoint_symmetric": WaypointSymmetricTool,
+}
+
+# Display metadata for SketchTool.PIE_GROUP keys: group key ->
+# (icon name, label) of the collapsed pie menu entry.
+PIE_GROUPS: dict[str, tuple[str, str]] = {
+    "array": ("sketch-array-symbolic", _("Array")),
+    "constrain": ("sketch-constrain-point-symbolic", _("Constrain")),
+    "dimension": ("sketch-distance-symbolic", _("Dimension")),
+    "rectangle": ("sketch-rect-symbolic", _("Rectangle")),
+    "waypoint": ("sketch-bezier-symbolic", _("Waypoint")),
 }
 
 
@@ -95,6 +109,7 @@ ACTION_TOOL_MAP = build_action_tool_map()
 __all__ = [
     "ACTION_TOOL_MAP",
     "KEY_TO_TOOL",
+    "PIE_GROUPS",
     "TOOL_REGISTRY",
     "AngleConstraintTool",
     "ArcTool",

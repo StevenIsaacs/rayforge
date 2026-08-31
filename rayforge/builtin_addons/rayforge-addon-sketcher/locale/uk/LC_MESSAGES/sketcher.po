@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Rayforge\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 01:30+0200\n"
+"POT-Creation-Date: 2026-08-30 08:22+0200\n"
 "PO-Revision-Date: 2026-02-23 01:17+0100\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: Ukrainian\n"
@@ -46,13 +46,18 @@ msgstr "Паралелограм"
 msgid "Origin at {}"
 msgstr "Початок у {}"
 
-#: sketcher/core/constraints/point_on_line.py
-msgid "Point on Line"
-msgstr "Точка на лінії"
+#: sketcher/core/constraints/point_on_curve.py
+msgid "Point on Curve"
+msgstr "Точка на кривій"
 
+#: sketcher/core/constraints/point_on_curve.py
 #: sketcher/core/constraints/point_on_line.py
 msgid "Point at {}"
 msgstr "Точка у {}"
+
+#: sketcher/core/constraints/point_on_line.py
+msgid "Point on Line"
+msgstr "Точка на лінії"
 
 #: sketcher/core/constraints/collinear.py
 msgid "Collinear"
@@ -75,7 +80,7 @@ msgstr "Лінія до {} у {}"
 msgid "Rotational Array"
 msgstr "Обертовий масив"
 
-#: sketcher/core/constraints/distance.py
+#: sketcher/core/constraints/distance.py sketcher/ui_gtk/tools/offset_tool.py
 #: sketcher/ui_gtk/tools/distance_constraint_tool.py
 msgid "Distance"
 msgstr "Відстань"
@@ -242,6 +247,10 @@ msgstr "Створити масив"
 msgid "Add Rounded Rectangle"
 msgstr "Додати заокруглений прямокутник"
 
+#: sketcher/core/commands/offset.py sketcher/ui_gtk/tools/offset_tool.py
+msgid "Offset"
+msgstr "Зміщення"
+
 #: sketcher/core/commands/rectangle.py
 msgid "Add Rectangle"
 msgstr "Додати прямокутник"
@@ -342,7 +351,7 @@ msgstr "Дзеркально по горизонталі"
 
 #: sketcher/ui_gtk/studio.py sketcher/ui_gtk/tools/dimension_input.py
 #: sketcher/ui_gtk/tools/grid_tool.py sketcher/ui_gtk/tools/circle_tool.py
-#: sketcher/ui_gtk/sketchcanvas.py
+#: sketcher/ui_gtk/tools/offset_tool.py sketcher/ui_gtk/sketchcanvas.py
 msgid "Cancel"
 msgstr "Скасувати"
 
@@ -401,6 +410,7 @@ msgid "Fillet"
 msgstr "Скруглення"
 
 #: sketcher/ui_gtk/tools/dimension_input.py
+#: sketcher/ui_gtk/tools/offset_tool.py
 msgid "Apply"
 msgstr "Застосувати"
 
@@ -429,7 +439,8 @@ msgstr "Прив'язати до сітки"
 msgid "Sharp"
 msgstr "Гостра"
 
-#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/menu.py
+#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/__init__.py
+#: sketcher/ui_gtk/menu.py
 msgid "Rectangle"
 msgstr "Прямокутник"
 
@@ -444,12 +455,39 @@ msgid "H"
 msgstr "В"
 
 #: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/circle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
 msgid "Center on start point"
 msgstr "Центр на початковій точці"
 
 #: sketcher/ui_gtk/tools/rectangle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
+msgid "Constrain to square"
+msgstr "Обмежити до квадрата"
+
+#: sketcher/ui_gtk/tools/rectangle_tool.py
 msgid "Type dimensions (W H)"
 msgstr "Введіть розміри (Ш В)"
+
+#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/circle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
+msgid "Set edge point"
+msgstr "Встановити точку краю"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Array"
+msgstr "Масив"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Constrain"
+msgstr "Обмежити"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Dimension"
+msgstr "Розмір"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Waypoint"
+msgstr "Опорна точка"
 
 #: sketcher/ui_gtk/tools/aspect_ratio_constraint_tool.py
 msgid "Add Aspect Ratio Constraint"
@@ -633,6 +671,18 @@ msgstr "Перемкнути конструкцію"
 msgid "Add Radius Constraint"
 msgstr "Додати обмеження радіуса"
 
+#: sketcher/ui_gtk/tools/offset_tool.py
+msgid "Offset Contour"
+msgstr "Зміщення контуру"
+
+#: sketcher/ui_gtk/tools/offset_tool.py
+msgid ""
+"Replaces the selected contours with their offset. Positive values grow "
+"closed contours; open contours become slots."
+msgstr ""
+"Замінює вибрані контури їх зміщенням. Додатні значення збільшують замкнуті "
+"контури; відкриті контури стають пазами."
+
 #: sketcher/ui_gtk/tools/text_box_tool.py
 msgid "Text Box"
 msgstr "Текстове поле"
@@ -648,6 +698,10 @@ msgstr "Плавна"
 #: sketcher/ui_gtk/tools/coincident_constraint_tool.py
 msgid "Add Coincident Constraint"
 msgstr "Додати обмеження збігу"
+
+#: sketcher/ui_gtk/tools/coincident_constraint_tool.py
+msgid "Add Point On Curve"
+msgstr "Додати точку на кривій"
 
 #: sketcher/ui_gtk/tools/coincident_constraint_tool.py
 msgid "Add Point On Shape"

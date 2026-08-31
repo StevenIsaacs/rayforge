@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: rayforge\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 01:30+0200\n"
+"POT-Creation-Date: 2026-08-30 08:22+0200\n"
 "PO-Revision-Date: 2025-10-15 07:10+0200\n"
 "Last-Translator: Samuel <knipknap@gmail.com>\n"
 "Language-Team: French\n"
@@ -46,13 +46,18 @@ msgstr "Parallélogramme"
 msgid "Origin at {}"
 msgstr "Origine à {}"
 
-#: sketcher/core/constraints/point_on_line.py
-msgid "Point on Line"
-msgstr "Point sur Ligne"
+#: sketcher/core/constraints/point_on_curve.py
+msgid "Point on Curve"
+msgstr "Point sur Courbe"
 
+#: sketcher/core/constraints/point_on_curve.py
 #: sketcher/core/constraints/point_on_line.py
 msgid "Point at {}"
 msgstr "Point à {}"
+
+#: sketcher/core/constraints/point_on_line.py
+msgid "Point on Line"
+msgstr "Point sur Ligne"
 
 #: sketcher/core/constraints/collinear.py
 msgid "Collinear"
@@ -75,7 +80,7 @@ msgstr "Ligne vers {} à {}"
 msgid "Rotational Array"
 msgstr "Tableau rotatif"
 
-#: sketcher/core/constraints/distance.py
+#: sketcher/core/constraints/distance.py sketcher/ui_gtk/tools/offset_tool.py
 #: sketcher/ui_gtk/tools/distance_constraint_tool.py
 msgid "Distance"
 msgstr "Distance"
@@ -242,6 +247,10 @@ msgstr "Créer un tableau"
 msgid "Add Rounded Rectangle"
 msgstr "Ajouter un rectangle arrondi"
 
+#: sketcher/core/commands/offset.py sketcher/ui_gtk/tools/offset_tool.py
+msgid "Offset"
+msgstr "Décalage"
+
 #: sketcher/core/commands/rectangle.py
 msgid "Add Rectangle"
 msgstr "Ajouter un rectangle"
@@ -342,7 +351,7 @@ msgstr "Miroir horizontal"
 
 #: sketcher/ui_gtk/studio.py sketcher/ui_gtk/tools/dimension_input.py
 #: sketcher/ui_gtk/tools/grid_tool.py sketcher/ui_gtk/tools/circle_tool.py
-#: sketcher/ui_gtk/sketchcanvas.py
+#: sketcher/ui_gtk/tools/offset_tool.py sketcher/ui_gtk/sketchcanvas.py
 msgid "Cancel"
 msgstr "Annuler"
 
@@ -401,6 +410,7 @@ msgid "Fillet"
 msgstr "Arrondi"
 
 #: sketcher/ui_gtk/tools/dimension_input.py
+#: sketcher/ui_gtk/tools/offset_tool.py
 msgid "Apply"
 msgstr "Appliquer"
 
@@ -429,7 +439,8 @@ msgstr "Aligner sur la grille"
 msgid "Sharp"
 msgstr "Vif"
 
-#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/menu.py
+#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/__init__.py
+#: sketcher/ui_gtk/menu.py
 msgid "Rectangle"
 msgstr "Rectangle"
 
@@ -444,12 +455,39 @@ msgid "H"
 msgstr "H"
 
 #: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/circle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
 msgid "Center on start point"
 msgstr "Centrer sur le point de départ"
 
 #: sketcher/ui_gtk/tools/rectangle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
+msgid "Constrain to square"
+msgstr "Contraindre à un carré"
+
+#: sketcher/ui_gtk/tools/rectangle_tool.py
 msgid "Type dimensions (W H)"
 msgstr "Saisir les dimensions (L H)"
+
+#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/circle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
+msgid "Set edge point"
+msgstr "Définir le point de bord"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Array"
+msgstr "Tableau"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Constrain"
+msgstr "Contraindre"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Dimension"
+msgstr "Dimension"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Waypoint"
+msgstr "Point de passage"
 
 #: sketcher/ui_gtk/tools/aspect_ratio_constraint_tool.py
 msgid "Add Aspect Ratio Constraint"
@@ -635,6 +673,19 @@ msgstr "Basculer en mode construction"
 msgid "Add Radius Constraint"
 msgstr "Ajouter une contrainte de rayon"
 
+#: sketcher/ui_gtk/tools/offset_tool.py
+msgid "Offset Contour"
+msgstr "Décalage de contour"
+
+#: sketcher/ui_gtk/tools/offset_tool.py
+msgid ""
+"Replaces the selected contours with their offset. Positive values grow "
+"closed contours; open contours become slots."
+msgstr ""
+"Remplace les contours sélectionnés par leur décalage. Les valeurs positives "
+"agrandissent les contours fermés ; les contours ouverts deviennent des "
+"fentes."
+
 #: sketcher/ui_gtk/tools/text_box_tool.py
 msgid "Text Box"
 msgstr "Zone de texte"
@@ -650,6 +701,10 @@ msgstr "Lisse"
 #: sketcher/ui_gtk/tools/coincident_constraint_tool.py
 msgid "Add Coincident Constraint"
 msgstr "Ajouter une contrainte de coïncidence"
+
+#: sketcher/ui_gtk/tools/coincident_constraint_tool.py
+msgid "Add Point On Curve"
+msgstr "Ajouter un point sur la courbe"
 
 #: sketcher/ui_gtk/tools/coincident_constraint_tool.py
 msgid "Add Point On Shape"

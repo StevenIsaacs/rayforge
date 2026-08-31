@@ -1,14 +1,12 @@
 # Addons
 
-![Ajustes de Addons](/screenshots/app-settings-addons.png)
+![Ajustes de Addons](/screenshots/app-settings-addons.webp)
 
-La página de Addons muestra los addons de extensión instalados y te permite
-gestionarlos.
+La página de Addons muestra los addons de extensión instalados y te permite gestionarlos.
 
 ## Resumen
 
-Los addons son extensiones que añaden funcionalidad a Rayforge. Pueden
-proporcionar:
+Los addons son extensiones que añaden funcionalidad a Rayforge. Pueden proporcionar:
 
 - Nuevas operaciones
 - Filtros de importación/exportación
@@ -45,9 +43,11 @@ Haz clic en **Actualizar** para instalar las actualizaciones disponibles.
 2. Haz clic en el botón **Eliminar**
 3. Confirma la eliminación
 
+<!-- prettier-ignore-start -->
 :::warning
 Eliminar un addon puede afectar documentos que usan sus características.
 :::
+<!-- prettier-ignore-end -->
 
 ## Fuentes de Addons
 

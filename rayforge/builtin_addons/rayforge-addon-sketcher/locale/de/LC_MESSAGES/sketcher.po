@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Rayforge\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-08-29 01:30+0200\n"
+"POT-Creation-Date: 2026-08-30 08:22+0200\n"
 "PO-Revision-Date: 2025-07-24 22:08+0200\n"
 "Last-Translator: Samuel Abels <knipknap@gmail.com>\n"
 "Language-Team: none\n"
@@ -45,13 +45,18 @@ msgstr "Parallelogramm"
 msgid "Origin at {}"
 msgstr "Ursprung bei {}"
 
-#: sketcher/core/constraints/point_on_line.py
-msgid "Point on Line"
-msgstr "Punkt auf Linie"
+#: sketcher/core/constraints/point_on_curve.py
+msgid "Point on Curve"
+msgstr "Punkt auf Kurve"
 
+#: sketcher/core/constraints/point_on_curve.py
 #: sketcher/core/constraints/point_on_line.py
 msgid "Point at {}"
 msgstr "Punkt bei {}"
+
+#: sketcher/core/constraints/point_on_line.py
+msgid "Point on Line"
+msgstr "Punkt auf Linie"
 
 #: sketcher/core/constraints/collinear.py
 msgid "Collinear"
@@ -74,7 +79,7 @@ msgstr "Linie zu {} bei {}"
 msgid "Rotational Array"
 msgstr "Rotationsarray"
 
-#: sketcher/core/constraints/distance.py
+#: sketcher/core/constraints/distance.py sketcher/ui_gtk/tools/offset_tool.py
 #: sketcher/ui_gtk/tools/distance_constraint_tool.py
 msgid "Distance"
 msgstr "Abstand"
@@ -241,6 +246,10 @@ msgstr "Array erstellen"
 msgid "Add Rounded Rectangle"
 msgstr "Abgerundetes Rechteck hinzufügen"
 
+#: sketcher/core/commands/offset.py sketcher/ui_gtk/tools/offset_tool.py
+msgid "Offset"
+msgstr "Versatz"
+
 #: sketcher/core/commands/rectangle.py
 msgid "Add Rectangle"
 msgstr "Rechteck hinzufügen"
@@ -341,7 +350,7 @@ msgstr "Horizontal spiegeln"
 
 #: sketcher/ui_gtk/studio.py sketcher/ui_gtk/tools/dimension_input.py
 #: sketcher/ui_gtk/tools/grid_tool.py sketcher/ui_gtk/tools/circle_tool.py
-#: sketcher/ui_gtk/sketchcanvas.py
+#: sketcher/ui_gtk/tools/offset_tool.py sketcher/ui_gtk/sketchcanvas.py
 msgid "Cancel"
 msgstr "Abbrechen"
 
@@ -400,6 +409,7 @@ msgid "Fillet"
 msgstr "Abrundung"
 
 #: sketcher/ui_gtk/tools/dimension_input.py
+#: sketcher/ui_gtk/tools/offset_tool.py
 msgid "Apply"
 msgstr "Anwenden"
 
@@ -428,7 +438,8 @@ msgstr "Am Raster ausrichten"
 msgid "Sharp"
 msgstr "Scharf"
 
-#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/menu.py
+#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/__init__.py
+#: sketcher/ui_gtk/menu.py
 msgid "Rectangle"
 msgstr "Rechteck"
 
@@ -443,12 +454,39 @@ msgid "H"
 msgstr "H"
 
 #: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/circle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
 msgid "Center on start point"
 msgstr "Mittelpunkt auf Startpunkt"
 
 #: sketcher/ui_gtk/tools/rectangle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
+msgid "Constrain to square"
+msgstr "Auf Quadrat beschränken"
+
+#: sketcher/ui_gtk/tools/rectangle_tool.py
 msgid "Type dimensions (W H)"
 msgstr "Maße eingeben (B H)"
+
+#: sketcher/ui_gtk/tools/rectangle_tool.py sketcher/ui_gtk/tools/circle_tool.py
+#: sketcher/ui_gtk/tools/rounded_rect_tool.py
+msgid "Set edge point"
+msgstr "Kantenpunkt festlegen"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Array"
+msgstr "Array"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Constrain"
+msgstr "Beschränken"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Dimension"
+msgstr "Bemaßung"
+
+#: sketcher/ui_gtk/tools/__init__.py
+msgid "Waypoint"
+msgstr "Wegpunkt"
 
 #: sketcher/ui_gtk/tools/aspect_ratio_constraint_tool.py
 msgid "Add Aspect Ratio Constraint"
@@ -633,6 +671,18 @@ msgstr "Konstruktion umschalten"
 msgid "Add Radius Constraint"
 msgstr "Radiusbedingung hinzufügen"
 
+#: sketcher/ui_gtk/tools/offset_tool.py
+msgid "Offset Contour"
+msgstr "Kontur versetzen"
+
+#: sketcher/ui_gtk/tools/offset_tool.py
+msgid ""
+"Replaces the selected contours with their offset. Positive values grow "
+"closed contours; open contours become slots."
+msgstr ""
+"Ersetzt die ausgewählten Konturen durch ihren Versatz. Positive Werte "
+"vergrößern geschlossene Konturen; offene Konturen werden zu Schlitzen."
+
 #: sketcher/ui_gtk/tools/text_box_tool.py
 msgid "Text Box"
 msgstr "Textfeld"
@@ -648,6 +698,10 @@ msgstr "Glatt"
 #: sketcher/ui_gtk/tools/coincident_constraint_tool.py
 msgid "Add Coincident Constraint"
 msgstr "Deckungsgleiche Bedingung hinzufügen"
+
+#: sketcher/ui_gtk/tools/coincident_constraint_tool.py
+msgid "Add Point On Curve"
+msgstr "Punkt auf Kurve hinzufügen"
 
 #: sketcher/ui_gtk/tools/coincident_constraint_tool.py
 msgid "Add Point On Shape"

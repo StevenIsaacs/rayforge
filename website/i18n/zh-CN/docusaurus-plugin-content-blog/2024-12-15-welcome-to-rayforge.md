@@ -5,7 +5,7 @@ authors: rayforge_team
 tags: [introduction, features]
 ---
 
-![Rayforge 主窗口](/screenshots/main-standard.png)
+![Rayforge 主窗口](/screenshots/main-standard.webp)
 
 我们很高兴向您介绍 Rayforge，这是一款专为基于 GRBL 的激光切割机和雕刻机设计的现代化开源 G-code 发送器和控制软件。
 
@@ -28,7 +28,8 @@ Rayforge 的突出功能之一是其多图层工作流程。将不同的操作�
 
 ### 3D G-code 预览
 
-在将作业发送到机器之前，通过我们的 3D G-code 预览精确可视化将要发生的操作。在问题发生之前发现潜在问题，节省时间和材料。
+在将作业发送到机器之前，通过我们的 3D
+G-code 预览精确可视化将要发生的操作。在问题发生之前发现潜在问题，节省时间和材料。
 
 ### 相机集成
 
@@ -53,4 +54,4 @@ Rayforge 是开源的，由社区驱动。我们欢迎各种形式的贡献：
 
 ---
 
-*有问题或反馈？欢迎在 GitHub 上参与讨论或查看我们的[文档](/docs/getting-started/installation)。*
+_有问题或反馈？欢迎在 GitHub 上参与讨论或查看我们的[文档](/docs/getting-started/installation)。_
