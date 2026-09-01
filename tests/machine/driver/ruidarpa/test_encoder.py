@@ -114,10 +114,8 @@ class TestRuidaRPAEncoderBasics:
         ops1.job_start()
         ops1.layer_start(layer_uid=doc.layers[0].uid)
         ops1.workpiece_start("wp-0")
-        ops1.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops1.set_power(0.5)
         ops1.move_to(0.0, 0.0, 0.0)
-        ops1.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops1.workpiece_end("wp-0")
         ops1.layer_end(layer_uid=doc.layers[0].uid)
         ops1.job_end()
@@ -127,9 +125,7 @@ class TestRuidaRPAEncoderBasics:
         ops2.job_start()
         ops2.layer_start(layer_uid=doc.layers[0].uid)
         ops2.workpiece_start("wp-0")
-        ops2.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops2.move_to(0.0, 0.0, 0.0)
-        ops2.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops2.workpiece_end("wp-0")
         ops2.layer_end(layer_uid=doc.layers[0].uid)
         ops2.job_end()
@@ -137,14 +133,13 @@ class TestRuidaRPAEncoderBasics:
 
         assert encoder.active_laser == 1
         # Second job: 0=job_start, 1=layer_start, 2=workpiece_start,
-        # 3=ops_section_start, 4=move_to, 5=ops_section_end,
-        # 6=workpiece_end, 7=layer_end, 8=job_end
-        assert result2.op_map.op_count == 9
+        # 3=move_to, 4=workpiece_end, 5=layer_end, 6=job_end
+        assert result2.op_map.op_count == 7
         lines = result2.text.split("\n")
         layer_end_line = next(
-            i for i, line in enumerate(lines) if "# Op 7: LAYER_END" in line
+            i for i, line in enumerate(lines) if "# Op 5: LAYER_END" in line
         )
-        assert result2.op_map.span_for_op(7) == (layer_end_line, 1)
+        assert result2.op_map.span_for_op(5) == (layer_end_line, 1)
 
 
 class TestJobStructure:
@@ -155,10 +150,8 @@ class TestJobStructure:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(5.0, 5.0, 0.0)
         ops.line_to(10.0, 8.0, 0.0)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -182,7 +175,6 @@ class TestLayerDeclaration:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -204,7 +196,6 @@ class TestLayerDeclaration:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -230,7 +221,6 @@ class TestLayerDeclaration:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -244,7 +234,6 @@ class TestLayerDeclaration:
         ops.job_start()
         ops.layer_start(layer_uid="missing-layer-uid")
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(1.0, 1.0, 0.0)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid="missing-layer-uid")
@@ -256,10 +245,10 @@ class TestLayerDeclaration:
             for line in result.text.split("\n")
         )
 
-    def test_multi_section_layer_declares_each_section(
+    def test_multi_workpiece_layer_declares_each_workpiece(
         self, encoder, mock_machine, doc
     ):
-        """One layer with two sections emits two declare_layer lines."""
+        """One layer with two workpieces emits two declare_layer lines."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -286,8 +275,10 @@ class TestLayerDeclaration:
         assert all("'Layer 1'" in line for line in declared)
         assert all("'#00ccff'" in line for line in declared)
 
-    def test_per_section_mode_from_sections(self, encoder, mock_machine, doc):
-        """Two sections in one layer derive their own declare_layer modes."""
+    def test_per_workpiece_mode_from_sections(
+        self, encoder, mock_machine, doc
+    ):
+        """Two workpieces in one layer derive their own declare_layer modes."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -329,9 +320,7 @@ class TestMoveCutForms:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(5.0, 5.0, 0.0)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -345,10 +334,8 @@ class TestMoveCutForms:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.move_to(150.0, 0.0, 0.0)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -362,10 +349,8 @@ class TestMoveCutForms:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.line_to(5.0, 5.0, 0.0)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -379,10 +364,8 @@ class TestMoveCutForms:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.line_to(20.0, 0.0, 0.0)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -400,9 +383,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_power(0.5)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -421,9 +402,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_power(0.05)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -439,9 +418,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_coolant(CoolantMode.FLOOD)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -458,9 +435,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_feed_rate(200)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -474,9 +449,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_rapid_rate(500)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -490,9 +463,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_frequency(20000)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -506,9 +477,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_pulse_width(50)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -525,9 +494,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.dwell(250)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -542,11 +509,9 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_air_assist(AirAssistMode.ON)
         ops.move_to(0.0, 0.0, 0.0)
         ops.set_air_assist(AirAssistMode.OFF)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -566,11 +531,9 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_head("laser-2")
         ops.set_power(0.5)
         ops.set_head("laser-1")
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -597,9 +560,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_head("laser_2")
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -612,9 +573,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_head("laser_1")
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -633,9 +592,7 @@ class TestSettingsCommands:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_head("laser-3")
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -724,24 +681,30 @@ class TestSectionPowerRouting:
     def test_layer_mode_derived_from_sections(
         self, encoder, mock_machine, doc
     ):
-        """declare_layer mode follows the section's type and raster mode."""
+        """declare_layer mode follows the layer's ops sections."""
         cases = [
-            (SectionType.RASTER_FILL, RasterMode.VARIABLE_POWER, "IMAGE"),
-            (SectionType.RASTER_FILL, RasterMode.DEPTH_MAP, "DEPTHMAP"),
-            (SectionType.RASTER_FILL, RasterMode.CONSTANT_POWER, "RASTER"),
-            (SectionType.RASTER_FILL, RasterMode.DITHER, "DITHER"),
-            (SectionType.VECTOR_OUTLINE, None, "VECTOR"),
+            (RasterMode.VARIABLE_POWER, "IMAGE"),
+            (RasterMode.DEPTH_MAP, "DEPTHMAP"),
+            (RasterMode.CONSTANT_POWER, "RASTER"),
+            (None, "VECTOR"),
         ]
-        for section_type, raster_mode, expected in cases:
+        for raster_mode, expected in cases:
             ops = Ops()
             ops.job_start()
             ops.layer_start(layer_uid=doc.layers[0].uid)
             ops.workpiece_start("wp-0")
-            ops.ops_section_start(
-                section_type, "wp-0", raster_mode=raster_mode
-            )
-            ops.set_power(0.5)
-            ops.ops_section_end(section_type, raster_mode=raster_mode)
+            if raster_mode is None:
+                ops.set_power(0.5)
+            else:
+                ops.ops_section_start(
+                    SectionType.RASTER_FILL,
+                    "wp-0",
+                    raster_mode=raster_mode,
+                )
+                ops.set_power(0.5)
+                ops.ops_section_end(
+                    SectionType.RASTER_FILL, raster_mode=raster_mode
+                )
             ops.workpiece_end("wp-0")
             ops.layer_end(layer_uid=doc.layers[0].uid)
             ops.job_end()
@@ -760,10 +723,10 @@ class TestSectionPowerRouting:
             == "VECTOR"
         )
 
-    def test_layer_mode_follows_each_section_in_order(
+    def test_layer_mode_first_raster_section_wins(
         self, encoder, mock_machine, doc
     ):
-        """Each section declares its own layer mode in build order."""
+        """The first raster section determines the layer mode."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -797,7 +760,6 @@ class TestSectionPowerRouting:
             if line.startswith("declare_layer(")
         ]
         assert _declare_layer_mode(declared[0]) == "IMAGE"
-        assert _declare_layer_mode(declared[1]) == "DEPTHMAP"
 
     def test_section_state_resets_after_section_end(
         self, encoder, mock_machine, doc
@@ -838,7 +800,7 @@ class TestSectionPowerRouting:
         )
         ops.set_power(0.5)
 
-        with pytest.raises(ValueError, match="OPS_SECTION_START"):
+        with pytest.raises(ValueError, match="LAYER_START"):
             encoder.encode(ops, mock_machine, doc)
 
 
@@ -896,14 +858,12 @@ class TestLayerOverscan:
         )
 
     def test_vector_layer_uses_none(self, encoder, mock_machine, doc):
-        """A vector layer must yield NONE overscan."""
+        """A vector layer (no sections) must yield NONE overscan."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.set_power(0.5)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -960,10 +920,50 @@ class TestLayerOverscan:
             "NONE"
         )
 
-    def test_per_section_overscan_follows_each_section_in_order(
-        self, encoder, mock_machine, doc
+    def test_per_section_overscan_change_emits_set_overscan(
+        self, mock_machine, doc
     ):
-        """Each section declares its own overscan in build order."""
+        """A section whose overscan differs from the declared layer emits
+        set_overscan at the section boundary."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        # The workpiece-declared overscan derives from the raster
+        # section's horizontal scan (X_BI), so the leading vector section
+        # downgrades to NONE and the raster section restores X_BI.
+        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.scan_to(5.0, 0.0, 0.0, bytearray([128, 128]))
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
+        )
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+
+        mock_gluescript = Mock()
+        mock_gluescript.gluescript = []
+        encoder = RuidaRPAEncoder(gluescript=mock_gluescript)
+        encoder.encode(ops, mock_machine, doc)
+
+        overscan_calls = [
+            call.args[0]
+            for call in mock_gluescript.set_overscan.call_args_list
+        ]
+        assert overscan_calls == ["NONE", "X_BI"]
+
+    def test_section_overscan_change_vector_after_raster(
+        self, mock_machine, doc
+    ):
+        """A vector section after a raster section downgrades to NONE."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
@@ -978,28 +978,61 @@ class TestLayerOverscan:
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
+        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
+        ops.move_to(1.0, 1.0, 0.0)
+        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+
+        mock_gluescript = Mock()
+        mock_gluescript.gluescript = []
+        encoder = RuidaRPAEncoder(gluescript=mock_gluescript)
+        encoder.encode(ops, mock_machine, doc)
+
+        overscan_calls = [
+            call.args[0]
+            for call in mock_gluescript.set_overscan.call_args_list
+        ]
+        assert overscan_calls == ["NONE"]
+
+    def test_section_overscan_change_skipped_without_set_overscan(
+        self, mock_machine, doc, caplog
+    ):
+        """Without set_overscan the encoder keeps the declared overscan."""
+        caplog.set_level(logging.INFO, logger=rpa_encoder.logger.name)
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.ops_section_start(
             SectionType.RASTER_FILL,
             "wp-0",
             raster_mode=RasterMode.VARIABLE_POWER,
         )
         ops.move_to(0.0, 0.0, 0.0)
-        ops.scan_to(0.0, 5.0, 0.0, bytearray([128, 128]))
+        ops.scan_to(5.0, 0.0, 0.0, bytearray([128, 128]))
         ops.ops_section_end(
             SectionType.RASTER_FILL, raster_mode=RasterMode.VARIABLE_POWER
         )
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
-        result = encoder.encode(ops, mock_machine, doc)
 
-        declared = [
-            line
-            for line in result.text.split("\n")
-            if line.startswith("declare_layer(")
-        ]
-        assert _declare_layer_overscan(declared[0]) == "X_BI"
-        assert _declare_layer_overscan(declared[1]) == "Y_BI"
+        mock_gluescript = Mock(spec=GlueScript)
+        mock_gluescript.gluescript = []
+        encoder = RuidaRPAEncoder(gluescript=mock_gluescript)
+        encoder.encode(ops, mock_machine, doc)
+
+        # The workpiece-declared overscan (X_BI from the raster scan) is
+        # kept because GlueScript lacks set_overscan.
+        assert any(
+            "keeping the declared layer overscan X_BI" in record.message
+            for record in caplog.records
+        )
 
 
 class TestCurveLinearization:
@@ -1011,10 +1044,8 @@ class TestCurveLinearization:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         ops.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -1031,13 +1062,11 @@ class TestCurveLinearization:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(0.0, 0.0, 0.0)
         # All values map above the 8% controller minimum so the raw
         # power_range() pass-through does not raise in GlueScript.
         power_values = bytearray([64, 128, 255, 128, 64])
         ops.scan_to(5.0, 0.0, 0.0, power_values)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
@@ -1127,22 +1156,20 @@ class TestOpMapGeneration:
         ops = Ops()
         ops.job_start()  # 0 -> declare_job line
         ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> nothing
-        ops.workpiece_start("wp-0")  # 2 -> comment
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")  # 3 -> attrs
-        ops.set_power(0.5)  # 4 -> power_range line
-        ops.move_to(5.0, 5.0, 0.0)  # 5 -> move_xy_to line
-        ops.line_to(10.0, 8.0, 0.0)  # 6 -> cut_xy_to line
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)  # 7 -> comment
-        ops.workpiece_end("wp-0")  # 8 -> comment
-        ops.layer_end(layer_uid=doc.layers[0].uid)  # 9 -> nothing
-        ops.job_end()  # 10 -> end_job line
+        ops.workpiece_start("wp-0")  # 2 -> comment + declare_layer
+        ops.set_power(0.5)  # 3 -> power_range line
+        ops.move_to(5.0, 5.0, 0.0)  # 4 -> move_xy_to line
+        ops.line_to(10.0, 8.0, 0.0)  # 5 -> cut_xy_to line
+        ops.workpiece_end("wp-0")  # 6 -> comment
+        ops.layer_end(layer_uid=doc.layers[0].uid)  # 7 -> nothing
+        ops.job_end()  # 8 -> end_job line
         return ops
 
     def test_every_op_has_entry(self, encoder, mock_machine, doc):
         """Every op index must be present in the op_map."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
 
-        assert result.op_map.op_count == 11
+        assert result.op_map.op_count == 9
 
     def test_job_start_maps_to_header(self, encoder, mock_machine, doc):
         """JOB_START should map to the declare_job header line."""
@@ -1151,8 +1178,8 @@ class TestOpMapGeneration:
         assert result.op_map.span_for_op(0) == (0, 2)
         assert result.op_map.op_for_line(0) == 0
 
-    def test_ops_section_start_maps_to_attrs(self, encoder, mock_machine, doc):
-        """OPS_SECTION_START should map to the layer attribute block."""
+    def test_workpiece_start_maps_to_attrs(self, encoder, mock_machine, doc):
+        """WORKPIECE_START should map to the layer attribute block."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
         first_attr = next(
@@ -1166,13 +1193,13 @@ class TestOpMapGeneration:
             if line.startswith("power_range(")
         )
 
-        expected = list(range(first_attr - 2, last_layer))
-        assert result.op_map.span_for_op(3) == (
+        expected = list(range(first_attr - 1, last_layer))
+        assert result.op_map.span_for_op(2) == (
             expected[0],
             expected[-1] - expected[0] + 1,
         )
         for line_num in expected:
-            assert result.op_map.op_for_line(line_num) == 3
+            assert result.op_map.op_for_line(line_num) == 2
 
     def test_action_ops_map_to_action_lines(self, encoder, mock_machine, doc):
         """Set/move/cut ops should map to their action lines."""
@@ -1190,22 +1217,22 @@ class TestOpMapGeneration:
             i for i, line in enumerate(lines) if line.startswith("cut_xy_to(")
         )
 
-        assert result.op_map.span_for_op(4) == (power_line, 2)
-        assert result.op_map.op_for_line(power_line) == 4
-        assert result.op_map.span_for_op(5) == (move_line, 2)
-        assert result.op_map.op_for_line(move_line) == 5
-        assert result.op_map.span_for_op(6) == (cut_line, 2)
-        assert result.op_map.op_for_line(cut_line) == 6
+        assert result.op_map.span_for_op(3) == (power_line, 2)
+        assert result.op_map.op_for_line(power_line) == 3
+        assert result.op_map.span_for_op(4) == (move_line, 2)
+        assert result.op_map.op_for_line(move_line) == 4
+        assert result.op_map.span_for_op(5) == (cut_line, 2)
+        assert result.op_map.op_for_line(cut_line) == 5
 
     def test_layer_end_maps_to_comment(self, encoder, mock_machine, doc):
         """LAYER_END emits its own op comment line."""
         result = encoder.encode(self._structured_job(doc), mock_machine, doc)
         lines = result.text.split("\n")
         layer_end_line = next(
-            i for i, line in enumerate(lines) if "# Op 9: LAYER_END" in line
+            i for i, line in enumerate(lines) if "# Op 7: LAYER_END" in line
         )
 
-        assert result.op_map.span_for_op(9) == (layer_end_line, 1)
+        assert result.op_map.span_for_op(7) == (layer_end_line, 1)
 
     def test_layer_start_maps_to_comment(self, encoder, mock_machine, doc):
         """LAYER_START emits its own op comment line."""
@@ -1223,8 +1250,8 @@ class TestOpMapGeneration:
         lines = result.text.split("\n")
         end_job_line = lines.index("end_job()")
 
-        assert result.op_map.span_for_op(10) == (end_job_line, 2)
-        assert result.op_map.op_for_line(end_job_line) == 10
+        assert result.op_map.span_for_op(8) == (end_job_line, 2)
+        assert result.op_map.op_for_line(end_job_line) == 8
 
     def test_reverse_mapping_is_consistent(self, encoder, mock_machine, doc):
         """Every line must map back to its owning op."""
@@ -1241,32 +1268,22 @@ class TestOpMapGeneration:
         ops = Ops()
         ops.job_start()  # 0 -> declare_job line
         ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> nothing
-        ops.workpiece_start("wp-0")  # 2 -> comment
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")  # 3 -> attrs
-        ops.set_power(0.5)  # 4 -> power_range line
-        ops.move_to(5.0, 5.0, 0.0)  # 5 -> move_xy_to line
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)  # 6 -> comment
-        ops.workpiece_end("wp-0")  # 7 -> comment
-        ops.layer_end(layer_uid=doc.layers[0].uid)  # 8 -> nothing
-        ops.layer_start(layer_uid=doc.layers[1].uid)  # 9 -> nothing
-        ops.workpiece_start("wp-1")  # 10 -> comment
-        ops.ops_section_start(
-            SectionType.VECTOR_OUTLINE, "wp-1"
-        )  # 11 -> attrs
-        ops.move_to(1.0, 1.0, 0.0)  # 12 -> move_xy_to line
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)  # 13 -> comment
-        ops.workpiece_end("wp-1")  # 14 -> comment
-        ops.layer_end(layer_uid=doc.layers[1].uid)  # 15 -> nothing
-        ops.layer_start(layer_uid=doc.layers[2].uid)  # 16 -> nothing
-        ops.workpiece_start("wp-2")  # 17 -> comment
-        ops.ops_section_start(
-            SectionType.VECTOR_OUTLINE, "wp-2"
-        )  # 18 -> attrs
-        ops.line_to(9.0, 9.0, 0.0)  # 19 -> cut_xy_to line
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)  # 20 -> comment
-        ops.workpiece_end("wp-2")  # 21 -> comment
-        ops.layer_end(layer_uid=doc.layers[2].uid)  # 22 -> nothing
-        ops.job_end()  # 23 -> end_job line
+        ops.workpiece_start("wp-0")  # 2 -> comment + declare_layer
+        ops.set_power(0.5)  # 3 -> power_range line
+        ops.move_to(5.0, 5.0, 0.0)  # 4 -> move_xy_to line
+        ops.workpiece_end("wp-0")  # 5 -> comment
+        ops.layer_end(layer_uid=doc.layers[0].uid)  # 6 -> nothing
+        ops.layer_start(layer_uid=doc.layers[1].uid)  # 7 -> nothing
+        ops.workpiece_start("wp-1")  # 8 -> comment + declare_layer
+        ops.move_to(1.0, 1.0, 0.0)  # 9 -> move_xy_to line
+        ops.workpiece_end("wp-1")  # 10 -> comment
+        ops.layer_end(layer_uid=doc.layers[1].uid)  # 11 -> nothing
+        ops.layer_start(layer_uid=doc.layers[2].uid)  # 12 -> nothing
+        ops.workpiece_start("wp-2")  # 13 -> comment + declare_layer
+        ops.line_to(9.0, 9.0, 0.0)  # 14 -> cut_xy_to line
+        ops.workpiece_end("wp-2")  # 15 -> comment
+        ops.layer_end(layer_uid=doc.layers[2].uid)  # 16 -> nothing
+        ops.job_end()  # 17 -> end_job line
         return ops
 
     def test_three_layer_op_map_positions(self, encoder, mock_machine, doc):
@@ -1291,33 +1308,33 @@ class TestOpMapGeneration:
         assert end_job == len(lines) - 2
 
         assert op_map.span_for_op(0) == (0, 2)
-        assert op_map.span_for_op(3) == (attr0 - 2, 4)
-        assert op_map.span_for_op(11) == (attr1 - 2, 4)
-        assert op_map.span_for_op(18) == (attr2 - 2, 4)
+        assert op_map.span_for_op(2) == (attr0 - 1, 3)
+        assert op_map.span_for_op(8) == (attr1 - 1, 3)
+        assert op_map.span_for_op(13) == (attr2 - 1, 3)
         power_line = next(
             i
             for i, line in enumerate(lines)
             if line.startswith("power_range(")
         )
-        assert op_map.span_for_op(4) == (power_line, 2)
-        assert op_map.op_for_line(power_line) == 4
+        assert op_map.span_for_op(3) == (power_line, 2)
+        assert op_map.op_for_line(power_line) == 3
         move3 = next(
             i for i, line in enumerate(lines) if line == "move_xy_to(5.0, 5.0)"
         )
-        assert op_map.span_for_op(5) == (move3, 2)
-        assert op_map.op_for_line(move3) == 5
+        assert op_map.span_for_op(4) == (move3, 2)
+        assert op_map.op_for_line(move3) == 4
         move6 = next(
             i for i, line in enumerate(lines) if line == "move_xy_to(1.0, 1.0)"
         )
-        assert op_map.span_for_op(12) == (move6, 2)
-        assert op_map.op_for_line(move6) == 12
+        assert op_map.span_for_op(9) == (move6, 2)
+        assert op_map.op_for_line(move6) == 9
         cut9 = next(
             i for i, line in enumerate(lines) if line == "cut_xy_to(9.0, 9.0)"
         )
-        assert op_map.span_for_op(19) == (cut9, 2)
-        assert op_map.op_for_line(cut9) == 19
-        assert op_map.span_for_op(23) == (end_job, 2)
-        assert op_map.op_for_line(end_job) == 23
+        assert op_map.span_for_op(14) == (cut9, 2)
+        assert op_map.op_for_line(cut9) == 14
+        assert op_map.span_for_op(17) == (end_job, 2)
+        assert op_map.op_for_line(end_job) == 17
 
 
 class TestOpMapLayoutPinning:
@@ -1328,22 +1345,16 @@ class TestOpMapLayoutPinning:
         ops = Ops()
         ops.job_start()  # 0 -> declare_job line
         ops.layer_start(layer_uid=doc.layers[0].uid)  # 1 -> nothing
-        ops.workpiece_start("wp-0")  # 2 -> comment
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")  # 3 -> attrs
-        ops.move_to(5.0, 5.0, 0.0)  # 4 -> move_xy_to line
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)  # 5 -> comment
-        ops.workpiece_end("wp-0")  # 6 -> comment
-        ops.layer_end(layer_uid=doc.layers[0].uid)  # 7 -> nothing
-        ops.layer_start(layer_uid=doc.layers[1].uid)  # 8 -> nothing
-        ops.workpiece_start("wp-1")  # 9 -> comment
-        ops.ops_section_start(
-            SectionType.VECTOR_OUTLINE, "wp-1"
-        )  # 10 -> attrs
-        ops.line_to(10.0, 8.0, 0.0)  # 11 -> cut_xy_to line
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)  # 12 -> comment
-        ops.workpiece_end("wp-1")  # 13 -> comment
-        ops.layer_end(layer_uid=doc.layers[1].uid)  # 14 -> nothing
-        ops.job_end()  # 15 -> end_job line
+        ops.workpiece_start("wp-0")  # 2 -> comment + declare_layer
+        ops.move_to(5.0, 5.0, 0.0)  # 3 -> move_xy_to line
+        ops.workpiece_end("wp-0")  # 4 -> comment
+        ops.layer_end(layer_uid=doc.layers[0].uid)  # 5 -> nothing
+        ops.layer_start(layer_uid=doc.layers[1].uid)  # 6 -> nothing
+        ops.workpiece_start("wp-1")  # 7 -> comment + declare_layer
+        ops.line_to(10.0, 8.0, 0.0)  # 8 -> cut_xy_to line
+        ops.workpiece_end("wp-1")  # 9 -> comment
+        ops.layer_end(layer_uid=doc.layers[1].uid)  # 10 -> nothing
+        ops.job_end()  # 11 -> end_job line
         result = encoder.encode(ops, mock_machine, doc)
         lines = result.text.split("\n")
         op_map = result.op_map
@@ -1366,13 +1377,13 @@ class TestOpMapLayoutPinning:
         assert attr0 < move2 < attr1 < cut5 < end_job
 
         assert op_map.span_for_op(0) == (0, 2)
-        assert op_map.span_for_op(3) == (attr0 - 2, 4)
-        assert op_map.span_for_op(4) == (move2, 2)
-        assert op_map.op_for_line(move2) == 4
-        assert op_map.span_for_op(10) == (attr1 - 2, 4)
-        assert op_map.span_for_op(11) == (cut5, 2)
-        assert op_map.op_for_line(cut5) == 11
-        assert op_map.span_for_op(15) == (end_job, 2)
+        assert op_map.span_for_op(2) == (attr0 - 1, 3)
+        assert op_map.span_for_op(3) == (move2, 2)
+        assert op_map.op_for_line(move2) == 3
+        assert op_map.span_for_op(7) == (attr1 - 1, 3)
+        assert op_map.span_for_op(8) == (cut5, 2)
+        assert op_map.op_for_line(cut5) == 8
+        assert op_map.span_for_op(11) == (end_job, 2)
 
         for line_num in range(len(lines)):
             op_index = op_map.op_for_line(line_num)
@@ -1427,31 +1438,16 @@ class TestErrorHandling:
         ):
             encoder.encode(ops, mock_machine, doc)
 
-    def test_layer_end_without_section_raises(
+    def test_layer_end_without_workpiece_raises(
         self, encoder, mock_machine, doc
     ):
-        """LAYER_END without any OPS_SECTION_START must fail loudly."""
+        """LAYER_END without any WORKPIECE_START must fail loudly."""
         ops = Ops()
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.layer_end(layer_uid=doc.layers[0].uid)
 
-        with pytest.raises(ValueError, match="OPS_SECTION_START"):
-            encoder.encode(ops, mock_machine, doc)
-
-    def test_ops_section_start_after_layer_end_raises(
-        self, encoder, mock_machine, doc
-    ):
-        """OPS_SECTION_START after LAYER_END must fail loudly."""
-        ops = Ops()
-        ops.job_start()
-        ops.layer_start(layer_uid=doc.layers[0].uid)
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
-        ops.layer_end(layer_uid=doc.layers[0].uid)
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
-
-        with pytest.raises(ValueError, match="OPS_SECTION_START"):
+        with pytest.raises(ValueError, match="WORKPIECE_START"):
             encoder.encode(ops, mock_machine, doc)
 
 
@@ -1461,19 +1457,15 @@ def _plan_job(doc):
     ops.job_start()
     ops.layer_start(layer_uid=doc.layers[0].uid)
     ops.workpiece_start("wp-0")
-    ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
     ops.set_power(0.5)
     ops.move_to(5.0, 5.0, 0.0)
     ops.line_to(10.0, 8.0, 0.0)
-    ops.ops_section_end(SectionType.VECTOR_OUTLINE)
     ops.workpiece_end("wp-0")
     ops.layer_end(layer_uid=doc.layers[0].uid)
     ops.layer_start(layer_uid=doc.layers[1].uid)
     ops.workpiece_start("wp-1")
-    ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-1")
     ops.set_feed_rate(200)
     ops.move_to(20.0, 20.0, 0.0)
-    ops.ops_section_end(SectionType.VECTOR_OUTLINE)
     ops.workpiece_end("wp-1")
     ops.layer_end(layer_uid=doc.layers[1].uid)
     ops.job_end()
@@ -1654,10 +1646,8 @@ class TestInjectedGluescript:
         ops.job_start()
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
-        ops.ops_section_start(SectionType.VECTOR_OUTLINE, "wp-0")
         ops.move_to(5.0, 5.0, 0.0)
         ops.line_to(10.0, 8.0, 0.0)
-        ops.ops_section_end(SectionType.VECTOR_OUTLINE)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
