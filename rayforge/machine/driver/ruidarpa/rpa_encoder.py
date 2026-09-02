@@ -660,12 +660,14 @@ class RuidaRPAEncoder(OpsEncoder):
         Scans forward from the WORKPIECE_START (or OPS_SECTION_START for
         section-bounded scans) command to the next workpiece, layer, or
         job boundary, tracking the current position. The first
-        non-degenerate scan line determines the overscan: horizontal
+        non-degenerate raster line determines the overscan: horizontal
         lines yield "X_BI", vertical lines yield "Y_BI", and diagonal
-        lines (unsupported by the Ruida controller) yield "NONE". Vector
-        layers are forced to "NONE" by GlueScript's layer-mode override.
-        The remaining stop commands are defensive stops for malformed
-        sequences.
+        lines (unsupported by the Ruida controller) yield "NONE". Raster
+        lines may be emitted as SCAN_LINE (per-pixel power) or as
+        LINE_TO (constant-power fills such as the material test grid).
+        Vector layers are forced to "NONE" by GlueScript's layer-mode
+        override. The remaining stop commands are defensive stops for
+        malformed sequences.
         """
         if layer_mode == "VECTOR":
             return "NONE"
@@ -694,23 +696,38 @@ class RuidaRPAEncoder(OpsEncoder):
                     in_raster_fill = False
                 continue
             if command in (CommandType.MOVE_TO, CommandType.LINE_TO):
+                if command == CommandType.LINE_TO and in_raster_fill:
+                    overscan = self._classify_overscan(pos, ops.endpoint(i))
+                    if overscan is not None:
+                        return overscan
                 pos = ops.endpoint(i)
                 continue
             if command == CommandType.SCAN_LINE and in_raster_fill:
-                end = ops.endpoint(i)
-                dx = end[0] - pos[0]
-                dy = end[1] - pos[1]
-                if (
-                    abs(dx) < _OVERSCAN_ANGLE_EPSILON
-                    and abs(dy) < _OVERSCAN_ANGLE_EPSILON
-                ):
-                    continue
-                angle = math.degrees(math.atan2(abs(dy), abs(dx)))
-                if angle <= _OVERSCAN_ANGLE_TOLERANCE_DEG:
-                    return "X_BI"
-                if angle >= 90.0 - _OVERSCAN_ANGLE_TOLERANCE_DEG:
-                    return "Y_BI"
-                return "NONE"
+                overscan = self._classify_overscan(pos, ops.endpoint(i))
+                if overscan is not None:
+                    return overscan
+        return "NONE"
+
+    @staticmethod
+    def _classify_overscan(start, end):
+        """Classify a raster line direction as an overscan mode.
+
+        Returns "X_BI" for horizontal lines, "Y_BI" for vertical lines,
+        "NONE" for diagonal lines, and None for degenerate (zero-length)
+        lines.
+        """
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        if (
+            abs(dx) < _OVERSCAN_ANGLE_EPSILON
+            and abs(dy) < _OVERSCAN_ANGLE_EPSILON
+        ):
+            return None
+        angle = math.degrees(math.atan2(abs(dy), abs(dx)))
+        if angle <= _OVERSCAN_ANGLE_TOLERANCE_DEG:
+            return "X_BI"
+        if angle >= 90.0 - _OVERSCAN_ANGLE_TOLERANCE_DEG:
+            return "Y_BI"
         return "NONE"
 
     def _handle_job_end(self, idx: int) -> None:

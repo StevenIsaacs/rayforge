@@ -1034,6 +1034,40 @@ class TestLayerOverscan:
             for record in caplog.records
         )
 
+    def test_raster_layer_overscan_from_line_to_fill(
+        self, encoder, mock_machine, doc
+    ):
+        """Constant-power raster fills emitted as LINE_TO still get
+        overscan (material test grid engrave fills)."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.CONSTANT_POWER,
+        )
+        ops.set_power(0.5)
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.line_to(5.0, 0.0, 0.0)
+        ops.move_to(5.0, 0.1, 0.0)
+        ops.line_to(0.0, 0.1, 0.0)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.CONSTANT_POWER
+        )
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+
+        result = encoder.encode(ops, mock_machine, doc)
+        line = next(
+            l
+            for l in result.text.splitlines()
+            if l.startswith("declare_layer(")
+        )
+        assert _declare_layer_overscan(line) == "X_BI"
+
 
 class TestCurveLinearization:
     """Tests for curve commands linearized into cut segments."""
