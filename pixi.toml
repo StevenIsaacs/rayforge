@@ -14,6 +14,7 @@ video = { features = ["video-tools"], solve-group = "video" }
 
 [feature.ruida-pa.pypi-dependencies]
 # ruida-pa = { path = "external/ruida-pa", editable = false }
+# To update: pixi update -e <env> ruida-pa
 ruida-pa = {
     git = "https://github.com/StevenIsaacs/ruida-pa.git",
     branch = "main",
