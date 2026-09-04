@@ -150,6 +150,8 @@ class RuidaRPAAdapter(Driver):
         self._shutting_down: bool = False
         self._jog_speed_mm_s: Optional[float] = None
         self._selected_wcs: str = "MACHINE"
+        self._machine_paused: bool = False
+        self._machine_job_running: bool = False
 
     # --- Properties ---
 
@@ -342,6 +344,9 @@ class RuidaRPAAdapter(Driver):
     def _set_connected(self, connected: bool, log_message: str) -> None:
         """Record a connection-state transition and notify observers."""
         self._is_connected = connected
+        if not connected:
+            self._machine_paused = False
+            self._machine_job_running = False
         self.state.status = (
             DeviceStatus.IDLE if connected else DeviceStatus.UNKNOWN
         )
@@ -524,6 +529,8 @@ class RuidaRPAAdapter(Driver):
                     self, status=TransportStatus.ERROR, message=str(e)
                 )
                 self._is_connected = False
+                self._machine_paused = False
+                self._machine_job_running = False
                 if self.state.status != DeviceStatus.UNKNOWN:
                     self.state.status = DeviceStatus.UNKNOWN
                     self.state_changed.send(self, state=self.state)
@@ -579,15 +586,10 @@ class RuidaRPAAdapter(Driver):
             # StatusDict or RPyC netref — convert to local dict for reliable
             # type handling
             event = {k: event[k] for k in event}  # type: ignore
-            status_value = event.get("status") or event.get("MACHINE_STATUS")
-            if status_value is not None:
-                logger.debug(
-                    "RPA status update: %s",
-                    status_value,
-                    extra=self._log_extra(
-                        "TUI_RPC" if self._tui_mode else "RPA"
-                    ),
-                )
+            new_status = self._map_machine_status_to_device_status(event)
+            if new_status != self.state.status:
+                self.state = replace(self.state, status=new_status)
+                self.state_changed.send(self, state=self.state)
 
             # Extract current position (values in mm)
             # POSITION_* values are (float_mm, str_description)
@@ -624,6 +626,29 @@ class RuidaRPAAdapter(Driver):
             msg,
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
         )
+
+    def _map_machine_status_to_device_status(
+        self,
+        event: dict[str, Any],
+    ) -> DeviceStatus:
+        """Maintain machine-status flags from a (possibly partial) status dict.
+
+        StatusDict events only carry fields that changed; an absent flag means
+        the controller state did not change for that flag.  Maintain the
+        decoded ``MACHINE_STATUS_PAUSED`` / ``MACHINE_STATUS_JOB_RUNNING``
+        flags and derive the current DeviceStatus from them.
+        """
+        paused = event.get("MACHINE_STATUS_PAUSED")
+        if isinstance(paused, bool):
+            self._machine_paused = paused
+        job_running = event.get("MACHINE_STATUS_JOB_RUNNING")
+        if isinstance(job_running, bool):
+            self._machine_job_running = job_running
+        if self._machine_paused:
+            return DeviceStatus.HOLD
+        if self._machine_job_running:
+            return DeviceStatus.RUN
+        return DeviceStatus.IDLE
 
     def _on_rpa_reply(self, replies: list[str]) -> None:
         """Handle reply data from the Ruida controller."""
@@ -795,8 +820,15 @@ class RuidaRPAAdapter(Driver):
         loop = asyncio.get_running_loop()
         if hold:
             await loop.run_in_executor(None, self._backend.pause)
+            self._machine_paused = True
         else:
             await loop.run_in_executor(None, self._backend.resume)
+            self._machine_paused = False
+        # Derive from maintained flags (empty dict = no flags changed).
+        new_status = self._map_machine_status_to_device_status({})
+        if new_status != self.state.status:
+            self.state = replace(self.state, status=new_status)
+            self.state_changed.send(self, state=self.state)
 
     async def cancel(self) -> None:
         if self._backend is None:

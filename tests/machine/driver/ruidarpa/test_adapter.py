@@ -502,11 +502,15 @@ class TestRunRouting:
         indirect=True,
     )
     async def test_set_hold_pause_calls_backend_pause(self, adapter_pair):
-        """set_hold(True) must pause via the live backend."""
+        """set_hold(True) must pause and transition to HOLD."""
         adapter, backend = adapter_pair
+        state_mock = Mock()
+        adapter.state_changed.send = state_mock
         await adapter.set_hold(True)
         backend.pause.assert_called_once_with()
         backend.run.assert_not_called()
+        assert adapter.state.status == DeviceStatus.HOLD
+        state_mock.assert_called_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -516,11 +520,18 @@ class TestRunRouting:
         indirect=True,
     )
     async def test_set_hold_resume_calls_backend_resume(self, adapter_pair):
-        """set_hold(False) must resume via the live backend."""
+        """set_hold(False) must resume and transition to RUN."""
         adapter, backend = adapter_pair
+        state_mock = Mock()
+        adapter.state_changed.send = state_mock
+        adapter._machine_paused = True
+        adapter._machine_job_running = True
+        adapter.state = replace(adapter.state, status=DeviceStatus.HOLD)
         await adapter.set_hold(False)
         backend.resume.assert_called_once_with()
         backend.run.assert_not_called()
+        assert adapter.state.status == DeviceStatus.RUN
+        state_mock.assert_called_once()
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1121,9 +1132,16 @@ class TestStatusMmFix:
         "adapter_pair", [RPC_MODE], ids=["rpc"], indirect=True
     )
     async def test_machine_status_dict_accepted(self, adapter_pair):
-        """A machine-status-shaped dict must not raise or move the state."""
+        """A machine-status-shaped dict must map status and preserve pos."""
         adapter, _backend = adapter_pair
-        adapter._on_rpa_status({"MACHINE_STATUS": 1})
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS": 0,
+                "MACHINE_STATUS_JOB_RUNNING": False,
+                "MACHINE_STATUS_MOVING": False,
+            }
+        )
+        assert adapter.state.status == DeviceStatus.IDLE
         assert adapter.state.machine_pos == (None, None, None)
 
     def test_unwrap_mm_tuple_returns_first_element(self):
@@ -1133,6 +1151,307 @@ class TestStatusMmFix:
     def test_unwrap_mm_plain_value_passes_through(self):
         """_unwrap_mm must pass bare floats through unchanged."""
         assert _unwrap_mm(12.5) == 12.5
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_job_running_not_paused_maps_to_run(self, adapter_pair):
+        """Bool flags job_running + paused=False must map to RUN."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": True,
+                "MACHINE_STATUS_PAUSED": False,
+                "MACHINE_STATUS_MOVING": True,
+            }
+        )
+        assert adapter.state.status == DeviceStatus.RUN
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_paused_maps_to_hold(self, adapter_pair):
+        """Bool flag paused=True must map to HOLD."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": True,
+                "MACHINE_STATUS_PAUSED": True,
+            }
+        )
+        assert adapter.state.status == DeviceStatus.HOLD
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_not_job_running_maps_to_idle(self, adapter_pair):
+        """Bool flags job_running=False must map to IDLE."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": False,
+                "MACHINE_STATUS_PAUSED": False,
+            }
+        )
+        assert adapter.state.status == DeviceStatus.IDLE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_empty_status_dict_preserves_idle(self, adapter_pair):
+        """A status event with no bool flags means no change → IDLE."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status({})
+        assert adapter.state.status == DeviceStatus.IDLE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_bad_type_machinery_status_preserves_idle(
+        self, adapter_pair
+    ):
+        """A non-bool MACHINE_STATUS means no change → IDLE."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status({"MACHINE_STATUS": "bad"})
+        assert adapter.state.status == DeviceStatus.IDLE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_tuple_with_none_int_preserves_idle(self, adapter_pair):
+        """A MACHINE_STATUS tuple without bool flags means no change → IDLE."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status({"MACHINE_STATUS": (None, "x")})
+        assert adapter.state.status == DeviceStatus.IDLE
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_status_emits_only_on_change(self, adapter_pair):
+        """Repeated identical status values must not re-emit."""
+        adapter, _backend = adapter_pair
+        state_mock = Mock()
+        adapter.state_changed.send = state_mock
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": True,
+                "MACHINE_STATUS_PAUSED": False,
+            }
+        )
+        state_mock.assert_called_once()
+        state_mock.reset_mock()
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": True,
+                "MACHINE_STATUS_PAUSED": False,
+            }
+        )
+        state_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_status_change_creates_new_state_object(self, adapter_pair):
+        """Status changes must emit a new DeviceState, not mutate in-place."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": True,
+                "MACHINE_STATUS_PAUSED": False,
+            }
+        )
+        first_state = adapter.state
+        received = []
+
+        def _record_state(sender, state):
+            received.append(state)
+
+        adapter.state_changed.connect(_record_state)
+        adapter._on_rpa_status(
+            {
+                "MACHINE_STATUS_JOB_RUNNING": False,
+                "MACHINE_STATUS_PAUSED": False,
+            }
+        )
+        assert adapter.state.status == DeviceStatus.IDLE
+        assert adapter.state is not first_state
+        assert received[0] is adapter.state
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_partial_status_flags_are_maintained(self, adapter_pair):
+        """Absent bool flags must preserve state across partial events."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status({"MACHINE_STATUS_JOB_RUNNING": True})
+        assert adapter.state.status == DeviceStatus.RUN
+        adapter._on_rpa_status({"MACHINE_STATUS_PAUSED": True})
+        assert adapter.state.status == DeviceStatus.HOLD
+        adapter._on_rpa_status({"MACHINE_STATUS_PAUSED": False})
+        assert adapter.state.status == DeviceStatus.RUN
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_disconnect_resets_machine_status_flags(self, adapter_pair):
+        """Disconnect must reset flags so stale state cannot leak."""
+        adapter, _backend = adapter_pair
+        adapter._set_connected(True, "connected")
+        adapter._on_rpa_status({"MACHINE_STATUS_JOB_RUNNING": True})
+        assert adapter.state.status == DeviceStatus.RUN
+        adapter._set_connected(False, "disconnected")
+        assert adapter.state.status == DeviceStatus.UNKNOWN
+        adapter._set_connected(True, "reconnected")
+        assert adapter.state.status == DeviceStatus.IDLE
+        adapter._on_rpa_status({})
+        assert adapter.state.status == DeviceStatus.IDLE
+
+
+class TestSetHoldStatusTransitions:
+    """set_hold must update DeviceStatus and emit only on change."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_pause_does_not_reemit_if_already_hold(self, adapter_pair):
+        """Calling set_hold(True) when already HOLD must not re-emit."""
+        adapter, backend = adapter_pair
+        adapter.state = replace(adapter.state, status=DeviceStatus.HOLD)
+        state_mock = Mock()
+        adapter.state_changed.send = state_mock
+        await adapter.set_hold(True)
+        backend.pause.assert_called_once()
+        state_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_resume_does_not_reemit_if_already_run(self, adapter_pair):
+        """Calling set_hold(False) when already RUN must not re-emit."""
+        adapter, backend = adapter_pair
+        adapter.state = replace(adapter.state, status=DeviceStatus.RUN)
+        adapter._machine_paused = False
+        adapter._machine_job_running = True
+        state_mock = Mock()
+        adapter.state_changed.send = state_mock
+        await adapter.set_hold(False)
+        backend.resume.assert_called_once()
+        state_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_pause_emits_new_state_object(self, adapter_pair):
+        """set_hold(True) from RUN must emit a new DeviceState object."""
+        adapter, backend = adapter_pair
+        adapter.state = replace(adapter.state, status=DeviceStatus.RUN)
+        old_state = adapter.state
+        received = []
+
+        def _record_state(sender, state):
+            received.append(state)
+
+        adapter.state_changed.connect(_record_state)
+        await adapter.set_hold(True)
+        assert adapter.state.status == DeviceStatus.HOLD
+        assert adapter.state is not old_state
+        assert received[0] is adapter.state
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_resume_emits_new_state_object(self, adapter_pair):
+        """set_hold(False) from HOLD must emit a new DeviceState object."""
+        adapter, backend = adapter_pair
+        adapter.state = replace(adapter.state, status=DeviceStatus.HOLD)
+        adapter._machine_paused = True
+        adapter._machine_job_running = True
+        old_state = adapter.state
+        received = []
+
+        def _record_state(sender, state):
+            received.append(state)
+
+        adapter.state_changed.connect(_record_state)
+        await adapter.set_hold(False)
+        assert adapter.state.status == DeviceStatus.RUN
+        assert adapter.state is not old_state
+        assert received[0] is adapter.state
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "adapter_pair",
+        [DIRECT_MODE, RPC_MODE],
+        ids=["direct", "rpc"],
+        indirect=True,
+    )
+    async def test_set_hold_pause_survives_partial_status_event(
+        self, adapter_pair
+    ):
+        """Pause must survive a partial status event that omits PAUSED."""
+        adapter, _backend = adapter_pair
+        adapter._on_rpa_status({"MACHINE_STATUS_JOB_RUNNING": True})
+        assert adapter.state.status == DeviceStatus.RUN
+        await adapter.set_hold(True)
+        assert adapter.state.status == DeviceStatus.HOLD
+        adapter._on_rpa_status({"MACHINE_STATUS_MOVING": True})
+        assert adapter.state.status == DeviceStatus.HOLD
 
 
 class TestReconnectListenerHygiene:
