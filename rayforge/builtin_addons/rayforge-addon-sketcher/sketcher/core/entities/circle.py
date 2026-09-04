@@ -39,6 +39,55 @@ class Circle(Entity):
     def get_endpoint_ids(self) -> list[EntityID]:
         return []
 
+    def characteristic_length_pairs(
+        self,
+    ) -> list[tuple[EntityID, EntityID]]:
+        return [(self.center_idx, self.radius_pt_idx)]
+
+    def tangent_at(
+        self, registry: "EntityRegistry", point_id: EntityID
+    ) -> tuple[float, float]:
+        # Circle has a well-defined tangent at the radius point, but
+        # we default to no tangent for entities without endpoints.
+        return (1.0, 0.0)
+
+    def radius(self, registry: "EntityRegistry") -> float:
+        center = registry.get_point(self.center_idx)
+        radius_pt = registry.get_point(self.radius_pt_idx)
+        if not (center and radius_pt):
+            return 0.0
+        return math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
+
+    def signed_distance_to(self, point, registry):
+        center = registry.get_point(self.center_idx)
+        radius_pt = registry.get_point(self.radius_pt_idx)
+        if not (center and radius_pt):
+            return 0.0
+        radius = math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
+        dist_to_point = math.hypot(point.x - center.x, point.y - center.y)
+        return dist_to_point - radius
+
+    def is_radius_entity(self) -> bool:
+        return True
+
+    def is_closed_loop(self) -> bool:
+        return True
+
+    def enclosed_signed_area(self, registry: "EntityRegistry") -> float:
+        # By convention, a single circle loop is CCW -> positive area
+        return math.pi * self.radius(registry) ** 2
+
+    def contains_point(
+        self, registry: "EntityRegistry", x: float, y: float
+    ) -> bool:
+        center = registry.get_point(self.center_idx)
+        radius_pt = registry.get_point(self.radius_pt_idx)
+        if not (center and radius_pt):
+            return False
+        radius = math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
+        dist_sq = (x - center.x) ** 2 + (y - center.y) ** 2
+        return dist_sq <= radius**2
+
     def get_junction_point_ids(self) -> list[EntityID]:
         return [self.center_idx, self.radius_pt_idx]
 

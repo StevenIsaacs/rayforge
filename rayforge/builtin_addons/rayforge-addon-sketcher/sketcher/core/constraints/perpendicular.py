@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from gettext import gettext as _
 from typing import (
     TYPE_CHECKING,
@@ -25,6 +25,7 @@ from .base import Constraint, ConstraintStatus
 if TYPE_CHECKING:
     import cairo
 
+    from ..entities import Entity
     from ..params import ParameterContext
     from ..registry import EntityRegistry
     from ..selection import SketchSelection
@@ -56,13 +57,17 @@ class PerpendicularConstraint(Constraint):
     ) -> bool:
         if selection.point_ids or len(selection.entity_ids) != 2:
             return False
-        if sketch is None:
-            return False
-        e1 = sketch.registry.get_entity(selection.entity_ids[0])
-        e2 = sketch.registry.get_entity(selection.entity_ids[1])
-        if not isinstance(e1, (Line, Arc, Circle)):
-            return False
-        return isinstance(e2, (Line, Arc, Circle))
+        entities = selection.resolve_entities(
+            sketch.registry if sketch else None
+        )
+        return entities is not None and cls.applies_to_entities(entities)
+
+    @classmethod
+    def applies_to_entities(cls, entities: Sequence[Entity]) -> bool:
+        """Both operands must be Lines or radius-bearing entities."""
+        return len(entities) == 2 and all(
+            isinstance(e, Line) or e.is_radius_entity() for e in entities
+        )
 
     @staticmethod
     def get_type_name() -> str:
@@ -98,21 +103,6 @@ class PerpendicularConstraint(Constraint):
             e2_id=data["e2_id"],
             user_visible=data.get("user_visible", True),
         )
-
-    def _get_radius_sq(
-        self, shape: Arc | Circle, reg: EntityRegistry
-    ) -> float:
-        """Helper to get squared radius of an Arc or Circle."""
-        center = reg.get_point(shape.center_idx)
-        if isinstance(shape, Arc):
-            start = reg.get_point(shape.start_idx)
-            return (start.x - center.x) ** 2 + (start.y - center.y) ** 2
-        elif isinstance(shape, Circle):
-            radius_pt = reg.get_point(shape.radius_pt_idx)
-            return (radius_pt.x - center.x) ** 2 + (
-                radius_pt.y - center.y
-            ) ** 2
-        return 0.0
 
     def error(self, reg: EntityRegistry, params: ParameterContext) -> float:
         e1 = reg.get_entity(self.e1_id)
@@ -165,8 +155,8 @@ class PerpendicularConstraint(Constraint):
             c1 = reg.get_point(shape1.center_idx)
             c2 = reg.get_point(shape2.center_idx)
 
-            r1_sq = self._get_radius_sq(shape1, reg)
-            r2_sq = self._get_radius_sq(shape2, reg)
+            r1_sq = shape1.radius(reg) ** 2
+            r2_sq = shape2.radius(reg) ** 2
 
             dist_centers_sq = (c2.x - c1.x) ** 2 + (c2.y - c1.y) ** 2
 

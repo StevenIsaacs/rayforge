@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from gettext import gettext as _
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +15,7 @@ from .radius import RadiusConstraint
 if TYPE_CHECKING:
     import cairo
 
+    from ..entities import Entity
     from ..params import ParameterContext
     from ..registry import EntityRegistry
     from ..selection import SketchSelection
@@ -54,10 +55,15 @@ class DiameterConstraint(Constraint):
     ) -> bool:
         if selection.point_ids or len(selection.entity_ids) != 1:
             return False
-        if sketch is None:
-            return False
-        entity = sketch.registry.get_entity(selection.entity_ids[0])
-        return isinstance(entity, Circle)
+        entities = selection.resolve_entities(
+            sketch.registry if sketch else None
+        )
+        return entities is not None and cls.applies_to_entities(entities)
+
+    @classmethod
+    def applies_to_entities(cls, entities: Sequence[Entity]) -> bool:
+        """The operand must be a Circle."""
+        return len(entities) == 1 and isinstance(entities[0], Circle)
 
     @staticmethod
     def get_type_name() -> str:
@@ -78,6 +84,9 @@ class DiameterConstraint(Constraint):
                     self._format_coord(center.x, center.y)
                 )
         return ""
+
+    def get_edit_subtitle(self) -> str:
+        return _("Enter diameter or expression.")
 
     def targets_segment(
         self, p1: EntityID, p2: EntityID, entity_id: EntityID | None
@@ -115,12 +124,7 @@ class DiameterConstraint(Constraint):
         if not isinstance(circle_entity, Circle):
             return 0.0
 
-        center = reg.get_point(circle_entity.center_idx)
-        radius_pt = reg.get_point(circle_entity.radius_pt_idx)
-        target_diameter = self.value
-
-        curr_r = math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
-        return 2 * curr_r - target_diameter
+        return 2 * circle_entity.radius(reg) - self.value
 
     def gradient(
         self, reg: EntityRegistry, params: ParameterContext

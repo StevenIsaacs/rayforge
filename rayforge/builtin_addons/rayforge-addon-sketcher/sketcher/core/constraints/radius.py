@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from gettext import gettext as _
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +13,7 @@ from ..types import EntityID
 from .base import Constraint, ConstraintStatus
 
 if TYPE_CHECKING:
+    from ..entities import Entity
     from ..params import ParameterContext
     from ..registry import EntityRegistry
     from ..selection import SketchSelection
@@ -52,10 +53,15 @@ class RadiusConstraint(Constraint):
     ) -> bool:
         if selection.point_ids or len(selection.entity_ids) != 1:
             return False
-        if sketch is None:
-            return False
-        entity = sketch.registry.get_entity(selection.entity_ids[0])
-        return isinstance(entity, (Arc, Circle))
+        entities = selection.resolve_entities(
+            sketch.registry if sketch else None
+        )
+        return entities is not None and cls.applies_to_entities(entities)
+
+    @classmethod
+    def applies_to_entities(cls, entities: Sequence[Entity]) -> bool:
+        """The operand must have a radius (Arc or Circle)."""
+        return len(entities) == 1 and entities[0].is_radius_entity()
 
     @staticmethod
     def get_type_name() -> str:
@@ -77,6 +83,9 @@ class RadiusConstraint(Constraint):
                     self._format_coord(center.x, center.y),
                 )
         return ""
+
+    def get_edit_subtitle(self) -> str:
+        return _("Enter radius or expression (e.g. 'width/2').")
 
     def targets_segment(
         self, p1: EntityID, p2: EntityID, entity_id: EntityID | None
@@ -113,21 +122,10 @@ class RadiusConstraint(Constraint):
         if entity is None:
             return 0.0
 
-        target = self.value
-        curr_r = 0.0
-
-        if isinstance(entity, Arc):
-            center = reg.get_point(entity.center_idx)
-            start = reg.get_point(entity.start_idx)
-            curr_r = math.hypot(start.x - center.x, start.y - center.y)
-        elif isinstance(entity, Circle):
-            center = reg.get_point(entity.center_idx)
-            radius_pt = reg.get_point(entity.radius_pt_idx)
-            curr_r = math.hypot(radius_pt.x - center.x, radius_pt.y - center.y)
-        else:
+        if not isinstance(entity, (Arc, Circle)):
             return 0.0
 
-        return curr_r - target
+        return entity.radius(reg) - self.value
 
     def gradient(
         self, reg: EntityRegistry, params: ParameterContext

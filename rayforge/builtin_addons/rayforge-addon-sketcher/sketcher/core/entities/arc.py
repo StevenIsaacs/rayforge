@@ -66,6 +66,47 @@ class Arc(Entity):
     def get_endpoint_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx]
 
+    def is_edge_entity(self) -> bool:
+        return True
+
+    def is_radius_entity(self) -> bool:
+        return True
+
+    def characteristic_length_pairs(
+        self,
+    ) -> list[tuple[EntityID, EntityID]]:
+        return [(self.center_idx, self.start_idx)]
+
+    def tangent_at(
+        self, registry: "EntityRegistry", point_id: EntityID
+    ) -> tuple[float, float]:
+        start = registry.get_point(self.start_idx)
+        end = registry.get_point(self.end_idx)
+        center = registry.get_point(self.center_idx)
+        if not (start and end and center):
+            return (1.0, 0.0)
+        if point_id == start.id:
+            dx, dy = start.x - center.x, start.y - center.y
+            return (dy, -dx) if self.clockwise else (-dy, dx)
+        dx, dy = end.x - center.x, end.y - center.y
+        return (-dy, dx) if self.clockwise else (dy, -dx)
+
+    def radius(self, registry: "EntityRegistry") -> float:
+        start = registry.get_point(self.start_idx)
+        center = registry.get_point(self.center_idx)
+        if not (start and center):
+            return 0.0
+        return math.hypot(start.x - center.x, start.y - center.y)
+
+    def signed_distance_to(self, point, registry):
+        center = registry.get_point(self.center_idx)
+        start = registry.get_point(self.start_idx)
+        if not (center and start):
+            return 0.0
+        radius = math.hypot(start.x - center.x, start.y - center.y)
+        dist_to_point = math.hypot(point.x - center.x, point.y - center.y)
+        return dist_to_point - radius
+
     def get_junction_point_ids(self) -> list[EntityID]:
         return [self.start_idx, self.end_idx, self.center_idx]
 

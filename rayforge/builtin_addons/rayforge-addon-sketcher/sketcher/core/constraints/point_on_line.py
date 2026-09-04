@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from gettext import gettext as _
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +13,7 @@ from ..types import EntityID
 from .base import Constraint, ConstraintStatus
 
 if TYPE_CHECKING:
+    from ..entities import Entity
     from ..params import ParameterContext
     from ..registry import EntityRegistry
     from ..selection import SketchSelection
@@ -39,27 +40,21 @@ class PointOnLineConstraint(Constraint):
     ) -> bool:
         if len(selection.point_ids) != 1 or len(selection.entity_ids) != 1:
             return False
-        if sketch is None:
+        entities = selection.resolve_entities(
+            sketch.registry if sketch else None
+        )
+        if entities is None or not cls.applies_to_entities(entities):
             return False
-        entity = sketch.registry.get_entity(selection.entity_ids[0])
-        if not isinstance(entity, (Line, Arc, Circle)):
-            return False
-        pid = selection.point_ids[0]
-        control_points = set()
-        if isinstance(entity, Line):
-            control_points = {entity.p1_idx, entity.p2_idx}
-        elif isinstance(entity, Arc):
-            control_points = {
-                entity.start_idx,
-                entity.end_idx,
-                entity.center_idx,
-            }
-        elif isinstance(entity, Circle):
-            control_points = {
-                entity.center_idx,
-                entity.radius_pt_idx,
-            }
-        return pid not in control_points
+        return (
+            selection.point_ids[0] not in entities[0].get_junction_point_ids()
+        )
+
+    @classmethod
+    def applies_to_entities(cls, entities: Sequence[Entity]) -> bool:
+        """The shape must be a Line or radius-bearing entity."""
+        return len(entities) == 1 and (
+            isinstance(entities[0], Line) or entities[0].is_radius_entity()
+        )
 
     @staticmethod
     def get_type_name() -> str:
@@ -117,37 +112,10 @@ class PointOnLineConstraint(Constraint):
         if shape is None:
             return 0.0
 
-        if isinstance(shape, Line):
-            l1 = reg.get_point(shape.p1_idx)
-            l2 = reg.get_point(shape.p2_idx)
-            dx = l2.x - l1.x
-            dy = l2.y - l1.y
-            length = math.hypot(dx, dy)
-            if length < 1e-9:
-                return math.hypot(pt.x - l1.x, pt.y - l1.y)
-
-            # Cross product (signed area) divided by length = distance
-            cross = (l2.x - l1.x) * (pt.y - l1.y) - (pt.x - l1.x) * (
-                l2.y - l1.y
-            )
-            return cross / length
-
-        elif isinstance(shape, (Arc, Circle)):
-            center = reg.get_point(shape.center_idx)
-            radius = 0.0
-            if isinstance(shape, Arc):
-                start = reg.get_point(shape.start_idx)
-                radius = math.hypot(start.x - center.x, start.y - center.y)
-            elif isinstance(shape, Circle):
-                radius_pt = reg.get_point(shape.radius_pt_idx)
-                radius = math.hypot(
-                    radius_pt.x - center.x, radius_pt.y - center.y
-                )
-
-            dist_to_point = math.hypot(pt.x - center.x, pt.y - center.y)
-            return dist_to_point - radius
-
-        return 0.0
+        try:
+            return shape.signed_distance_to(pt, reg)
+        except NotImplementedError:
+            return 0.0
 
     def gradient(
         self, reg: EntityRegistry, params: ParameterContext

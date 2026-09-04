@@ -1,3 +1,4 @@
+import math
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -34,6 +35,40 @@ class Line(Entity):
 
     def get_endpoint_ids(self) -> list[EntityID]:
         return [self.p1_idx, self.p2_idx]
+
+    def is_edge_entity(self) -> bool:
+        return True
+
+    def characteristic_length_pairs(
+        self,
+    ) -> list[tuple[EntityID, EntityID]]:
+        return [(self.p1_idx, self.p2_idx)]
+
+    def tangent_at(
+        self, registry: "EntityRegistry", point_id: EntityID
+    ) -> tuple[float, float]:
+        p1 = registry.get_point(self.p1_idx)
+        p2 = registry.get_point(self.p2_idx)
+        if not (p1 and p2):
+            return (1.0, 0.0)
+        if point_id == p1.id:
+            return (p2.x - p1.x, p2.y - p1.y)
+        return (p1.x - p2.x, p1.y - p2.y)
+
+    def signed_distance_to(self, point, registry):
+        p1 = registry.get_point(self.p1_idx)
+        p2 = registry.get_point(self.p2_idx)
+        if not (p1 and p2):
+            return 0.0
+        dx = p2.x - p1.x
+        dy = p2.y - p1.y
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            return math.hypot(point.x - p1.x, point.y - p1.y)
+        cross = (p2.x - p1.x) * (point.y - p1.y) - (point.x - p1.x) * (
+            p2.y - p1.y
+        )
+        return cross / length
 
     def get_junction_point_ids(self) -> list[EntityID]:
         return [self.p1_idx, self.p2_idx]

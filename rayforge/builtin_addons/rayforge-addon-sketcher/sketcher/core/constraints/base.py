@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from enum import Enum, auto
+from gettext import gettext as _
 from locale import format_string
 from typing import (
     TYPE_CHECKING,
@@ -18,6 +19,7 @@ if TYPE_CHECKING:
     import cairo
 
     from ..commands.mirror import MirrorAxis
+    from ..entities import Entity
     from ..params import ParameterContext
     from ..registry import EntityRegistry
     from ..selection import SketchSelection
@@ -45,6 +47,15 @@ class Constraint:
     def __init__(self, user_visible: bool = True):
         self.user_visible = user_visible
 
+    def is_world_anchored(self) -> bool:
+        """Returns True if this constraint pins geometry to global axes.
+
+        World-anchored constraints (e.g. horizontal/vertical) should be
+        stripped from array templates, since they conflict with the
+        rotations applied to array copies.
+        """
+        return False
+
     @classmethod
     def can_apply_to(
         cls, selection: SketchSelection, sketch: Sketch | None = None
@@ -55,6 +66,19 @@ class Constraint:
         Subclasses should override this method.
         """
         return False
+
+    @classmethod
+    def applies_to_entities(cls, entities: Sequence[Entity]) -> bool:
+        """
+        Returns True if this constraint type can apply to the given
+        entities.
+
+        ``can_apply_to`` resolves the selected entities and delegates
+        the type and capability requirements here, so applicability
+        can be declared and tested without a selection or sketch.
+        Constraints that operate on points only accept an empty list.
+        """
+        return not entities
 
     @classmethod
     def get_type_key(cls) -> str | None:
@@ -175,6 +199,13 @@ class Constraint:
         Subclasses should override to provide meaningful descriptions.
         """
         return ""
+
+    def get_edit_subtitle(self) -> str:
+        """
+        Returns a user-facing hint string for the constraint edit dialog.
+        Subclasses should override to describe the expected input.
+        """
+        return _("Enter value or expression.")
 
     def _format_coord(self, x: float, y: float) -> str:
         """Formats coordinates respecting the user's locale."""
