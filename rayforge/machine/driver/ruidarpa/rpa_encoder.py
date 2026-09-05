@@ -425,8 +425,8 @@ class RuidaRPAEncoder(OpsEncoder):
                     self._emit_movement(sx, sy, cut=True)
                     self.current_pos = (sx, sy, sz)
                 else:
-                    if self._layer_mode == "DITHER":
-                        self._emit_movement(sx, sy, cut=False)
+                    self._emit_movement(sx, sy, cut=False)
+                    self.current_pos = (sx, sy, sz)
             elif sub_ct == CommandType.SET_POWER:
                 power = sub_ops.power(j)
                 if power > 0.0:

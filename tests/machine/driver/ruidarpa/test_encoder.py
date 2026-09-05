@@ -1110,14 +1110,13 @@ class TestCurveLinearization:
         assert any(line.startswith("power_range(") for line in lines)
         assert any(line.startswith("cut_xy_to(") for line in lines)
 
-    def test_constant_power_scan_with_zero_pixels_emits_cuts(
+    def test_constant_power_scan_with_zero_pixels_emits_moves(
         self, mock_machine, doc
     ):
-        """CONSTANT_POWER scan lines must always cut, never become moves.
+        """CONSTANT_POWER scans emit rapid moves for zero-power pixels.
 
-        Off-pixels carry 0.0 power, which must still be emitted through
-        power_range(0.0, 0.0) as a verification marker. A real GlueScript
-        raises ValueError on that call, so a mock is injected.
+        Off-pixels carry 0.0 power, which now emits a rapid move for
+        that segment in every layer mode; nonzero pixels still cut.
         """
         ops = Ops()
         ops.job_start()
@@ -1142,16 +1141,16 @@ class TestCurveLinearization:
         encoder = RuidaRPAEncoder(gluescript=mock_gluescript)
         encoder.encode(ops, mock_machine, doc)
 
-        assert (0.0, 0.0) in [
+        # The scan's zero-power segments emit rapid moves (X form on the
+        # X_BI overscan layer); nonzero pixels still cut.
+        assert mock_gluescript.move_x_to.call_args_list
+        assert mock_gluescript.cut_x_to.call_args_list
+        # power_range(0.0, 0.0) is no longer emitted: _emit_power returns
+        # early for 0.0 power, and the laser-off state is conveyed by the
+        # rapid move itself.
+        assert (0.0, 0.0) not in [
             call.args for call in mock_gluescript.power_range.call_args_list
         ]
-        assert mock_gluescript.cut_xy_to.call_args_list
-        # The initial move_to(0.0, 0.0, 0.0) before the scan is a rapid
-        # move; the scan segments themselves must never become moves.
-        assert all(
-            call.args[0] == 0.0
-            for call in mock_gluescript.move_xy_to.call_args_list
-        )
 
     def test_variable_power_scan_with_zero_pixels_emits_moves(
         self, encoder, mock_machine, doc
