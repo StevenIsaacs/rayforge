@@ -18,6 +18,7 @@ import logging
 from unittest.mock import Mock
 
 import pytest
+from raygeo.geo import Matrix
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode, CoolantMode
 from raygeo.ops.types import RasterMode, SectionType
@@ -42,6 +43,13 @@ class CutStep(Step):
         super().__init__(typelabel="cut")
         self.power: float = 0.0
         self.frequency: int = 0
+
+
+class BareStep(Step):
+    """Minimal concrete Step without laser process attributes."""
+
+    def __init__(self):
+        super().__init__(typelabel="bare")
 
 
 @pytest.fixture
@@ -83,6 +91,18 @@ def _declare_layer_overscan(line: str) -> str:
     """Extract the overscan argument from a declare_layer transcript line."""
     args = ast.literal_eval(line[len("declare_layer(") : -1])
     return args[3]
+
+
+def _declare_layer_frequency(line: str) -> float:
+    """Extract the frequency argument from a declare_layer transcript line."""
+    args = ast.literal_eval(line[len("declare_layer(") : -1])
+    return args[5]
+
+
+def _declare_layer_power(line: str) -> float:
+    """Extract the max power argument from a declare_layer transcript line."""
+    args = ast.literal_eval(line[len("declare_layer(") : -1])
+    return args[7]
 
 
 class TestRuidaRPAEncoderBasics:
@@ -205,6 +225,65 @@ class TestLayerDeclaration:
             "declare_layer('Layer 1', '#00ccff', 'VECTOR', 'NONE', "
             "5.0, 20.0, 50.0, 50.0)" in result.text
         )
+
+    def test_bare_step_uses_default_power_and_frequency(
+        self, encoder, mock_machine, doc
+    ):
+        """A step without laser attributes must use safe defaults."""
+        step = BareStep()
+        doc.layers[0].workflow.add_step(step)
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        declared = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("declare_layer(")
+        ]
+        assert _declare_layer_power(declared[0]) == 20.0
+        assert _declare_layer_frequency(declared[0]) == 20.0
+
+    def test_unregistered_step_recovers_power_and_frequency_from_extra(
+        self, encoder, mock_machine, doc
+    ):
+        """Unregistered step types must recover power/frequency from extra."""
+        step = Step.from_dict(
+            {
+                "typelabel": "laser",
+                "step_type": "NoSuchStep",
+                "name": "x",
+                "uid": "u1",
+                "matrix": Matrix().to_list(),
+                "visible": True,
+                "power": 0.5,
+                "frequency": 30000,
+            }
+        )
+        doc.layers[0].workflow.add_step(step)
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        declared = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("declare_layer(")
+        ]
+        assert _declare_layer_power(declared[0]) == 50.0
+        assert _declare_layer_frequency(declared[0]) == 30.0
 
     def test_power_below_minimum_raises_from_gluescript(
         self, encoder, mock_machine, doc

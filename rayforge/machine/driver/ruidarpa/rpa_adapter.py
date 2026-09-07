@@ -869,7 +869,7 @@ class RuidaRPAAdapter(Driver):
             self.state = replace(self.state, status=new_status)
             self.state_changed.send(self, state=self.state)
 
-    async def cancel(self) -> None:
+    async def cancel(self, emergency: bool = False) -> None:
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
         loop = asyncio.get_running_loop()

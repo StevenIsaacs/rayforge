@@ -48,6 +48,7 @@ _OVERSCAN_ANGLE_TOLERANCE_DEG = 0.01
 _OVERSCAN_ANGLE_EPSILON = 1e-6
 _DEFAULT_LAYER_SPEED_MMS = 100.0
 _DEFAULT_LAYER_FREQUENCY_KHZ = 20.0
+_DEFAULT_LAYER_FREQUENCY_HZ = _DEFAULT_LAYER_FREQUENCY_KHZ * 1000
 _DEFAULT_LAYER_POWER = 0.2  # fraction, i.e. 20%
 _DEFAULT_JOB_LABEL = "Rayforge Job"
 _DEFAULT_LAYER_COLOR = "#00ccff"
@@ -313,7 +314,7 @@ class RuidaRPAEncoder(OpsEncoder):
         """
         speed_mms = _DEFAULT_LAYER_SPEED_MMS
         power_fraction = _DEFAULT_LAYER_POWER
-        frequency_hz = 0
+        frequency_hz = _DEFAULT_LAYER_FREQUENCY_HZ
         if (
             layer is not None
             and layer.workflow is not None
@@ -322,8 +323,16 @@ class RuidaRPAEncoder(OpsEncoder):
             first_step = layer.workflow.steps[0]
             # cut_speed is stored in mm/min; GlueScript expects mm/s.
             speed_mms = float(first_step.cut_speed) / 60.0
-            power_fraction = float(first_step.power)
-            frequency_hz = int(first_step.frequency)
+            raw_power = getattr(first_step, "power", None)
+            if raw_power is None:
+                raw_power = first_step.extra.get("power", _DEFAULT_LAYER_POWER)
+            power_fraction = float(raw_power)
+            raw_frequency = getattr(first_step, "frequency", None)
+            if raw_frequency is None:
+                raw_frequency = first_step.extra.get(
+                    "frequency", _DEFAULT_LAYER_FREQUENCY_HZ
+                )
+            frequency_hz = int(raw_frequency)
 
         power_pct = power_fraction * 100.0
 
