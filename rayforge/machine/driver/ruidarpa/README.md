@@ -66,7 +66,7 @@ VSCode compatible extensions for syntax highlighting both `gluescript` (`.cglu`)
 ## Limitations
 
 - The TUI is not recommended for jobs containing large images because of the delay introduced by RPC. Currently there is no progress indication while large files are being transferred which can require a minute or two. Allow time for the transfer to complete. The TUI will display the beginning of a transfer and when it completed. If there is a comms failure during transfer, error messages will be displayed and recovery is automatic. In other words, no news is good news in this case.
-- Tested only with a RDC6442S controller on a Monport MP570 CO2 laser.
+- Tested only with a RDC6442S controller on a Monport MP570 CO2 laser while running on Fedora Linux.
 - WARNING: The depthmap engrave mode has not been tested. Because it can use the Z axis, use with caution. Machines having a Z axis typically don't have a hard limit switch so it is possible to crash the laser head into the bed.
 - Rotary is not yet supported because typical use requires swapping the Y axis connection with the rotary connection. More discovery is required to instead use the actual U axis connection available on some controllers.
 - There are many yet to be discovered Ruida commands. This implementation uses only the currently essential and well understood commands. Help is needed to add more commands to the well understood list.
