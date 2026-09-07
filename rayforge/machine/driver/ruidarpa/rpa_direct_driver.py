@@ -42,7 +42,10 @@ class RpaDirectDriver:
     # --- Lifecycle ---
 
     def start(
-        self, udp_host: Optional[str] = None, usb_device: Optional[str] = None
+        self,
+        udp_host: Optional[str] = None,
+        usb_device: Optional[str] = None,
+        magic: Optional[int] = None,
     ) -> bool:
         """Start connection to the Ruida controller.
 
@@ -53,12 +56,16 @@ class RpaDirectDriver:
         Args:
             udp_host: UDP hostname/IP (e.g. '192.168.1.100').
             usb_device: USB device path.
+            magic: Optional controller magic number (0x00-0xFF).
 
         Returns:
             True if connection succeeded.
         """
         driver = self._ensure_driver()
-        result = driver.start(udp_host=udp_host, usb_device=usb_device)
+        kwargs: dict = {"udp_host": udp_host, "usb_device": usb_device}
+        if magic is not None:
+            kwargs["magic"] = magic
+        result = driver.start(**kwargs)
         if result:
             _logger.info(
                 "RPA direct driver connected; udp=%s, usb=%s",

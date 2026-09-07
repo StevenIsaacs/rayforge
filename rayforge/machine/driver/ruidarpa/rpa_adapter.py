@@ -141,6 +141,7 @@ class RuidaRPAAdapter(Driver):
         self._config: Dict[str, Any] = {}
         self._tui_mode: bool = False
         self._rpc_timeout: float = DEFAULT_RPC_TIMEOUT_S
+        self._magic: Optional[int] = None
         self._backend: Optional[_RpaBackend] = None
         self._listeners_registered: bool = False
         self._unreachable_warned: bool = False
@@ -228,9 +229,19 @@ class RuidaRPAAdapter(Driver):
                     description=_(
                         "USB device path "
                         "(e.g., /dev/ttyUSB0, "
-                        "/dev/serial/by-id/usb-Ruida..., "
+                        "0403:6001, "
                         "or COM3)"
                     ),
+                ),
+                Var(
+                    key="magic_number",
+                    label=_("Magic"),
+                    var_type=str,
+                    description=_(
+                        "Controller magic number in hex "
+                        "(e.g., 0x88). Leave empty for default."
+                    ),
+                    default=None,
                 ),
                 BoolVar(
                     key="tui",
@@ -305,6 +316,28 @@ class RuidaRPAAdapter(Driver):
             raise DriverSetupError("RPC timeout must be positive")
 
         self._rpc_timeout = timeout
+
+        raw_magic = kwargs.get("magic_number")
+        if raw_magic is not None:
+            magic_str = str(raw_magic).strip()
+            if not magic_str:
+                self._magic = None
+            else:
+                try:
+                    magic = int(magic_str, 0)
+                except (TypeError, ValueError):
+                    raise DriverSetupError(
+                        "Magic number must be a valid hex value "
+                        "(e.g. 0x88 or 88)"
+                    ) from None
+                if not (0x00 <= magic <= 0xFF):
+                    raise DriverSetupError(
+                        "Magic number must be between 0x00 and 0xFF"
+                    )
+                self._magic = magic
+        else:
+            self._magic = None
+
         self._listeners_registered = False
         self._unreachable_warned = False
         self._seed_machine_speed_defaults()
@@ -397,7 +430,10 @@ class RuidaRPAAdapter(Driver):
                     udp_host = self._config.get("udp_host")
                     usb_device = self._config.get("usb_device")
                     started = await loop.run_in_executor(
-                        None, backend.start, udp_host, usb_device
+                        None,
+                        lambda: backend.start(
+                            udp_host, usb_device, self._magic
+                        ),
                     )
                     connected = started
                     if connected:
@@ -436,7 +472,10 @@ class RuidaRPAAdapter(Driver):
                     udp_host = self._config.get("udp_host")
                     usb_device = self._config.get("usb_device")
                     connected = await loop.run_in_executor(
-                        None, driver.start, udp_host, usb_device
+                        None,
+                        lambda: driver.start(
+                            udp_host, usb_device, self._magic
+                        ),
                     )
                     if connected:
                         # Direct mode retains callbacks across stop/start,
