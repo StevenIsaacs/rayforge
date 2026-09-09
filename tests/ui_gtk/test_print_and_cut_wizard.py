@@ -27,9 +27,20 @@ _ADDON_NS = f"{_ROOT_NS}.print_and_cut"
 _INNER_PKG = f"{_ADDON_NS}.print_and_cut"
 
 
+def _load_module(name: str, path: Path) -> types.ModuleType:
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load module {name} from {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_wizard_class():
-    if f"{_INNER_PKG}.wizard" in sys.modules:
-        return sys.modules[f"{_INNER_PKG}.wizard"].PrintAndCutWizard
+    wizard_mod = sys.modules.get(f"{_INNER_PKG}.wizard")
+    if wizard_mod is not None:
+        return wizard_mod.PrintAndCutWizard
 
     root = types.ModuleType(_ROOT_NS)
     root.__path__ = []
@@ -41,19 +52,10 @@ def _load_wizard_class():
     addon.__package__ = _ADDON_NS
     sys.modules[_ADDON_NS] = addon
 
-    init_path = _ADDON_ROOT / "print_and_cut" / "__init__.py"
-    spec = importlib.util.spec_from_file_location(_INNER_PKG, init_path)
-    pkg = importlib.util.module_from_spec(spec)
-    sys.modules[_INNER_PKG] = pkg
-    spec.loader.exec_module(pkg)
-
-    wizard_path = _ADDON_ROOT / "print_and_cut" / "wizard.py"
-    spec = importlib.util.spec_from_file_location(
-        f"{_INNER_PKG}.wizard", wizard_path
+    _load_module(_INNER_PKG, _ADDON_ROOT / "print_and_cut" / "__init__.py")
+    wizard_mod = _load_module(
+        f"{_INNER_PKG}.wizard", _ADDON_ROOT / "print_and_cut" / "wizard.py"
     )
-    wizard_mod = importlib.util.module_from_spec(spec)
-    sys.modules[f"{_INNER_PKG}.wizard"] = wizard_mod
-    spec.loader.exec_module(wizard_mod)
     return wizard_mod.PrintAndCutWizard
 
 
