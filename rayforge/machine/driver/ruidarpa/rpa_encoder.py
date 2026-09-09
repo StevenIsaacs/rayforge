@@ -112,6 +112,8 @@ class RuidaRPAEncoder(OpsEncoder):
         self._layer_mode: str = "VECTOR"
         self._overscan: str = "NONE"
         self._power_fraction: float = 0.0
+        self._power_min_fraction: float = 0.0
+        self._emitted_min_fraction: float = 0.0
         self._snapshot_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
@@ -240,6 +242,8 @@ class RuidaRPAEncoder(OpsEncoder):
             self._section_raster_mode = None
             self._layer_mode = "VECTOR"
             self._power_fraction = 0.0
+            self._power_min_fraction = 0.0
+            self._emitted_min_fraction = 0.0
             self._layer_uid = None
         elif ct == CommandType.WORKPIECE_START:
             self._handle_workpiece_start(ops, idx)
@@ -274,22 +278,41 @@ class RuidaRPAEncoder(OpsEncoder):
             )
 
     def _emit_power(self, power_fraction: float) -> None:
-        """Emit laser power for the current layer action block."""
+        """Emit laser power for the current layer action block.
+
+        Vector layers without overscan declare a power range whose lower
+        bound is the layer's resolved min-power fraction, letting the
+        controller ramp power during acceleration and deceleration. All
+        other modes keep min == max.
+        """
         self._require_active_layer()
         section_type = self._section_type
         raster_mode = self._section_raster_mode
         if power_fraction == 0.0:
             return
-        if section_type is not None and self._layer_mode == "IMAGE":
+        if section_type is not None and self._layer_mode in (
+            "IMAGE",
+            "DEPTHMAP",
+        ):
             if power_fraction == 0.0:
                 return
             self._gluescript.power(power_fraction * 100.0)
             return
 
-        if power_fraction != self._power_fraction:
+        min_fraction = power_fraction
+        if (
+            self._layer_mode == "VECTOR"
+            and self._overscan == "NONE"
+            and 0.0 < self._power_min_fraction < power_fraction
+        ):
+            min_fraction = self._power_min_fraction
+        if power_fraction != self._power_fraction or (
+            min_fraction != self._emitted_min_fraction
+        ):
             self._power_fraction = power_fraction
+            self._emitted_min_fraction = min_fraction
             self._gluescript.power_range(
-                power_fraction * 100.0, power_fraction * 100.0
+                min_fraction * 100.0, power_fraction * 100.0
             )
 
     def _find_layer(self, layer_uid: str) -> Optional["Layer"]:
@@ -307,10 +330,9 @@ class RuidaRPAEncoder(OpsEncoder):
         """Extract (speed_mms, frequency_khz, power_pct) for a layer.
 
         Reads the first workflow step, falling back to safe defaults. The
-        raw power percent is passed through unchanged; GlueScript
-        validates it against the controller limits and currently raises
-        ValueError for power below its 8% minimum (an upstream change
-        request asks it to clamp instead).
+        raw power percent is passed through unchanged; GlueScript clamps
+        power below its 8% minimum by emitting a ``# warning:`` comment
+        into the layer attributes rather than raising.
         """
         speed_mms = _DEFAULT_LAYER_SPEED_MMS
         power_fraction = _DEFAULT_LAYER_POWER
@@ -342,6 +364,31 @@ class RuidaRPAEncoder(OpsEncoder):
             else _DEFAULT_LAYER_FREQUENCY_KHZ
         )
         return speed_mms, frequency_khz, power_pct
+
+    def _layer_min_power_fraction(self, layer: Layer | None) -> float:
+        """Resolve the layer's min-power fraction for power compensation.
+
+        Reads the first workflow step's min_power, mirroring
+        ``_layer_settings``: step attribute, then step.extra, then
+        layer.extra, defaulting to the 8% controller floor. The raw
+        value is clamped once at this boundary so a min below 8% or
+        above 100% never reaches GlueScript as a lower power bound.
+        """
+        min_fraction = _POWER_FLOOR
+        if (
+            layer is not None
+            and layer.workflow is not None
+            and layer.workflow.steps
+        ):
+            first_step = layer.workflow.steps[0]
+            raw_min = getattr(first_step, "min_power", None)
+            if raw_min is None:
+                raw_min = first_step.extra.get("min_power", None)
+            if raw_min is None:
+                raw_min = layer.extra.get("min_power", None)
+            if raw_min is not None:
+                min_fraction = float(raw_min)
+        return min(max(min_fraction, _POWER_FLOOR), 1.0)
 
     # -- Movement handlers --------------------------------------------------
 
@@ -771,8 +818,16 @@ class RuidaRPAEncoder(OpsEncoder):
         self._layer_mode = layer_mode
         overscan = self._compute_overscan(ops, idx, layer_mode)
         self._overscan = overscan
+        self._power_min_fraction = self._layer_min_power_fraction(layer)
         if layer_mode == "IMAGE":
             min_power_1 = _POWER_FLOOR * 100.0
+            max_power_1 = power_pct
+        elif (
+            layer_mode == "VECTOR"
+            and overscan == "NONE"
+            and self._power_min_fraction * 100.0 < power_pct
+        ):
+            min_power_1 = self._power_min_fraction * 100.0
             max_power_1 = power_pct
         else:
             min_power_1 = power_pct
@@ -793,6 +848,8 @@ class RuidaRPAEncoder(OpsEncoder):
         """Emit a workpiece end marker and reset per-workpiece state."""
         self._overscan = "NONE"
         self._power_fraction = 0.0
+        self._power_min_fraction = 0.0
+        self._emitted_min_fraction = 0.0
         self._gluescript.comment(["# Workpiece End"])
 
     def _handle_ops_section_start(self, ops: Ops, idx: int) -> None:

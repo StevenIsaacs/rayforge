@@ -99,6 +99,12 @@ def _declare_layer_frequency(line: str) -> float:
     return args[5]
 
 
+def _declare_layer_min_power(line: str) -> float:
+    """Extract the min power argument from a declare_layer transcript line."""
+    args = ast.literal_eval(line[len("declare_layer(") : -1])
+    return args[6]
+
+
 def _declare_layer_power(line: str) -> float:
     """Extract the max power argument from a declare_layer transcript line."""
     args = ast.literal_eval(line[len("declare_layer(") : -1])
@@ -202,7 +208,7 @@ class TestLayerDeclaration:
 
         assert (
             "declare_layer('Layer 1', '#00ccff', 'VECTOR', 'NONE', "
-            "100.0, 20.0, 20.0, 20.0)" in result.text
+            "100.0, 20.0, 8.0, 20.0)" in result.text
         )
 
     def test_layer_settings_from_step(self, encoder, mock_machine, doc):
@@ -223,7 +229,7 @@ class TestLayerDeclaration:
 
         assert (
             "declare_layer('Layer 1', '#00ccff', 'VECTOR', 'NONE', "
-            "5.0, 20.0, 50.0, 50.0)" in result.text
+            "5.0, 20.0, 8.0, 50.0)" in result.text
         )
 
     def test_bare_step_uses_default_power_and_frequency(
@@ -285,12 +291,14 @@ class TestLayerDeclaration:
         assert _declare_layer_power(declared[0]) == 50.0
         assert _declare_layer_frequency(declared[0]) == 30.0
 
-    def test_power_below_minimum_raises_from_gluescript(
+    def test_power_below_minimum_clamps_from_gluescript(
         self, encoder, mock_machine, doc
     ):
-        """Power below the 8% controller minimum must raise in GlueScript.
+        """Power below the 8% controller minimum must clamp with a warning.
 
-        The encoder passes the raw power through; GlueScript rejects it.
+        GlueScript 0.20.3 no longer raises for a sub-8% min power; it
+        emits a ``# warning:`` comment into the layer attributes and
+        keeps the declared layer lines.
         """
         step = CutStep()
         step.power = 0.05
@@ -304,8 +312,18 @@ class TestLayerDeclaration:
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
 
-        with pytest.raises(ValueError):
-            encoder.encode(ops, mock_machine, doc)
+        result = encoder.encode(ops, mock_machine, doc)
+        assert any(
+            line.startswith("declare_layer(")
+            for line in result.text.split("\n")
+        )
+
+        gs = GlueScript()
+        gs.stage_gluescript(result.text.split("\n"))
+        assert any(
+            "min_power_1 5.0% is below the recommended minimum of 8%" in line
+            for line in gs.rpascript
+        )
 
     def test_unknown_layer_uses_defaults(self, encoder, mock_machine, doc):
         """Layers absent from the document should still stage cleanly."""
@@ -468,14 +486,16 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "power_range(50.0, 50.0)" in result.text
+        assert "power_range(8.0, 50.0)" in result.text
 
-    def test_power_action_below_minimum_raises_from_gluescript(
+    def test_power_action_below_minimum_clamps_from_gluescript(
         self, encoder, mock_machine, doc
     ):
-        """Per-op SET_POWER below 8% must raise in GlueScript.
+        """Per-op SET_POWER below 8% must clamp with a warning.
 
-        The encoder passes the raw power through; GlueScript rejects it.
+        GlueScript 0.20.3 no longer raises for a sub-8% power; the
+        power_range action carries the value and a ``# warning:``
+        comment is emitted into the staged rpascript.
         """
         ops = Ops()
         ops.job_start()
@@ -486,8 +506,15 @@ class TestSettingsCommands:
         ops.layer_end(layer_uid=doc.layers[0].uid)
         ops.job_end()
 
-        with pytest.raises(ValueError):
-            encoder.encode(ops, mock_machine, doc)
+        result = encoder.encode(ops, mock_machine, doc)
+        assert "power_range(5.0, 5.0)" in result.text
+
+        gs = GlueScript()
+        gs.stage_gluescript(result.text.split("\n"))
+        assert any(
+            "min_power_1 5.0% is below the recommended minimum of 8%" in line
+            for line in gs.rpascript
+        )
 
     def test_legacy_coolant_non_off_logs_warning(
         self, encoder, mock_machine, doc, caplog
@@ -883,6 +910,219 @@ class TestSectionPowerRouting:
             encoder.encode(ops, mock_machine, doc)
 
 
+class TestPowerCompensation:
+    """VECTOR layers declare and emit min<max power compensation."""
+
+    @staticmethod
+    def _vector_job(doc, power):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.set_power(power)
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
+
+    @staticmethod
+    def _declared_min_power(text):
+        declared = next(
+            line
+            for line in text.split("\n")
+            if line.startswith("declare_layer(")
+        )
+        return _declare_layer_min_power(declared)
+
+    def test_step_min_power_attribute_compensates(
+        self, encoder, mock_machine, doc
+    ):
+        """min_power on the first workflow step lowers the vector floor."""
+        step = CutStep()
+        step.power = 0.5
+        step.min_power = 0.3
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 30.0
+        assert "power_range(30.0, 50.0)" in result.text
+
+    def test_step_extra_min_power_fallback(self, encoder, mock_machine, doc):
+        """Unregistered steps recover min_power from step.extra."""
+        step = Step.from_dict(
+            {
+                "typelabel": "laser",
+                "step_type": "NoSuchStep",
+                "name": "x",
+                "uid": "u1",
+                "matrix": Matrix().to_list(),
+                "visible": True,
+                "power": 0.5,
+                "min_power": 0.3,
+            }
+        )
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 30.0
+        assert "power_range(30.0, 50.0)" in result.text
+
+    def test_layer_extra_min_power_fallback(self, encoder, mock_machine, doc):
+        """min_power on the layer's extra applies when the step has none."""
+        step = CutStep()
+        step.power = 0.5
+        doc.layers[0].workflow.add_step(step)
+        doc.layers[0].extra["min_power"] = 0.3
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 30.0
+
+    def test_min_power_source_precedence(self, encoder, mock_machine, doc):
+        """Step attr beats step.extra, which beats layer.extra."""
+        step0 = CutStep()
+        step0.power = 0.5
+        step0.min_power = 0.3
+        step0.extra["min_power"] = 0.35
+        doc.layers[0].extra["min_power"] = 0.4
+        doc.layers[0].workflow.add_step(step0)
+
+        step1 = CutStep()
+        step1.power = 0.5
+        step1.extra["min_power"] = 0.35
+        doc.layers[1].extra["min_power"] = 0.4
+        doc.layers[1].workflow.add_step(step1)
+
+        step2 = CutStep()
+        step2.power = 0.5
+        doc.layers[2].extra["min_power"] = 0.4
+        doc.layers[2].workflow.add_step(step2)
+
+        expected = {
+            doc.layers[0].uid: 30.0,
+            doc.layers[1].uid: 35.0,
+            doc.layers[2].uid: 40.0,
+        }
+        for layer_uid, min_pct in expected.items():
+            ops = Ops()
+            ops.job_start()
+            ops.layer_start(layer_uid=layer_uid)
+            ops.workpiece_start("wp-0")
+            ops.workpiece_end("wp-0")
+            ops.layer_end(layer_uid=layer_uid)
+            ops.job_end()
+            result = encoder.encode(ops, mock_machine, doc)
+            assert self._declared_min_power(result.text) == min_pct
+
+    def test_min_power_defaults_to_floor(self, encoder, mock_machine, doc):
+        """Vector layers without min_power use the 8% controller floor."""
+        step = CutStep()
+        step.power = 0.5
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 8.0
+        assert "power_range(8.0, 50.0)" in result.text
+
+    def test_min_power_below_floor_clamps_to_floor(
+        self, encoder, mock_machine, doc
+    ):
+        """A sub-8% min_power clamps up to the floor without raising."""
+        step = CutStep()
+        step.power = 0.5
+        step.min_power = 0.03
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 8.0
+        assert "power_range(8.0, 50.0)" in result.text
+
+    @pytest.mark.parametrize(
+        "power,expected",
+        [
+            (0.3, "power_range(30.0, 30.0)"),
+            (0.2, "power_range(20.0, 20.0)"),
+        ],
+    )
+    def test_compensation_off_when_power_at_or_below_min(
+        self, encoder, mock_machine, doc, power, expected
+    ):
+        """A power at or below the min emits min == max."""
+        step = CutStep()
+        step.power = 0.5
+        step.min_power = 0.3
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(
+            self._vector_job(doc, power), mock_machine, doc
+        )
+
+        assert self._declared_min_power(result.text) == 30.0
+        assert expected in result.text
+
+    def test_raster_constant_power_ignores_min(
+        self, encoder, mock_machine, doc
+    ):
+        """RASTER layers ignore min_power; min stays equal to max."""
+        step = CutStep()
+        step.power = 0.5
+        step.min_power = 0.3
+        doc.layers[0].workflow.add_step(step)
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.CONSTANT_POWER,
+        )
+        ops.set_power(0.5)
+        ops.ops_section_end(
+            SectionType.RASTER_FILL, raster_mode=RasterMode.CONSTANT_POWER
+        )
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        declared = next(
+            line
+            for line in result.text.split("\n")
+            if line.startswith("declare_layer(")
+        )
+        assert _declare_layer_min_power(declared) == 50.0
+        assert _declare_layer_power(declared) == 50.0
+        assert "power_range(50.0, 50.0)" in result.text
+
+    def test_identical_power_reemitted_on_next_workpiece(
+        self, encoder, mock_machine, doc
+    ):
+        """Per-workpiece state resets so a matching power re-emits."""
+        step = CutStep()
+        step.power = 0.5
+        step.min_power = 0.3
+        doc.layers[0].workflow.add_step(step)
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        for index in range(2):
+            ops.workpiece_start(f"wp-{index}")
+            ops.set_power(0.5)
+            ops.workpiece_end(f"wp-{index}")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        assert result.text.count("power_range(30.0, 50.0)") == 2
+
+
 class TestLayerOverscan:
     """declare_layer overscan follows the layer's raster scan lines."""
 
@@ -1102,6 +1342,10 @@ class TestLayerOverscan:
         ops.job_end()
 
         mock_gluescript = Mock(spec=GlueScript)
+        # 0.20.3 GlueScript gained set_overscan; delete it so the mock
+        # simulates an older backend that lacks the method, exercising
+        # the encoder's fallback path.
+        del mock_gluescript.set_overscan
         mock_gluescript.gluescript = []
         encoder = RuidaRPAEncoder(gluescript=mock_gluescript)
         encoder.encode(ops, mock_machine, doc)
@@ -1158,6 +1402,7 @@ class TestCurveLinearization:
         ops.layer_start(layer_uid=doc.layers[0].uid)
         ops.workpiece_start("wp-0")
         ops.move_to(0.0, 0.0, 0.0)
+        ops.set_power(0.5)
         ops.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
         ops.workpiece_end("wp-0")
         ops.layer_end(layer_uid=doc.layers[0].uid)
@@ -1255,8 +1500,11 @@ class TestCurveLinearization:
         result = encoder.encode(ops, mock_machine, doc)
 
         lines = result.text.split("\n")
+        # The horizontal scan runs on an X_BI overscan layer, so its
+        # segments use single-axis X forms.
         assert any(line.startswith("move_xy_to(") for line in lines)
-        assert any(line.startswith("cut_xy_to(") for line in lines)
+        assert any(line.startswith("move_x_to(") for line in lines)
+        assert any(line.startswith("cut_x_to(") for line in lines)
         assert "power_range(0.0, 0.0)" not in lines
         assert "power(0.0)" not in lines
 

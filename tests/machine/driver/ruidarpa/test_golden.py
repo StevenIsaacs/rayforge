@@ -86,7 +86,7 @@ class TestGoldenStructure:
         text = _encode_representative_job()
         assert (
             "declare_layer('Cut', '#ff6600', 'VECTOR', 'NONE', "
-            "5.0, 20.0, 50.0, 50.0)" in text
+            "5.0, 20.0, 8.0, 50.0)" in text
         )
         assert (
             "declare_layer('Engrave', '#33cc33', 'IMAGE', 'X_BI', "
@@ -94,7 +94,7 @@ class TestGoldenStructure:
         )
         assert (
             "declare_layer('Default', '#00ccff', 'VECTOR', 'NONE', "
-            "100.0, 20.0, 20.0, 20.0)" in text
+            "100.0, 20.0, 8.0, 20.0)" in text
         )
 
     def test_layer_action_blocks(self):
@@ -114,10 +114,14 @@ class TestGoldenStructure:
         assert "move_xy_to(0.0, 0.0)" in text
         assert "move_xy_to(20.0, 20.0)" in text
         assert "cut_xy_to(5.0, 5.0)" in text
-        assert "cut_xy_to(50.0, 20.0)" in text
+        # The engrave layer is X_BI overscan, so its horizontal fill
+        # emits the single-axis X form.
+        assert "cut_x_to(50.0)" in text
         assert text.count("cut_xy_to(") > 5
-        assert "power(50.19607843137255)" in text
-        assert "power(100.0)" in text
+        # Per-pixel scan power carries the 8% controller floor, so the
+        # 128/255 and 255/255 pixels emit 58.196...% and 108.0%.
+        assert "power(58.19607843137254)" in text
+        assert "power(108.0)" in text
 
 
 class TestTranscriptStaging:

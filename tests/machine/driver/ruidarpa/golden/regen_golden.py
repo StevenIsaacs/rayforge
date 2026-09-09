@@ -2,7 +2,7 @@
 
 Run from the repo root inside the ruidarpa pixi environment:
 
-    pixi run -e ruidarpa python \\
+    pixi run -e ruida-pa python \\
         tests/machine/driver/ruidarpa/golden/regen_golden.py
 
 The fixture locks the encoder's GlueScript transcript byte-for-byte
