@@ -538,10 +538,11 @@ class PrintAndCutWizard(PatchedDialogWindow):
             return
 
         pos = self._machine.get_current_position()
-        if pos is None:
+        if pos is None or len(pos) < 2:
             return
 
-        x_val, y_val, _z_val = pos
+        x_val = pos[0]
+        y_val = pos[1]
         if x_val is None or y_val is None:
             return
 
@@ -603,7 +604,10 @@ class PrintAndCutWizard(PatchedDialogWindow):
             return
         pos = self._machine.get_current_position()
         if pos:
-            x_val, y_val, _z_val = pos
+            if len(pos) < 2:
+                return
+            x_val = pos[0]
+            y_val = pos[1]
             if x_val is not None and y_val is not None:
                 self._laser_row.set_subtitle(f"X: {x_val:.2f}  Y: {y_val:.2f}")
 
