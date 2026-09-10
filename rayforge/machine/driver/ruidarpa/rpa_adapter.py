@@ -42,6 +42,9 @@ from rayforge.machine.driver.driver import (
     PWMParams,
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import RpaDirectDriver
+from rayforge.machine.driver.ruidarpa.rpa_encoder import (
+    DEFAULT_POWER_FLOOR,
+)
 from rayforge.machine.models.laser import LaserHead
 from rayforge.machine.transport import TransportStatus
 
@@ -262,6 +265,18 @@ class RuidaRPAAdapter(Driver):
                     min_val=1.0,
                     digits=1,
                     visible_when=lambda v: v.get("tui", False),
+                ),
+                FloatVar(
+                    key="power_floor",
+                    label=_("VECTOR power floor"),
+                    description=_(
+                        "Minimum power fraction for VECTOR cut "
+                        "compensation (% of max, e.g. 0.08 = 8%)."
+                    ),
+                    default=DEFAULT_POWER_FLOOR,
+                    min_val=0.0,
+                    max_val=1.0,
+                    digits=3,
                 ),
             ]
         )

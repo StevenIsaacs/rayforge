@@ -1123,6 +1123,74 @@ class TestPowerCompensation:
         assert result.text.count("power_range(30.0, 50.0)") == 2
 
 
+class TestPowerFloorFromDriverArgs:
+    """Encoder reads the power floor from machine.driver_args."""
+
+    @staticmethod
+    def _vector_job(doc, power):
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.set_power(power)
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
+
+    @staticmethod
+    def _declared_min_power(text):
+        declared = next(
+            line
+            for line in text.split("\n")
+            if line.startswith("declare_layer(")
+        )
+        return _declare_layer_min_power(declared)
+
+    def test_custom_power_floor_reflects_in_min_power(
+        self, encoder, mock_machine, doc
+    ):
+        """A non-default power_floor from driver_args raises the floor."""
+        mock_machine.driver_args = {"power_floor": 0.2}
+        step = CutStep()
+        step.power = 0.5
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 20.0
+        assert "power_range(20.0, 50.0)" in result.text
+
+    def test_default_power_floor_when_key_absent(
+        self, encoder, mock_machine, doc
+    ):
+        """Without a power_floor key the encoder uses the default 8%."""
+        mock_machine.driver_args = {}
+        step = CutStep()
+        step.power = 0.5
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        assert self._declared_min_power(result.text) == 8.0
+        assert "power_range(8.0, 50.0)" in result.text
+
+    def test_power_floor_clamps_out_of_range_to_one(
+        self, encoder, mock_machine, doc
+    ):
+        """An out-of-range power_floor (e.g. 1.5) clamps to 100%."""
+        mock_machine.driver_args = {"power_floor": 1.5}
+        step = CutStep()
+        step.power = 0.5
+        doc.layers[0].workflow.add_step(step)
+
+        result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
+
+        # 1.5 is clamped to 1.0 at read time; with no explicit
+        # min_power, the layer min defaults to the step power.
+        assert self._declared_min_power(result.text) == 50.0
+
+
 class TestLayerOverscan:
     """declare_layer overscan follows the layer's raster scan lines."""
 
