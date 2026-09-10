@@ -56,6 +56,9 @@ from rayforge.machine.driver.ruidarpa.rpa_adapter import (
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
     RpaDirectDriver,
 )
+from rayforge.machine.driver.ruidarpa.rpa_encoder import (
+    DEFAULT_POWER_FLOOR,
+)
 from rayforge.machine.models.laser import Laser
 from rayforge.machine.models.machine import Origin
 from rayforge.machine.transport import TransportStatus
@@ -2479,3 +2482,20 @@ class TestSeedMachineSpeedDefaults:
 
         assert m.max_cut_speed == 20000
         assert m.max_travel_speed == 50000
+
+
+class TestPowerFloorSetup:
+    """The setup 'power_floor' var exposes VECTOR cut compensation floor."""
+
+    def test_power_floor_var_present_with_driver_defaults(
+        self, isolated_context, isolated_machine
+    ):
+        """get_setup_vars must expose a power_floor var with defaults."""
+        adapter = RuidaRPAAdapter(isolated_context, isolated_machine)
+        varset = adapter.get_setup_vars()
+        pf_var = varset.get("power_floor")
+        assert pf_var is not None
+        assert isinstance(pf_var, FloatVar)
+        assert pf_var.default == DEFAULT_POWER_FLOOR
+        assert pf_var.min_val == 0.0
+        assert pf_var.max_val == 1.0

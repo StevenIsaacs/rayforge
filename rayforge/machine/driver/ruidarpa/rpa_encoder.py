@@ -52,7 +52,7 @@ _DEFAULT_LAYER_FREQUENCY_HZ = _DEFAULT_LAYER_FREQUENCY_KHZ * 1000
 _DEFAULT_LAYER_POWER = 0.2  # fraction, i.e. 20%
 _DEFAULT_JOB_LABEL = "Rayforge Job"
 _DEFAULT_LAYER_COLOR = "#00ccff"
-_POWER_FLOOR = 0.08  # fraction, i.e. 8%
+DEFAULT_POWER_FLOOR = 0.08  # fraction, i.e. 8%
 
 # Maps the framework WCS slot names to the Ruida reference point strings
 # accepted by GlueScript.declare_job. The framework default WCS ("G54")
@@ -114,6 +114,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self._power_fraction: float = 0.0
         self._power_min_fraction: float = 0.0
         self._emitted_min_fraction: float = 0.0
+        self._power_floor: float = DEFAULT_POWER_FLOOR
         self._snapshot_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
@@ -164,6 +165,9 @@ class RuidaRPAEncoder(OpsEncoder):
 
         self.doc = doc
         self.machine = machine
+        driver_args = machine.driver_args if machine is not None else {}
+        raw_floor = driver_args.get("power_floor", DEFAULT_POWER_FLOOR)
+        self._power_floor = min(max(float(raw_floor), 0.0), 1.0)
         self.op_map = MachineCodeOpMap()
         self._op_count = ops.len()
         if self._gluescript is None:
@@ -370,11 +374,12 @@ class RuidaRPAEncoder(OpsEncoder):
 
         Reads the first workflow step's min_power, mirroring
         ``_layer_settings``: step attribute, then step.extra, then
-        layer.extra, defaulting to the 8% controller floor. The raw
-        value is clamped once at this boundary so a min below 8% or
-        above 100% never reaches GlueScript as a lower power bound.
+        layer.extra, defaulting to the configured power floor (default
+        8%). The raw value is clamped once at this boundary so a min
+        below the floor or above 100% never reaches GlueScript as a
+        lower power bound.
         """
-        min_fraction = _POWER_FLOOR
+        min_fraction = self._power_floor
         if (
             layer is not None
             and layer.workflow is not None
@@ -388,7 +393,7 @@ class RuidaRPAEncoder(OpsEncoder):
                 raw_min = layer.extra.get("min_power", None)
             if raw_min is not None:
                 min_fraction = float(raw_min)
-        return min(max(min_fraction, _POWER_FLOOR), 1.0)
+        return min(max(min_fraction, self._power_floor), 1.0)
 
     # -- Movement handlers --------------------------------------------------
 
@@ -486,7 +491,7 @@ class RuidaRPAEncoder(OpsEncoder):
             elif sub_ct == CommandType.SET_POWER:
                 power = sub_ops.power(j)
                 if power > 0.0:
-                    self._emit_power(power + _POWER_FLOOR)
+                    self._emit_power(min(power + self._power_floor, 1.0))
                 else:
                     self._emit_power(0.0)
 
@@ -820,7 +825,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self._overscan = overscan
         self._power_min_fraction = self._layer_min_power_fraction(layer)
         if layer_mode == "IMAGE":
-            min_power_1 = _POWER_FLOOR * 100.0
+            min_power_1 = self._power_floor * 100.0
             max_power_1 = power_pct
         elif (
             layer_mode == "VECTOR"
