@@ -771,6 +771,40 @@ class TestGrblSerialDriver:
         assert unknown_varset["999"].value == "123"
 
     @pytest.mark.asyncio
+    async def test_read_settings_grblhal_mask_values(
+        self, connected_driver: GrblSerialDriver, mock_serial_transport
+    ):
+        """Regression test for #401: grblHAL reports $4/$5 as masks.
+
+        A mask value like 15 must be displayed instead of aborting
+        the whole settings read.
+        """
+        driver = connected_driver
+        settings_read_mock = MagicMock()
+        driver.settings_read.send = settings_read_mock
+
+        settings_response = b"$4=15\r\n$5=15\r\nok\r\n"
+        read_task = asyncio.create_task(driver.read_settings())
+
+        await asyncio.sleep(0.01)
+        mock_serial_transport.send.assert_called_with(b"$$\n")
+        driver.on_serial_data_received(
+            mock_serial_transport, settings_response
+        )
+        await read_task
+
+        settings_read_mock.assert_called_once()
+        settings = settings_read_mock.call_args.kwargs["settings"]
+
+        stepper_varset = next(
+            s
+            for s in settings
+            if "4" in s.keys()  # noqa: SIM118
+        )
+        assert stepper_varset["4"].value == 15
+        assert stepper_varset["5"].value == 15
+
+    @pytest.mark.asyncio
     async def test_set_wcs_offset(
         self, connected_driver: GrblSerialDriver, mock_serial_transport, mocker
     ):
