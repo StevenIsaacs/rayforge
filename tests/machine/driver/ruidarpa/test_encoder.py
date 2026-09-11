@@ -208,7 +208,7 @@ class TestLayerDeclaration:
 
         assert (
             "declare_layer('Layer 1', '#00ccff', 'VECTOR', 'NONE', "
-            "100.0, 20.0, 8.0, 20.0)" in result.text
+            "100.0, 20.0, 20.0, 20.0)" in result.text
         )
 
     def test_layer_settings_from_step(self, encoder, mock_machine, doc):
@@ -229,7 +229,7 @@ class TestLayerDeclaration:
 
         assert (
             "declare_layer('Layer 1', '#00ccff', 'VECTOR', 'NONE', "
-            "5.0, 20.0, 8.0, 50.0)" in result.text
+            "5.0, 20.0, 50.0, 50.0)" in result.text
         )
 
     def test_bare_step_uses_default_power_and_frequency(
@@ -486,7 +486,7 @@ class TestSettingsCommands:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert "power_range(8.0, 50.0)" in result.text
+        assert "power_range(50.0, 50.0)" in result.text
 
     def test_power_action_below_minimum_clamps_from_gluescript(
         self, encoder, mock_machine, doc
@@ -747,10 +747,10 @@ class TestSectionPowerRouting:
             "clamping" in record.message for record in caplog.records
         )
 
-    def test_image_section_declares_power_floor_minimum(
+    def test_image_section_declares_power_equal_min_max(
         self, encoder, mock_machine, doc
     ):
-        """IMAGE layers declare the 8% power floor as min_power_1."""
+        """IMAGE layers declare min==max power (no floor bias)."""
         step = CutStep()
         step.power = 0.5
         doc.layers[0].workflow.add_step(step)
@@ -763,7 +763,7 @@ class TestSectionPowerRouting:
             if line.startswith("declare_layer(")
         ]
         args = ast.literal_eval(declared[0][len("declare_layer(") : -1])
-        assert args[6] == 8.0
+        assert args[6] == 50.0
         assert args[7] == 50.0
 
     def test_depth_map_section_uses_power_gluescript(
@@ -938,6 +938,7 @@ class TestPowerCompensation:
         self, encoder, mock_machine, doc
     ):
         """min_power on the first workflow step lowers the vector floor."""
+        mock_machine.driver_args = {"power_floor": 1.0}
         step = CutStep()
         step.power = 0.5
         step.min_power = 0.3
@@ -950,6 +951,7 @@ class TestPowerCompensation:
 
     def test_step_extra_min_power_fallback(self, encoder, mock_machine, doc):
         """Unregistered steps recover min_power from step.extra."""
+        mock_machine.driver_args = {"power_floor": 1.0}
         step = Step.from_dict(
             {
                 "typelabel": "laser",
@@ -971,6 +973,7 @@ class TestPowerCompensation:
 
     def test_layer_extra_min_power_fallback(self, encoder, mock_machine, doc):
         """min_power on the layer's extra applies when the step has none."""
+        mock_machine.driver_args = {"power_floor": 1.0}
         step = CutStep()
         step.power = 0.5
         doc.layers[0].workflow.add_step(step)
@@ -982,6 +985,7 @@ class TestPowerCompensation:
 
     def test_min_power_source_precedence(self, encoder, mock_machine, doc):
         """Step attr beats step.extra, which beats layer.extra."""
+        mock_machine.driver_args = {"power_floor": 1.0}
         step0 = CutStep()
         step0.power = 0.5
         step0.min_power = 0.3
@@ -1017,20 +1021,23 @@ class TestPowerCompensation:
             assert self._declared_min_power(result.text) == min_pct
 
     def test_min_power_defaults_to_floor(self, encoder, mock_machine, doc):
-        """Vector layers without min_power use the 8% controller floor."""
+        """Vector layers without min_power use the 100% floor (min==max)."""
         step = CutStep()
         step.power = 0.5
         doc.layers[0].workflow.add_step(step)
 
         result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
 
-        assert self._declared_min_power(result.text) == 8.0
-        assert "power_range(8.0, 50.0)" in result.text
+        # With default floor=100%, the elif condition (100 < 50) is
+        # False, so min==max==power_pct.
+        assert self._declared_min_power(result.text) == 50.0
+        assert "power_range(50.0, 50.0)" in result.text
 
     def test_min_power_below_floor_clamps_to_floor(
         self, encoder, mock_machine, doc
     ):
-        """A sub-8% min_power clamps up to the floor without raising."""
+        """A sub-100% min_power clamps up to the floor; with default
+        floor=100% min==max==power_pct (100% >= 50%)."""
         step = CutStep()
         step.power = 0.5
         step.min_power = 0.03
@@ -1038,8 +1045,8 @@ class TestPowerCompensation:
 
         result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
 
-        assert self._declared_min_power(result.text) == 8.0
-        assert "power_range(8.0, 50.0)" in result.text
+        assert self._declared_min_power(result.text) == 50.0
+        assert "power_range(50.0, 50.0)" in result.text
 
     @pytest.mark.parametrize(
         "power,expected",
@@ -1052,6 +1059,7 @@ class TestPowerCompensation:
         self, encoder, mock_machine, doc, power, expected
     ):
         """A power at or below the min emits min == max."""
+        mock_machine.driver_args = {"power_floor": 1.0}
         step = CutStep()
         step.power = 0.5
         step.min_power = 0.3
@@ -1120,7 +1128,7 @@ class TestPowerCompensation:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        assert result.text.count("power_range(30.0, 50.0)") == 2
+        assert result.text.count("power_range(50.0, 50.0)") == 2
 
 
 class TestPowerFloorFromDriverArgs:
@@ -1151,7 +1159,7 @@ class TestPowerFloorFromDriverArgs:
         self, encoder, mock_machine, doc
     ):
         """A non-default power_floor from driver_args raises the floor."""
-        mock_machine.driver_args = {"power_floor": 0.2}
+        mock_machine.driver_args = {"power_floor": 20.0}
         step = CutStep()
         step.power = 0.5
         doc.layers[0].workflow.add_step(step)
@@ -1164,7 +1172,7 @@ class TestPowerFloorFromDriverArgs:
     def test_default_power_floor_when_key_absent(
         self, encoder, mock_machine, doc
     ):
-        """Without a power_floor key the encoder uses the default 8%."""
+        """Without a power_floor key the encoder uses the default 100%."""
         mock_machine.driver_args = {}
         step = CutStep()
         step.power = 0.5
@@ -1172,23 +1180,157 @@ class TestPowerFloorFromDriverArgs:
 
         result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
 
-        assert self._declared_min_power(result.text) == 8.0
-        assert "power_range(8.0, 50.0)" in result.text
+        # Floor=100% >= power_pct(50%), so elif (100 < 50) is False;
+        # min==max==power_pct.
+        assert self._declared_min_power(result.text) == 50.0
+        assert "power_range(50.0, 50.0)" in result.text
 
-    def test_power_floor_clamps_out_of_range_to_one(
+    def test_power_floor_clamps_out_of_range_to_max(
         self, encoder, mock_machine, doc
     ):
-        """An out-of-range power_floor (e.g. 1.5) clamps to 100%."""
-        mock_machine.driver_args = {"power_floor": 1.5}
+        """An out-of-range power_floor (e.g. 150.0) clamps to 100%."""
+        mock_machine.driver_args = {"power_floor": 150.0}
         step = CutStep()
         step.power = 0.5
         doc.layers[0].workflow.add_step(step)
 
         result = encoder.encode(self._vector_job(doc, 0.5), mock_machine, doc)
 
-        # 1.5 is clamped to 1.0 at read time; with no explicit
+        # 150.0 is clamped to 100.0 at read time; with no explicit
         # min_power, the layer min defaults to the step power.
         assert self._declared_min_power(result.text) == 50.0
+
+
+class TestImagePowerBias:
+    """Per-pixel IMAGE scan power uses image_power_bias, not power_floor."""
+
+    def _image_scan_job(self, doc, power_values):
+        """Build an IMAGE-layer job with a scan line of given pixel values."""
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.ops_section_start(
+            SectionType.RASTER_FILL,
+            "wp-0",
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.scan_to(5.0, 0.0, 0.0, bytearray(power_values))
+        ops.ops_section_end(
+            SectionType.RASTER_FILL,
+            raster_mode=RasterMode.VARIABLE_POWER,
+        )
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        return ops
+
+    def test_scan_uses_bias_zero_pixel_128(self, encoder, mock_machine, doc):
+        """With image_power_bias=0, pixel 128/255 emits ~50.2%."""
+        mock_machine.driver_args = {"image_power_bias": 0.0}
+        ops = self._image_scan_job(doc, [128])
+        result = encoder.encode(ops, mock_machine, doc)
+        assert "power(" in result.text
+        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        assert len(lines) == 1
+        val = float(lines[0][len("power(") : -1])
+        expected = 128.0 / 255.0 * 100.0
+        assert abs(val - expected) < 1e-10
+
+    def test_scan_uses_bias_zero_pixel_255_clamps(
+        self, encoder, mock_machine, doc
+    ):
+        """With image_power_bias=0, pixel 255/255 emits 100.0 (clamped)."""
+        mock_machine.driver_args = {"image_power_bias": 0.0}
+        ops = self._image_scan_job(doc, [255])
+        result = encoder.encode(ops, mock_machine, doc)
+        assert "power(100.0)" in result.text
+
+    def test_scan_uses_default_bias_pixel_128(
+        self, encoder, mock_machine, doc
+    ):
+        """With default image_power_bias (8.0), pixel 128/255 emits ~58.2%."""
+        mock_machine.driver_args = {}
+        ops = self._image_scan_job(doc, [128])
+        result = encoder.encode(ops, mock_machine, doc)
+        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        assert len(lines) == 1
+        val = float(lines[0][len("power(") : -1])
+        expected = 128.0 / 255.0 * 100.0 + 8.0
+        assert abs(val - expected) < 1e-10
+
+    def test_vector_curve_uses_power_floor_not_bias(
+        self, encoder, mock_machine, doc
+    ):
+        """VECTOR arc linearization uses _power_floor, not _image_power_bias."""
+        mock_machine.driver_args = {
+            "power_floor": 20.0,
+            "image_power_bias": 0.0,
+        }
+        step = CutStep()
+        step.power = 0.5
+        doc.layers[0].workflow.add_step(step)
+
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.set_power(0.5)
+        ops.move_to(0.0, 0.0, 0.0)
+        ops.arc_to(10.0, 0.0, 5.0, 0.0, clockwise=True)
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        if lines:
+            for l in lines:
+                val = float(l[len("power(") : -1])
+                assert abs(val - 70.0) < 1e-10 or val == 0.0
+
+    def test_top_level_set_power_not_biased(self, encoder, mock_machine, doc):
+        """Top-level SET_POWER outside a section is not biased."""
+        mock_machine.driver_args = {"image_power_bias": 10.0}
+        ops = Ops()
+        ops.job_start()
+        ops.layer_start(layer_uid=doc.layers[0].uid)
+        ops.workpiece_start("wp-0")
+        ops.set_power(0.5)
+        ops.workpiece_end("wp-0")
+        ops.layer_end(layer_uid=doc.layers[0].uid)
+        ops.job_end()
+        result = encoder.encode(ops, mock_machine, doc)
+
+        assert "power_range(50.0, 50.0)" in result.text
+
+    def test_default_image_power_bias_when_key_absent(
+        self, encoder, mock_machine, doc
+    ):
+        """Without image_power_bias key the encoder uses default 8.0."""
+        mock_machine.driver_args = {}
+        ops = self._image_scan_job(doc, [128])
+        result = encoder.encode(ops, mock_machine, doc)
+        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        assert len(lines) == 1
+        val = float(lines[0][len("power(") : -1])
+        expected = 128.0 / 255.0 * 100.0 + 8.0
+        assert abs(val - expected) < 1e-10
+
+    def test_out_of_range_bias_clamps_to_100(self, encoder, mock_machine, doc):
+        """An image_power_bias > 100 is clamped to 100% at read time."""
+        mock_machine.driver_args = {"image_power_bias": 200.0}
+        ops = self._image_scan_job(doc, [255])
+        result = encoder.encode(ops, mock_machine, doc)
+        assert "power(100.0)" in result.text
+
+    def test_bias_zero_pixel_0_emits_nothing(self, encoder, mock_machine, doc):
+        """Pixel value 0/255 yields 0% power — nothing emitted."""
+        mock_machine.driver_args = {"image_power_bias": 0.0}
+        ops = self._image_scan_job(doc, [0])
+        result = encoder.encode(ops, mock_machine, doc)
+        assert "power(" not in result.text
 
 
 class TestLayerOverscan:

@@ -57,6 +57,7 @@ from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
     RpaDirectDriver,
 )
 from rayforge.machine.driver.ruidarpa.rpa_encoder import (
+    DEFAULT_IMAGE_POWER_BIAS,
     DEFAULT_POWER_FLOOR,
 )
 from rayforge.machine.models.laser import Laser
@@ -2498,4 +2499,11 @@ class TestPowerFloorSetup:
         assert isinstance(pf_var, FloatVar)
         assert pf_var.default == DEFAULT_POWER_FLOOR
         assert pf_var.min_val == 0.0
-        assert pf_var.max_val == 1.0
+        assert pf_var.max_val == 100.0
+
+        ipb_var = varset.get("image_power_bias")
+        assert ipb_var is not None
+        assert isinstance(ipb_var, FloatVar)
+        assert ipb_var.default == DEFAULT_IMAGE_POWER_BIAS
+        assert ipb_var.min_val == 0.0
+        assert ipb_var.max_val == 100.0

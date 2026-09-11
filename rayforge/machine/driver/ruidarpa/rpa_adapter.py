@@ -43,6 +43,7 @@ from rayforge.machine.driver.driver import (
 )
 from rayforge.machine.driver.ruidarpa.rpa_direct_driver import RpaDirectDriver
 from rayforge.machine.driver.ruidarpa.rpa_encoder import (
+    DEFAULT_IMAGE_POWER_BIAS,
     DEFAULT_POWER_FLOOR,
 )
 from rayforge.machine.models.laser import LaserHead
@@ -270,13 +271,26 @@ class RuidaRPAAdapter(Driver):
                     key="power_floor",
                     label=_("VECTOR power floor"),
                     description=_(
-                        "Minimum power fraction for VECTOR cut "
-                        "compensation (% of max, e.g. 0.08 = 8%)."
+                        "Minimum power percentage for VECTOR cut "
+                        "compensation (e.g. 8 = 8%)."
                     ),
                     default=DEFAULT_POWER_FLOOR,
                     min_val=0.0,
-                    max_val=1.0,
+                    max_val=100.0,
                     digits=3,
+                ),
+                FloatVar(
+                    key="image_power_bias",
+                    label=_("IMAGE power bias"),
+                    description=_(
+                        "Power bias added to IMAGE/raster "
+                        "scan-line power (SET_POWER), % of max "
+                        "(e.g. 8 = 8%)."
+                    ),
+                    default=DEFAULT_IMAGE_POWER_BIAS,
+                    min_val=0.0,
+                    max_val=100.0,
+                    digits=1,
                 ),
             ]
         )

@@ -52,7 +52,8 @@ _DEFAULT_LAYER_FREQUENCY_HZ = _DEFAULT_LAYER_FREQUENCY_KHZ * 1000
 _DEFAULT_LAYER_POWER = 0.2  # fraction, i.e. 20%
 _DEFAULT_JOB_LABEL = "Rayforge Job"
 _DEFAULT_LAYER_COLOR = "#00ccff"
-DEFAULT_POWER_FLOOR = 0.08  # fraction, i.e. 8%
+DEFAULT_POWER_FLOOR = 100.0  # percent, i.e. 100%
+DEFAULT_IMAGE_POWER_BIAS = 8.0  # percent, i.e. 8%
 
 # Maps the framework WCS slot names to the Ruida reference point strings
 # accepted by GlueScript.declare_job. The framework default WCS ("G54")
@@ -114,7 +115,8 @@ class RuidaRPAEncoder(OpsEncoder):
         self._power_fraction: float = 0.0
         self._power_min_fraction: float = 0.0
         self._emitted_min_fraction: float = 0.0
-        self._power_floor: float = DEFAULT_POWER_FLOOR
+        self._power_floor: float = DEFAULT_POWER_FLOOR / 100.0
+        self._image_power_bias: float = DEFAULT_IMAGE_POWER_BIAS / 100.0
         self._snapshot_len: int = 0
         self._op_count: int = 0
         self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
@@ -167,7 +169,11 @@ class RuidaRPAEncoder(OpsEncoder):
         self.machine = machine
         driver_args = machine.driver_args if machine is not None else {}
         raw_floor = driver_args.get("power_floor", DEFAULT_POWER_FLOOR)
-        self._power_floor = min(max(float(raw_floor), 0.0), 1.0)
+        self._power_floor = min(max(float(raw_floor), 0.0), 100.0) / 100.0
+        raw_bias = driver_args.get(
+            "image_power_bias", DEFAULT_IMAGE_POWER_BIAS
+        )
+        self._image_power_bias = min(max(float(raw_bias), 0.0), 100.0) / 100.0
         self.op_map = MachineCodeOpMap()
         self._op_count = ops.len()
         if self._gluescript is None:
@@ -375,7 +381,7 @@ class RuidaRPAEncoder(OpsEncoder):
         Reads the first workflow step's min_power, mirroring
         ``_layer_settings``: step attribute, then step.extra, then
         layer.extra, defaulting to the configured power floor (default
-        8%). The raw value is clamped once at this boundary so a min
+        100%). The raw value is clamped once at this boundary so a min
         below the floor or above 100% never reaches GlueScript as a
         lower power bound.
         """
@@ -491,7 +497,12 @@ class RuidaRPAEncoder(OpsEncoder):
             elif sub_ct == CommandType.SET_POWER:
                 power = sub_ops.power(j)
                 if power > 0.0:
-                    self._emit_power(min(power + self._power_floor, 1.0))
+                    bias = (
+                        self._power_floor
+                        if self._layer_mode == "VECTOR"
+                        else self._image_power_bias
+                    )
+                    self._emit_power(min(power + bias, 1.0))
                 else:
                     self._emit_power(0.0)
 
@@ -824,10 +835,7 @@ class RuidaRPAEncoder(OpsEncoder):
         overscan = self._compute_overscan(ops, idx, layer_mode)
         self._overscan = overscan
         self._power_min_fraction = self._layer_min_power_fraction(layer)
-        if layer_mode == "IMAGE":
-            min_power_1 = self._power_floor * 100.0
-            max_power_1 = power_pct
-        elif (
+        if (
             layer_mode == "VECTOR"
             and overscan == "NONE"
             and self._power_min_fraction * 100.0 < power_pct
