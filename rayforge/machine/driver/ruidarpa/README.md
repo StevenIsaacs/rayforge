@@ -27,6 +27,17 @@ The TUI is started using the command:
 pixi run rpa-script --tui
 ```
 
+This requires the pixi environment, which is available when running Rayforge from a source checkout. When running Rayforge from an install package (e.g. snap, deb, flatpak), the pixi environment is not available. In that case, install ruida-pa from PyPI in a Python virtual environment and run the TUI directly:
+
+```
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install ruida-pa
+rpa-script --tui
+```
+
+`pip install ruida-pa` installs all dependencies (bokeh, pyserial, textual, rpyc) automatically, so the TUI works out of the box.
+
 The ruida-pa guides are located at: `https://github.com/StevenIsaacs/ruida-pa/tree/main/docs/guides`
 
 ## Using the TUI and RPC to Capture Jobs
