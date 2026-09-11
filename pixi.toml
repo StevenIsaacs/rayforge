@@ -13,12 +13,12 @@ build = { features = ["build-tools"], solve-group = "build" }
 video = { features = ["video-tools"], solve-group = "video" }
 
 [feature.ruida-pa.pypi-dependencies]
-# ruida-pa = { path = "external/ruida-pa", editable = false }
 # To update: pixi update ruida-pa
-ruida-pa = {
-    git = "https://github.com/StevenIsaacs/ruida-pa.git",
-    branch = "main",
-    editable = false}
+# ruida-pa = {
+#     git = "https://github.com/StevenIsaacs/ruida-pa.git",
+#     branch = "main",
+#     editable = false}
+ruida-pa = { version = ">=0.20.4", editable = false }
 rpyc = { version = ">=6.0.2", editable = false }
 bokeh = "*"
 textual = { version = ">=0.32.0", editable = false }
