@@ -5,28 +5,15 @@ channels = ["conda-forge", "bioconda", "msys2", "coastline"]
 platforms = ["linux-64", "osx-arm64"]
 
 [environments]
-#default = { features = ["app", "test"], solve-group = "default" }
-default = { features = ["app", "test", "ruida-pa"], solve-group = "default" }
-ruida-pa-src = { features = ["app", "test", "ruida-pa-src"], solve-group = "default" }
+default = { features = ["app", "test"], solve-group = "default" }
 website = { features = ["website"], solve-group = "default" }
 build = { features = ["build-tools"], solve-group = "build" }
 video = { features = ["video-tools"], solve-group = "video" }
 
-[feature.ruida-pa.pypi-dependencies]
-# Install from PyPI.
+[pypi-dependencies]
+# Ruida PA backend used by the ruidarpa machine driver.
 # To update: pixi update ruida-pa
 ruida-pa = { version = ">=0.20.4", editable = false }
-
-[feature.ruida-pa-src.pypi-dependencies]
-# For using the latest source.
-# To update: pixi update ruida-pa-src
-ruida-pa = {
-    git = "https://github.com/StevenIsaacs/ruida-pa.git",
-    branch = "main",
-    editable = false}
-rpyc = { version = ">=6.0.2", editable = false }
-bokeh = "*"
-textual = { version = ">=0.32.0", editable = false }
 
 [feature.app.dependencies]
 adwaita-icon-theme = "==49.0"

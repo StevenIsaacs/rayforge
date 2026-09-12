@@ -9,7 +9,7 @@ Installation is similar to the Rayforge instructions at: `https://rayforge.org/d
 - Clone from: `https://github.com/StevenIsaacs/rayforge`
 - Switch to the correct beta branch (currently `beta3`).
 
-By default ruida-pa is installed from PyPI. A separate environment named `ruida-pa-src` is defined to install ruida-pa from source which may be useful when diagnosing problems. In this case use this command: `pixi install -e ruida-pa-src`
+ruida-pa is installed from PyPI as part of the default pixi environment. To diagnose problems against a local ruida-pa source checkout, point pixi at it via a `dependency-override` or install it into the environment with `pixi run pip install --no-deps --force-reinstall <path-to-ruida-pa>`.
 
 ## Machine Settings Configuration
 

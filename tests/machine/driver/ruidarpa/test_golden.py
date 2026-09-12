@@ -1,11 +1,10 @@
 """Golden-file regression tests for the ruidarpa encoder transcript.
 
-The committed fixture ``golden/staged_job.rpas`` locks the encoder's
-GlueScript transcript byte-for-byte (the filename is a historical
-misnomer — the fixture is the transcript, not the staged rpascript).
-The representative job covers layer attribute blocks and per-op action
-lines across vector cuts and moves, a linearized arc, a scan line,
-raw power pass-through, and the air-assist path.
+The committed fixture ``golden/transcript.cglu`` locks the encoder's
+GlueScript transcript byte-for-byte. The representative job covers
+layer attribute blocks and per-op action lines across vector cuts and
+moves, a linearized arc, a scan line, raw power pass-through, and the
+air-assist path.
 
 Regenerate the fixture with ``golden/regen_golden.py`` when the encoder
 or upstream GlueScript legitimately changes the transcript; do not
@@ -21,7 +20,7 @@ from ruidadriver.rd_gluescript import GlueScript
 from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 
 GOLDEN_DIR = Path(__file__).parent / "golden"
-GOLDEN_FILE = GOLDEN_DIR / "staged_job.rpas"
+GOLDEN_FILE = GOLDEN_DIR / "transcript.cglu"
 
 
 def _load_regen_builder():

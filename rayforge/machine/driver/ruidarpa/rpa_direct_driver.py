@@ -410,7 +410,7 @@ class RpaDirectDriver:
         """Raise ImportError if ruidadriver is not available."""
         if RdDriver is None:
             raise ImportError(
-                "ruidadriver is not installed. Run: pixi run -e ruidarpa ..."
+                "ruidadriver is not installed. Install the ruida-pa package."
             )
 
     def _ensure_driver(self) -> RdDriver:

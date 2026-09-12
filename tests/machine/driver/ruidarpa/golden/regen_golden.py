@@ -1,15 +1,13 @@
 """Regenerate the ruidarpa golden fixture.
 
-Run from the repo root inside the ruidarpa pixi environment:
+Run from the repo root inside the default pixi environment:
 
-    pixi run -e ruida-pa python \\
+    pixi run python \\
         tests/machine/driver/ruidarpa/golden/regen_golden.py
 
-The fixture locks the encoder's GlueScript transcript byte-for-byte
-(the ``staged_job.rpas`` filename is a historical misnomer — the fixture
-is the transcript, not the staged rpascript). Regenerate it only when
-the encoder or upstream GlueScript legitimately changes the transcript;
-the golden tests then confirm the new bytes.
+The fixture locks the encoder's GlueScript transcript byte-for-byte.
+Regenerate it only when the encoder or upstream GlueScript legitimately
+changes the transcript; the golden tests then confirm the new bytes.
 """
 
 import sys
@@ -30,7 +28,7 @@ from rayforge.machine.models.machine import Machine
 REPO_ROOT = Path(__file__).resolve().parents[5]
 sys.path.insert(0, str(REPO_ROOT))
 
-GOLDEN_FILE = Path(__file__).resolve().parent / "staged_job.rpas"
+GOLDEN_FILE = Path(__file__).resolve().parent / "transcript.cglu"
 
 
 class CutStep(Step):
