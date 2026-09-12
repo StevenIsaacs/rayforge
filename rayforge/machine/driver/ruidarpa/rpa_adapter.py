@@ -15,19 +15,19 @@ import inspect
 import logging
 import math
 import random
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from functools import partial
 from gettext import gettext as _
+from operator import attrgetter
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Callable,
-    Dict,
-    List,
-    Optional,
     TypeAlias,
-    Union,
 )
+
+from rpalib.rpyc_client import RpcRdDriver
+from ruidadriver.rd_status import RdStatusEvent
 
 from rayforge.context import RayforgeContext
 from rayforge.core.varset import BoolVar, FloatVar, HostnameVar, Var, VarSet
@@ -49,16 +49,6 @@ from rayforge.machine.driver.ruidarpa.rpa_encoder import (
 from rayforge.machine.models.laser import LaserHead
 from rayforge.machine.transport import TransportStatus
 
-try:
-    from rpalib.rpyc_client import RpcRdDriver
-except ImportError:
-    RpcRdDriver = None  # type: ignore[assignment,misc]
-
-try:
-    from ruidadriver.rd_status import RdStatusEvent
-except ImportError:
-    RdStatusEvent = None  # type: ignore[assignment,misc]
-
 if TYPE_CHECKING:
     from raygeo.ops import Ops
 
@@ -70,12 +60,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Type alias for the two possible backends. RpcRdDriver is None when the
-# optional rpalib import fails, so the alias needs a targeted ignore.
-_RpaBackend: TypeAlias = Union[
-    RpaDirectDriver,
-    RpcRdDriver,  # type: ignore[reportInvalidTypeForm]
-]
+# Type alias for the two possible backends.
+_RpaBackend: TypeAlias = RpaDirectDriver | RpcRdDriver
 
 # Default speed for move_to() absolute jogs (mm/s), used until the first
 # jog() records the GUI-configured speed. After that, move_to() reuses the
@@ -101,16 +87,17 @@ _UNCONFIGURED_MAX_CUT_SPEED_MMPM = 1000
 _UNCONFIGURED_MAX_TRAVEL_SPEED_MMPM = 3000
 
 
-def _unwrap_mm(value: object) -> Optional[float]:
+def _unwrap_mm(value: object) -> float | None:
     """Extract the mm value from a POSITION_* field.
 
     StatusDict positions arrive as ``(float_mm, str_description)``
-    tuples in both direct and TUI RPC modes. Accept both forms for
-    forward compatibility.
+    tuples in both direct and TUI RPC modes. Plain numbers are
+    accepted for forward compatibility.
     """
-    if isinstance(value, (list, tuple)):
-        return value[0]  # type: ignore[return-value]
-    return value  # type: ignore[return-value]
+    inner = value[0] if isinstance(value, (list, tuple)) else value
+    if isinstance(inner, (int, float)):
+        return float(inner)
+    return None
 
 
 class RuidaRPAAdapter(Driver):
@@ -142,18 +129,18 @@ class RuidaRPAAdapter(Driver):
 
     def __init__(self, context: RayforgeContext, machine: Machine) -> None:
         super().__init__(context, machine)
-        self._config: Dict[str, Any] = {}
+        self._config: dict[str, Any] = {}
         self._tui_mode: bool = False
         self._rpc_timeout: float = DEFAULT_RPC_TIMEOUT_S
-        self._magic: Optional[int] = None
-        self._backend: Optional[_RpaBackend] = None
+        self._magic: int | None = None
+        self._backend: _RpaBackend | None = None
         self._listeners_registered: bool = False
         self._unreachable_warned: bool = False
-        self._connection_task: Optional[asyncio.Task] = None
+        self._connection_task: asyncio.Task | None = None
         self._keep_running: bool = False
         self._is_connected: bool = False
         self._shutting_down: bool = False
-        self._jog_speed_mm_s: Optional[float] = None
+        self._jog_speed_mm_s: float | None = None
         self._selected_wcs: str = "MACHINE"
         self._machine_paused: bool = False
         self._machine_job_running: bool = False
@@ -169,11 +156,11 @@ class RuidaRPAAdapter(Driver):
         return _("Ruida Coordinates")
 
     @property
-    def supported_wcs(self) -> List[str]:
+    def supported_wcs(self) -> list[str]:
         return ["MACHINE", "ANCHOR", "CURRENT", "SET_POINT"]
 
     @property
-    def resource_uri(self) -> Optional[str]:
+    def resource_uri(self) -> str | None:
         host = self._config.get("udp_host", "")
         usb = self._config.get("usb_device", "")
         if host:
@@ -296,7 +283,7 @@ class RuidaRPAAdapter(Driver):
         )
 
     @classmethod
-    def create_encoder(cls, machine: Machine) -> "OpsEncoder":
+    def create_encoder(cls, machine: Machine) -> OpsEncoder:
         from rayforge.machine.driver.ruidarpa.rpa_encoder import (
             RuidaRPAEncoder,
         )
@@ -443,16 +430,15 @@ class RuidaRPAAdapter(Driver):
             connected: bool = False
             try:
                 if self._tui_mode:
-                    if RpcRdDriver is None:
-                        raise DriverSetupError(
-                            "rpalib is not installed — TUI RPC mode "
-                            "is unavailable"
-                        )
                     # The RpcRdDriver is constructed lazily on the first
                     # attempt and reused across reconnect attempts, so
                     # listeners are registered at most once per instance
                     # rather than accumulating on the server.
-                    backend: RpcRdDriver = self._backend  # type: ignore
+                    backend = self._backend
+                    if isinstance(backend, RpaDirectDriver):
+                        raise DriverSetupError(
+                            "TUI RPC mode requires the RPC backend"
+                        )
                     if backend is None:
                         backend = RpcRdDriver(timeout=self._rpc_timeout)
                         self._backend = backend
@@ -460,8 +446,8 @@ class RuidaRPAAdapter(Driver):
                     usb_device = self._config.get("usb_device")
                     started = await loop.run_in_executor(
                         None,
-                        lambda: backend.start(
-                            udp_host, usb_device, self._magic
+                        partial(
+                            backend.start, udp_host, usb_device, self._magic
                         ),
                     )
                     connected = started
@@ -495,15 +481,17 @@ class RuidaRPAAdapter(Driver):
                         )
                 else:
                     backend = self._backend
-                    if backend is None:
-                        raise DriverSetupError("Backend not initialized")
-                    driver: RpaDirectDriver = backend  # type: ignore
+                    if not isinstance(backend, RpaDirectDriver):
+                        raise DriverSetupError(
+                            "Direct mode requires the direct backend"
+                        )
+                    driver = backend
                     udp_host = self._config.get("udp_host")
                     usb_device = self._config.get("usb_device")
                     connected = await loop.run_in_executor(
                         None,
-                        lambda: driver.start(
-                            udp_host, usb_device, self._magic
+                        partial(
+                            driver.start, udp_host, usb_device, self._magic
                         ),
                     )
                     if connected:
@@ -541,12 +529,11 @@ class RuidaRPAAdapter(Driver):
                 while self._keep_running:
                     await asyncio.sleep(self.CONNECTION_POLL_INTERVAL)
                     assert backend is not None
-                    _backend = backend
                     # is_connected is a blocking RPC round trip (TUI) or a
                     # direct property read; evaluate it off the event loop
                     # thread so a hung-but-alive server cannot freeze the UI.
                     is_alive = await loop.run_in_executor(
-                        None, lambda: _backend.is_connected
+                        None, attrgetter("is_connected"), backend
                     )
                     if is_alive and not prev_alive:
                         # False -> True edge: the machine came online (or was
@@ -571,7 +558,7 @@ class RuidaRPAAdapter(Driver):
                 logger.debug("Connection loop cancelled", extra=log_extra)
                 self._is_connected = False
                 break
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if not self._unreachable_warned:
                     self._unreachable_warned = True
                     if self._tui_mode:
@@ -641,7 +628,7 @@ class RuidaRPAAdapter(Driver):
         if self._shutting_down:
             return
         # RdStatusEvent enum → string value (direct mode)
-        if RdStatusEvent is not None and isinstance(event, RdStatusEvent):
+        if isinstance(event, RdStatusEvent):
             event = event.value
         if isinstance(event, str):
             if event == "CONNECTED" and not self._is_connected:
@@ -653,7 +640,7 @@ class RuidaRPAAdapter(Driver):
         elif isinstance(event, dict):
             # StatusDict or RPyC netref — convert to local dict for reliable
             # type handling
-            event = {k: event[k] for k in event}  # type: ignore
+            event = {k: event[k] for k in event}
             new_status = self._map_machine_status_to_device_status(event)
             if new_status != self.state.status:
                 self.state = replace(self.state, status=new_status)
@@ -730,7 +717,8 @@ class RuidaRPAAdapter(Driver):
 
     async def _stop_backend(self) -> None:
         """Stop and release the current backend driver."""
-        if self._backend is None:
+        backend = self._backend
+        if backend is None:
             return
 
         loop = asyncio.get_running_loop()
@@ -740,40 +728,38 @@ class RuidaRPAAdapter(Driver):
             extra=self._log_extra("TUI_RPC" if self._tui_mode else "RPA"),
         )
         try:
-            if self._tui_mode:
-                client: RpcRdDriver = self._backend  # type: ignore
+            if isinstance(backend, RpaDirectDriver):
+                if backend.is_connected:
+                    try:
+                        backend.unregister_status_listener(self._on_rpa_status)
+                    except Exception:
+                        logger.exception("Error unregistering status listener")
+                    try:
+                        backend.unregister_error_listener(self._on_rpa_error)
+                    except Exception:
+                        logger.exception("Error unregistering error listener")
+                    try:
+                        backend.unregister_reply_listener(self._on_rpa_reply)
+                    except Exception:
+                        logger.exception("Error unregistering reply listener")
+                await loop.run_in_executor(None, backend.stop)
+            else:
                 # stop() and close() are blocking RPyC round trips;
                 # evaluate them off the event loop thread so a
                 # hung-but-alive server cannot freeze the UI. close()
                 # is idempotent and swallows teardown errors, so it must
                 # run even when stop() raised on a dead transport.
                 try:
-                    await loop.run_in_executor(None, client.stop)
+                    await loop.run_in_executor(None, backend.stop)
                 finally:
-                    await loop.run_in_executor(None, client.close)
-            else:
-                driver: RpaDirectDriver = self._backend  # type: ignore
-                if driver.is_connected:
-                    try:
-                        driver.unregister_status_listener(self._on_rpa_status)
-                    except Exception:
-                        logger.exception("Error unregistering status listener")
-                    try:
-                        driver.unregister_error_listener(self._on_rpa_error)
-                    except Exception:
-                        logger.exception("Error unregistering error listener")
-                    try:
-                        driver.unregister_reply_listener(self._on_rpa_reply)
-                    except Exception:
-                        logger.exception("Error unregistering reply listener")
-                await loop.run_in_executor(None, driver.stop)
+                    await loop.run_in_executor(None, backend.close)
         except Exception:
             logger.exception("Error stopping RPA backend")
 
     # --- Script execution ---
 
     async def _run_script(
-        self, script_lines: List[str], auto_checksum: bool = False
+        self, script_lines: list[str], auto_checksum: bool = False
     ) -> None:
         """Run raw rpascript via the backend's ``run``.
 
@@ -819,9 +805,7 @@ class RuidaRPAAdapter(Driver):
         encoded: EncodedOutput,
         doc: Doc,
         ops: Ops,
-        on_command_done: Optional[
-            Callable[[int], Union[None, Awaitable[None]]]
-        ] = None,
+        on_command_done: Callable[[int], None | Awaitable[None]] | None = None,
     ) -> None:
         op_map = encoded.op_map
 
@@ -912,7 +896,7 @@ class RuidaRPAAdapter(Driver):
 
     # --- Movement ---
 
-    async def home(self, axes: Optional[Axis] = None) -> None:
+    async def home(self, axes: Axis | None = None) -> None:
         if self._backend is None:
             raise DriverSetupError("Backend not initialized")
         loop = asyncio.get_running_loop()
@@ -1049,8 +1033,8 @@ class RuidaRPAAdapter(Driver):
             )
         )
 
-    async def read_wcs_offsets(self) -> Dict[str, Pos]:
-        offsets: Dict[str, Pos] = {
+    async def read_wcs_offsets(self) -> dict[str, Pos]:
+        offsets: dict[str, Pos] = {
             "MACHINE": (0.0, 0.0, 0.0),
             "ANCHOR": (0.0, 0.0, 0.0),
             "CURRENT": (0.0, 0.0, 0.0),
@@ -1059,7 +1043,7 @@ class RuidaRPAAdapter(Driver):
         self.wcs_updated.send(self, offsets=offsets)
         return offsets
 
-    async def read_parser_state(self) -> Optional[str]:
+    async def read_parser_state(self) -> str | None:
         return self._selected_wcs
 
     # --- Settings ---
@@ -1071,14 +1055,14 @@ class RuidaRPAAdapter(Driver):
     async def write_setting(self, key: str, value: Any) -> None:
         pass
 
-    def get_setting_vars(self) -> List[VarSet]:
+    def get_setting_vars(self) -> list[VarSet]:
         return [VarSet(title=_("No settings"))]
 
     # --- Probing ---
 
     async def run_probe_cycle(
         self, axis: Axis, max_travel: float, feed_rate: int
-    ) -> Optional[Pos]:
+    ) -> Pos | None:
         self.probe_status_changed.send(
             self, message=_("Probe not supported by RPA driver")
         )
@@ -1086,13 +1070,13 @@ class RuidaRPAAdapter(Driver):
 
     # --- Capabilities ---
 
-    def can_jog(self, axis: Optional[Axis] = None) -> bool:
+    def can_jog(self, axis: Axis | None = None) -> bool:
         return True
 
-    def supports_pwm(self, head: "Head") -> bool:
+    def supports_pwm(self, head: Head) -> bool:
         return isinstance(head, LaserHead) and head.laser_type.supports_pwm
 
-    def get_pwm_params(self, head: "Head") -> PWMParams | None:
+    def get_pwm_params(self, head: Head) -> PWMParams | None:
         if not isinstance(head, LaserHead) or not self.supports_pwm(head):
             return None
         return PWMParams(

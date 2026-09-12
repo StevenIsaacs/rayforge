@@ -14,23 +14,19 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from raygeo.geo.types import Point3D
 from raygeo.ops import Ops
 from raygeo.ops.state import AirAssistMode, CoolantMode
 from raygeo.ops.types import CommandType, RasterMode, SectionType
+from ruidadriver.rd_gluescript import GlueScript
 
 from rayforge.pipeline.encoder.base import (
     EncodedOutput,
     MachineCodeOpMap,
     OpsEncoder,
 )
-
-try:
-    from ruidadriver.rd_gluescript import GlueScript
-except ImportError:
-    GlueScript = None  # type: ignore[assignment,misc]
 
 if TYPE_CHECKING:
     from rayforge.core.doc import Doc
@@ -55,6 +51,27 @@ _DEFAULT_LAYER_COLOR = "#00ccff"
 DEFAULT_POWER_FLOOR = 100.0  # percent, i.e. 100%
 DEFAULT_IMAGE_POWER_BIAS = 8.0  # percent, i.e. 8%
 
+
+@runtime_checkable
+class _LaserProcessStep(Protocol):
+    """A workflow step carrying laser process attributes.
+
+    The concrete laser step classes live in a dynamically loaded
+    add-on and cannot be imported here, so the encoder recognizes
+    them structurally.
+    """
+
+    power: float
+    frequency: int
+
+
+@runtime_checkable
+class _HasMinPower(Protocol):
+    """A workflow step that optionally declares a minimum power."""
+
+    min_power: float | None
+
+
 # Maps the framework WCS slot names to the Ruida reference point strings
 # accepted by GlueScript.declare_job. The framework default WCS ("G54")
 # is deliberately absent — it maps to "MACHINE" to keep golden output
@@ -72,7 +89,7 @@ _WCS_TO_REF_POINT = {
 # Worst case under concurrent encodes: a duplicated or suppressed
 # warning — assignments are atomic under the GIL and output is
 # unaffected.
-_last_fallback_wcs: Optional[str] = None
+_last_fallback_wcs: str | None = None
 
 
 class RuidaRPAEncoder(OpsEncoder):
@@ -101,15 +118,15 @@ class RuidaRPAEncoder(OpsEncoder):
         """Reset all encoder state for a new encoding session."""
         self.current_pos: Point3D = (0.0, 0.0, 0.0)
         self.active_laser: int = 1
-        self.doc: Optional["Doc"] = None
-        self.machine: Optional["Machine"] = None
-        self.op_map: Optional[MachineCodeOpMap] = None
+        self.doc: Doc | None = None
+        self.machine: Machine | None = None
+        self.op_map: MachineCodeOpMap | None = None
         self._gluescript: Any = self._injected_gluescript
         self._layer_key: int = 0
-        self._layer_uid: Optional[str] = None
+        self._layer_uid: str | None = None
         self._layer_declared: bool = False
-        self._section_type: Optional[SectionType] = None
-        self._section_raster_mode: Optional[RasterMode] = None
+        self._section_type: SectionType | None = None
+        self._section_raster_mode: RasterMode | None = None
         self._layer_mode: str = "VECTOR"
         self._overscan: str = "NONE"
         self._power_fraction: float = 0.0
@@ -119,15 +136,13 @@ class RuidaRPAEncoder(OpsEncoder):
         self._image_power_bias: float = DEFAULT_IMAGE_POWER_BIAS / 100.0
         self._snapshot_len: int = 0
         self._op_count: int = 0
-        self._op_contributions: Dict[int, List[Tuple[int, int]]] = {}
+        self._op_contributions: dict[int, list[tuple[int, int]]] = {}
         self._job_started: bool = False
         self._job_ended: bool = False
 
     # -- Public API ---------------------------------------------------------
 
-    def encode(
-        self, ops: Ops, machine: "Machine", doc: "Doc"
-    ) -> EncodedOutput:
+    def encode(self, ops: Ops, machine: Machine, doc: Doc) -> EncodedOutput:
         """Encode Ops commands into a GlueScript transcript.
 
         The transcript IS the source: each Ops command is translated into
@@ -145,15 +160,10 @@ class RuidaRPAEncoder(OpsEncoder):
             an op_map spanning the transcript lines.
 
         Raises:
-            RuntimeError: If the ruida-pa GlueScript API is unavailable or
+            RuntimeError: If the ruida-pa GlueScript API is incompatible or
                 the job was not completed (missing JOB_END).
         """
         self._reset_state()
-        if GlueScript is None:
-            raise RuntimeError(
-                "ruidadriver GlueScript is unavailable — install the "
-                "ruida-pa package to use the ruidarpa driver"
-            )
         # Version gate: stage_gluescript is the re-staging entry point the
         # adapter relies on to compile the transcript into rpascript.
         if not hasattr(GlueScript, "stage_gluescript"):
@@ -201,7 +211,7 @@ class RuidaRPAEncoder(OpsEncoder):
 
     # -- Command dispatch ---------------------------------------------------
 
-    def _handle_command(self, ops: Ops, idx: int, machine: "Machine") -> None:
+    def _handle_command(self, ops: Ops, idx: int, machine: Machine) -> None:
         """Dispatch a single Ops command to the appropriate handler."""
         ct = ops.command_type(idx)
         if ct == CommandType.SET_POWER:
@@ -269,9 +279,10 @@ class RuidaRPAEncoder(OpsEncoder):
             pass  # Ruida is laser-only; spindle not applicable
         elif ct == CommandType.SET_HEAD_COOLANT:
             pass  # Per-head coolant not yet supported
-        elif ct == CommandType.STATE_BLOCK_START:
-            pass  # Structural marker; no rpascript output
-        elif ct == CommandType.STATE_BLOCK_END:
+        elif (
+            ct == CommandType.STATE_BLOCK_START
+            or ct == CommandType.STATE_BLOCK_END
+        ):
             pass  # Structural marker; no rpascript output
         else:
             raise ValueError(f"Unknown command type: {ct}")
@@ -297,7 +308,6 @@ class RuidaRPAEncoder(OpsEncoder):
         """
         self._require_active_layer()
         section_type = self._section_type
-        raster_mode = self._section_raster_mode
         if power_fraction == 0.0:
             return
         if section_type is not None and self._layer_mode in (
@@ -325,7 +335,7 @@ class RuidaRPAEncoder(OpsEncoder):
                 min_fraction * 100.0, power_fraction * 100.0
             )
 
-    def _find_layer(self, layer_uid: str) -> Optional["Layer"]:
+    def _find_layer(self, layer_uid: str) -> Layer | None:
         """Look up a document layer by uid, or None when unknown."""
         if self.doc is None:
             return None
@@ -335,8 +345,8 @@ class RuidaRPAEncoder(OpsEncoder):
         )
 
     def _layer_settings(
-        self, layer: Optional["Layer"]
-    ) -> Tuple[float, float, float]:
+        self, layer: Layer | None
+    ) -> tuple[float, float, float]:
         """Extract (speed_mms, frequency_khz, power_pct) for a layer.
 
         Reads the first workflow step, falling back to safe defaults. The
@@ -355,16 +365,18 @@ class RuidaRPAEncoder(OpsEncoder):
             first_step = layer.workflow.steps[0]
             # cut_speed is stored in mm/min; GlueScript expects mm/s.
             speed_mms = float(first_step.cut_speed) / 60.0
-            raw_power = getattr(first_step, "power", None)
-            if raw_power is None:
-                raw_power = first_step.extra.get("power", _DEFAULT_LAYER_POWER)
-            power_fraction = float(raw_power)
-            raw_frequency = getattr(first_step, "frequency", None)
-            if raw_frequency is None:
-                raw_frequency = first_step.extra.get(
-                    "frequency", _DEFAULT_LAYER_FREQUENCY_HZ
+            if isinstance(first_step, _LaserProcessStep):
+                power_fraction = float(first_step.power)
+                frequency_hz = int(first_step.frequency)
+            else:
+                power_fraction = float(
+                    first_step.extra.get("power", _DEFAULT_LAYER_POWER)
                 )
-            frequency_hz = int(raw_frequency)
+                frequency_hz = int(
+                    first_step.extra.get(
+                        "frequency", _DEFAULT_LAYER_FREQUENCY_HZ
+                    )
+                )
 
         power_pct = power_fraction * 100.0
 
@@ -378,12 +390,12 @@ class RuidaRPAEncoder(OpsEncoder):
     def _layer_min_power_fraction(self, layer: Layer | None) -> float:
         """Resolve the layer's min-power fraction for power compensation.
 
-        Reads the first workflow step's min_power, mirroring
-        ``_layer_settings``: step attribute, then step.extra, then
-        layer.extra, defaulting to the configured power floor (default
-        100%). The raw value is clamped once at this boundary so a min
-        below the floor or above 100% never reaches GlueScript as a
-        lower power bound.
+        Reads the first workflow step's min_power attribute when the
+        step declares one, falling back from step.extra to layer.extra
+        and defaulting to the configured power floor (default 100%).
+        The raw value is clamped once at this boundary so a min below
+        the floor or above 100% never reaches GlueScript as a lower
+        power bound.
         """
         min_fraction = self._power_floor
         if (
@@ -392,7 +404,9 @@ class RuidaRPAEncoder(OpsEncoder):
             and layer.workflow.steps
         ):
             first_step = layer.workflow.steps[0]
-            raw_min = getattr(first_step, "min_power", None)
+            raw_min: float | None = None
+            if isinstance(first_step, _HasMinPower):
+                raw_min = first_step.min_power
             if raw_min is None:
                 raw_min = first_step.extra.get("min_power", None)
             if raw_min is None:
@@ -594,7 +608,7 @@ class RuidaRPAEncoder(OpsEncoder):
         self,
         ops: Ops,
         idx: int,
-        machine: "Machine",
+        machine: Machine,
     ) -> None:
         """Select laser device by resolving laser_uid to a tool number.
 
@@ -941,7 +955,7 @@ class RuidaRPAEncoder(OpsEncoder):
         new_gluescript(), which wipes lines appended by any pre-JOB_START
         op, so a recorded end can exceed the final length.
         """
-        line_spans: List[tuple[int, int]] = []
+        line_spans: list[tuple[int, int]] = []
         machine_code_to_op = [-1] * line_count
         for op_index in range(self._op_count):
             contributions = self._op_contributions.get(op_index, [])

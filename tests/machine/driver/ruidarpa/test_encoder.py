@@ -39,6 +39,8 @@ class CutStep(Step):
     frequency) that the encoder reads from the first workflow step.
     """
 
+    min_power: float
+
     def __init__(self):
         super().__init__(typelabel="cut")
         self.power: float = 0.0
@@ -1232,7 +1234,11 @@ class TestImagePowerBias:
         ops = self._image_scan_job(doc, [128])
         result = encoder.encode(ops, mock_machine, doc)
         assert "power(" in result.text
-        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        lines = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("power(")
+        ]
         assert len(lines) == 1
         val = float(lines[0][len("power(") : -1])
         expected = 128.0 / 255.0 * 100.0
@@ -1254,7 +1260,11 @@ class TestImagePowerBias:
         mock_machine.driver_args = {}
         ops = self._image_scan_job(doc, [128])
         result = encoder.encode(ops, mock_machine, doc)
-        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        lines = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("power(")
+        ]
         assert len(lines) == 1
         val = float(lines[0][len("power(") : -1])
         expected = 128.0 / 255.0 * 100.0 + 8.0
@@ -1263,7 +1273,7 @@ class TestImagePowerBias:
     def test_vector_curve_uses_power_floor_not_bias(
         self, encoder, mock_machine, doc
     ):
-        """VECTOR arc linearization uses _power_floor, not _image_power_bias."""
+        """VECTOR arcs use _power_floor, not _image_power_bias."""
         mock_machine.driver_args = {
             "power_floor": 20.0,
             "image_power_bias": 0.0,
@@ -1284,10 +1294,14 @@ class TestImagePowerBias:
         ops.job_end()
         result = encoder.encode(ops, mock_machine, doc)
 
-        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        lines = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("power(")
+        ]
         if lines:
-            for l in lines:
-                val = float(l[len("power(") : -1])
+            for line in lines:
+                val = float(line[len("power(") : -1])
                 assert abs(val - 70.0) < 1e-10 or val == 0.0
 
     def test_top_level_set_power_not_biased(self, encoder, mock_machine, doc):
@@ -1312,7 +1326,11 @@ class TestImagePowerBias:
         mock_machine.driver_args = {}
         ops = self._image_scan_job(doc, [128])
         result = encoder.encode(ops, mock_machine, doc)
-        lines = [l for l in result.text.split("\n") if l.startswith("power(")]
+        lines = [
+            line
+            for line in result.text.split("\n")
+            if line.startswith("power(")
+        ]
         assert len(lines) == 1
         val = float(lines[0][len("power(") : -1])
         expected = 128.0 / 255.0 * 100.0 + 8.0
@@ -1595,9 +1613,9 @@ class TestLayerOverscan:
 
         result = encoder.encode(ops, mock_machine, doc)
         line = next(
-            l
-            for l in result.text.splitlines()
-            if l.startswith("declare_layer(")
+            text_line
+            for text_line in result.text.splitlines()
+            if text_line.startswith("declare_layer(")
         )
         assert _declare_layer_overscan(line) == "X_BI"
 

@@ -12,7 +12,7 @@ from rayforge.machine.driver.ruidarpa.rpa_direct_driver import (
 from rayforge.machine.driver.ruidarpa.rpa_encoder import RuidaRPAEncoder
 
 __all__ = [
+    "RpaDirectDriver",
     "RuidaRPAAdapter",
     "RuidaRPAEncoder",
-    "RpaDirectDriver",
 ]

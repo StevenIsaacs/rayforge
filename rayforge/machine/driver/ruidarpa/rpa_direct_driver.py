@@ -7,24 +7,21 @@ communication over USB or UDP.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+from ruidadriver.ruida_driver import RdDriver
 
 from rayforge.pipeline.encoder.base import EncodedOutput
 
 if TYPE_CHECKING:
     from raygeo.ops import Ops
-    from ruidadriver.ruida_driver import RdDriver
 
     from rayforge.core.doc import Doc
     from rayforge.machine.driver.ruidarpa.rpa_encoder import (
         RuidaRPAEncoder,
     )
     from rayforge.machine.models.machine import Machine
-else:
-    try:
-        from ruidadriver.ruida_driver import RdDriver  # noqa: E402
-    except ImportError:
-        RdDriver = None  # type: ignore[assignment]
 
 _logger = logging.getLogger(__name__)
 
@@ -37,15 +34,15 @@ class RpaDirectDriver:
     """
 
     def __init__(self) -> None:
-        self._driver: Optional[RdDriver] = None
+        self._driver: RdDriver | None = None
 
     # --- Lifecycle ---
 
     def start(
         self,
-        udp_host: Optional[str] = None,
-        usb_device: Optional[str] = None,
-        magic: Optional[int] = None,
+        udp_host: str | None = None,
+        usb_device: str | None = None,
+        magic: int | None = None,
     ) -> bool:
         """Start connection to the Ruida controller.
 
@@ -122,7 +119,7 @@ class RpaDirectDriver:
         return self._ensure_driver()
 
     def run_job(
-        self, job: Optional[list[str]] = None, auto_checksum: bool = False
+        self, job: list[str] | None = None, auto_checksum: bool = False
     ) -> None:
         """Run a job, composing head + job + tail on the connected driver.
 
@@ -133,7 +130,7 @@ class RpaDirectDriver:
         self._require_connected().run_job(job, auto_checksum=auto_checksum)
 
     @staticmethod
-    def create_encoder() -> "RuidaRPAEncoder":
+    def create_encoder() -> RuidaRPAEncoder:
         """Create an RPA encoder for converting Ops to rpascript."""
         from rayforge.machine.driver.ruidarpa.rpa_encoder import (
             RuidaRPAEncoder,
@@ -157,9 +154,9 @@ class RpaDirectDriver:
 
     def encode_and_run(
         self,
-        ops: "Ops",
-        machine: "Machine",
-        doc: "Doc",
+        ops: Ops,
+        machine: Machine,
+        doc: Doc,
         auto_checksum: bool = False,
     ) -> EncodedOutput:
         """Encode Ops to rpascript and run it on the controller.
@@ -228,7 +225,7 @@ class RpaDirectDriver:
         self._require_connected().jog_xy_to(x, y)
 
     def jog_xy_rel(
-        self, x: Optional[float] = None, y: Optional[float] = None
+        self, x: float | None = None, y: float | None = None
     ) -> None:
         """Jog the XY axes relative to the current position in mm.
 
@@ -238,7 +235,7 @@ class RpaDirectDriver:
         """
         self._require_connected().jog_xy_rel(x, y)
 
-    def jog_x_rel(self, x: Optional[float] = None) -> None:
+    def jog_x_rel(self, x: float | None = None) -> None:
         """Jog the X axis relative to the current position in mm.
 
         The wrapped RdDriver auto-sends the generated lines when
@@ -247,7 +244,7 @@ class RpaDirectDriver:
         """
         self._require_connected().jog_x_rel(x)
 
-    def jog_y_rel(self, y: Optional[float] = None) -> None:
+    def jog_y_rel(self, y: float | None = None) -> None:
         """Jog the Y axis relative to the current position in mm.
 
         The wrapped RdDriver auto-sends the generated lines when
@@ -256,7 +253,7 @@ class RpaDirectDriver:
         """
         self._require_connected().jog_y_rel(y)
 
-    def jog_z_rel(self, z: Optional[float] = None) -> None:
+    def jog_z_rel(self, z: float | None = None) -> None:
         """Jog the Z axis relative to the current position in mm.
 
         The wrapped RdDriver auto-sends the generated lines when
@@ -265,7 +262,7 @@ class RpaDirectDriver:
         """
         self._require_connected().jog_z_rel(z)
 
-    def jog_u_rel(self, u: Optional[float] = None) -> None:
+    def jog_u_rel(self, u: float | None = None) -> None:
         """Jog the U axis relative to the current position in mm.
 
         The wrapped RdDriver auto-sends the generated lines when
@@ -406,16 +403,8 @@ class RpaDirectDriver:
 
     # --- Internal helpers ---
 
-    def _ensure_imported(self) -> None:
-        """Raise ImportError if ruidadriver is not available."""
-        if RdDriver is None:
-            raise ImportError(
-                "ruidadriver is not installed. Install the ruida-pa package."
-            )
-
     def _ensure_driver(self) -> RdDriver:
         """Return the RdDriver instance, creating it on first use."""
-        self._ensure_imported()
         if self._driver is None:
             self._driver = RdDriver()
         return self._driver

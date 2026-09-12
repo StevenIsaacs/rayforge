@@ -34,6 +34,9 @@ GOLDEN_FILE = Path(__file__).resolve().parent / "transcript.cglu"
 class CutStep(Step):
     """Minimal concrete Step for encoder layer-settings tests."""
 
+    power: float
+    frequency: float
+
     def __init__(self):
         super().__init__(typelabel="cut")
 

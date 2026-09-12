@@ -26,9 +26,9 @@ No real network or Ruida hardware is used; the backends are
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from itertools import chain, repeat
-from typing import Callable
 from unittest.mock import Mock, PropertyMock, call
 
 import pytest
@@ -306,18 +306,21 @@ class TestRunRouting:
     run_job()."""
 
     @staticmethod
-    def _gluescript_backend():
-        """A real GlueScript with a mock run_job, usable as a run() backend.
+    def _gluescript_backend() -> tuple[Mock, GlueScript]:
+        """A spec'd mock delegating to a real GlueScript.
 
-        stage_gluescript is wrapped so the real re-staging still runs
-        (recording the call) while the transcript is replayed into the
-        live GlueScript.
+        The mock records every backend call while the side effects of
+        stage_gluescript and new_gluescript replay into the real
+        GlueScript, which is returned alongside for transcript
+        assertions. run_job is recorded without delegation — plain
+        GlueScript has no run_job; the driver classes provide it.
         """
-        gs = GlueScript()
+        real = GlueScript()
+        gs = Mock(spec=GlueScript)
+        gs.stage_gluescript.side_effect = real.stage_gluescript
+        gs.new_gluescript.side_effect = real.new_gluescript
         gs.run_job = Mock()
-        gs.new_gluescript = Mock(wraps=gs.new_gluescript)
-        gs.stage_gluescript = Mock(wraps=gs.stage_gluescript)
-        return gs
+        return gs, real
 
     @staticmethod
     def _make_adapter(isolated_context, machine, tui_mode, gs):
@@ -366,7 +369,7 @@ class TestRunRouting:
         """run() must replay the encoded transcript into the backend and
         run it."""
         machine = isolated_machine
-        gs = self._gluescript_backend()
+        gs, real = self._gluescript_backend()
         adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
         doc = Doc()
         ops = self._job_ops(doc)
@@ -384,7 +387,7 @@ class TestRunRouting:
         gs.stage_gluescript.assert_called_once_with(transcript.splitlines())
         gs.run_job.assert_called_once_with()
         # The transcript was replayed into the backend GlueScript.
-        assert any(line.startswith("declare_job(") for line in gs.gluescript)
+        assert any(line.startswith("declare_job(") for line in real.gluescript)
 
         await adapter.cleanup()
         await machine.shutdown()
@@ -398,7 +401,7 @@ class TestRunRouting:
     ):
         """run() with empty ops must not run a stale prior job."""
         machine = isolated_machine
-        gs = self._gluescript_backend()
+        gs, _real = self._gluescript_backend()
         adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
         doc = Doc()
         encoded = EncodedOutput(text="", op_map=MachineCodeOpMap())
@@ -422,7 +425,7 @@ class TestRunRouting:
         rotation bug)."""
         machine = isolated_machine
         machine.set_origin(Origin.TOP_RIGHT)
-        gs = self._gluescript_backend()
+        gs, real = self._gluescript_backend()
         adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
         doc = Doc()
         ops = self._job_ops(doc)  # world-space ops, NOT re-encoded
@@ -450,7 +453,7 @@ class TestRunRouting:
         # The backend transcript is exactly the machine-space transcript —
         # the old re-encode path would have produced world-space
         # move_xy_to(5.0, 5.0).
-        assert gs.gluescript == transcript_lines
+        assert real.gluescript == transcript_lines
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -461,8 +464,8 @@ class TestRunRouting:
     ):
         """A failed stage must tear down the backend then re-raise."""
         machine = isolated_machine
-        gs = self._gluescript_backend()
-        gs.stage_gluescript = Mock(side_effect=RuntimeError("stage failed"))
+        gs, _real = self._gluescript_backend()
+        gs.stage_gluescript.side_effect = RuntimeError("stage failed")
         adapter = self._make_adapter(isolated_context, machine, tui_mode, gs)
         doc = Doc()
         transcript = (
@@ -1399,7 +1402,7 @@ class TestSetHoldStatusTransitions:
     )
     async def test_pause_emits_new_state_object(self, adapter_pair):
         """set_hold(True) from RUN must emit a new DeviceState object."""
-        adapter, backend = adapter_pair
+        adapter, _backend = adapter_pair
         adapter.state = replace(adapter.state, status=DeviceStatus.RUN)
         old_state = adapter.state
         received = []
@@ -1422,7 +1425,7 @@ class TestSetHoldStatusTransitions:
     )
     async def test_resume_emits_new_state_object(self, adapter_pair):
         """set_hold(False) from HOLD must emit a new DeviceState object."""
-        adapter, backend = adapter_pair
+        adapter, _backend = adapter_pair
         adapter.state = replace(adapter.state, status=DeviceStatus.HOLD)
         adapter._machine_paused = True
         adapter._machine_job_running = True
