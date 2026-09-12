@@ -10,11 +10,6 @@ website = { features = ["website"], solve-group = "default" }
 build = { features = ["build-tools"], solve-group = "build" }
 video = { features = ["video-tools"], solve-group = "video" }
 
-[pypi-dependencies]
-# Ruida PA backend used by the ruidarpa machine driver.
-# To update: pixi update ruida-pa
-ruida-pa = { version = ">=0.20.4", editable = false }
-
 [feature.app.dependencies]
 adwaita-icon-theme = "==49.0"
 glib = "==2.88.3"
@@ -44,6 +39,7 @@ patchelf = "==0.19.1"
 [feature.app.pypi-dependencies]
 raygeo = "==1.50.1"
 rayforge = { editable = true, path = "." }
+ruida-pa = ">=0.20.4"
 aiohttp = "==3.14.3"
 asyncudp = "==0.11.0"
 blinker = "==1.9.0"
