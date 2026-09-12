@@ -7,7 +7,9 @@ The Ruida RPA driver connects Rayforge to Ruida-based laser controllers. It supp
 Installation is similar to the Rayforge instructions at: `https://rayforge.org/docs/getting-started/installation#linux-pixi`. However, there are two differences:
 
 - Clone from: `https://github.com/StevenIsaacs/rayforge`
-- Switch to the correct beta branch (currently `beta1`).
+- Switch to the correct beta branch (currently `beta3`).
+
+By default ruida-pa is installed from PyPI. A separate environment named `ruida-pa-src` is defined to install ruida-pa from source which may be useful when diagnosing problems. In this case use this command: `pixi install -e ruida-pa-src`
 
 ## Machine Settings Configuration
 
@@ -48,7 +50,7 @@ Use the `/autosave` command within the TUI to automatically save captured job da
 
 ## Loading and Editing Script Files
 
-The TUI can load existing gluescript (`.cglu`) and rpascript (`.rds`) files for review and editing. To edit the loaded script files, use an external editor. This workflow is most useful when characterizing the behavior of a Ruida controller with specific rpascript commands -- load a captured or known script, inspect the commands, and edit them to experiment with the controller's response to different command sequences.
+The TUI can load existing gluescript (`.cglu`), rpascript (`.rds`) and RDWorks (`.rd`) files for review and editing. To edit the loaded script files, a simple internal editor is provided. However, for large files it is most convenient to use and external editor and reload the edited script. This workflow is most useful when characterizing the behavior of a Ruida controller with specific rpascript commands -- load a captured or known script, inspect the commands, and edit them to experiment with the controller's response to different command sequences and parameter.
 
 ## Viewing and Sharing HTML Output
 
@@ -77,8 +79,10 @@ VSCode compatible extensions for syntax highlighting both `gluescript` (`.cglu`)
 ## Limitations
 
 - The TUI is not recommended for jobs containing large images because of the delay introduced by RPC. Currently there is no progress indication while large files are being transferred which can require a minute or two. Allow time for the transfer to complete. The TUI will display the beginning of a transfer and when it completed. If there is a comms failure during transfer, error messages will be displayed and recovery is automatic. In other words, no news is good news in this case.
-- This version does not include acceleration and deceleration power compensation. Because of this the ends of lines are engraved darker or burned deeper (over-burn). A solution to this problem is coming.
+- This version includes rudimentary acceleration and deceleration power compensation. This is used to reduce excessive burn (over-burn) at the ends of lines. Rayforge currently does not support a per workpiece settings for compensation. For now compensation is a machine setting which means it can only be applied on a per job basis. A more comprehensive solution to this problem is coming. There are two settings available:
+  - **VECTOR power floor** Use this setting to set the minimum power when accelerating or decelerating. This is the over-burn compensation. Setting this to 100% effectively disables the setting.
+  - **IMAGE power bias** A CO2 laser will not fire at extremely low power settings (typically below 8%). This settings adds a power bias to the per pixel power settings for an image. For example: When this is set to 8% and image pixel power value of 20% will be increased to 28%. NOTE: Power values of 0% are not affected by this setting. Instead, 0% pixels are converted to moves instead of cuts.
 - Tested only with a RDC6442S controller on a Monport MP570 CO2 laser while running on Fedora Linux.
-- WARNING: The depthmap engrave mode has not been tested. Because it can use the Z axis, use with caution. Machines having a Z axis typically don't have a hard limit switch so it is possible to crash the laser head into the bed.
+- **WARNING**: The depthmap engrave mode has not been tested. Because it can use the Z axis for raising and lowering the bed, use with caution. Machines having a Z axis may not have a hard limit switch so it is possible to crash the laser head into the bed. Machines equipped with a probe are still at risk if there is no flat surface for the probe to contact.
 - Rotary is not yet supported because typical use requires swapping the Y axis connection with the rotary connection. More command characterization is required to instead use the actual U axis connection available on some controllers.
 - There are many yet to be characterized Ruida commands. This implementation uses only the currently essential and well understood commands. Help is needed to add more commands to the well understood list.
